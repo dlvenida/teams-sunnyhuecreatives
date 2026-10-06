@@ -1,0 +1,305 @@
+@font-face {
+  font-family: "Geist";
+  src: url("../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  src: url("../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@import "tailwindcss";
+
+/* ── Pink (default) ── */
+:root,
+[data-theme="pink"] {
+  --background: #fff1f5;
+  --foreground: #500724;
+  --card: #ffffff;
+  --card-foreground: #500724;
+  --primary: #ec4899;
+  --primary-foreground: #ffffff;
+  --secondary: #fce7f3;
+  --secondary-foreground: #9d174d;
+  --muted: #fce7f3;
+  --muted-foreground: #be185d;
+  --accent: #fbcfe8;
+  --accent-foreground: #831843;
+  --border: #f9a8d4;
+  --ring: #ec4899;
+  --surface: #9d174d;
+  --surface-foreground: #fff1f5;
+  --chart: #ec4899;
+  --input-bg: #ffffff;
+  --shadow: 0 1px 3px rgb(236 72 153 / 0.15);
+}
+
+/* ── Light ── */
+[data-theme="light"] {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --primary: #6366f1;
+  --primary-foreground: #ffffff;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #334155;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #e0e7ff;
+  --accent-foreground: #3730a3;
+  --border: #e2e8f0;
+  --ring: #6366f1;
+  --surface: #1e293b;
+  --surface-foreground: #f8fafc;
+  --chart: #6366f1;
+  --input-bg: #ffffff;
+  --shadow: 0 1px 3px rgb(15 23 42 / 0.08);
+}
+
+/* ── Dark ── */
+[data-theme="dark"] {
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --card-foreground: #fafafa;
+  --primary: #a1a1aa;
+  --primary-foreground: #09090b;
+  --secondary: #27272a;
+  --secondary-foreground: #e4e4e7;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa;
+  --accent: #3f3f46;
+  --accent-foreground: #fafafa;
+  --border: #3f3f46;
+  --ring: #d4d4d8;
+  --surface: #27272a;
+  --surface-foreground: #fafafa;
+  --chart: #d4d4d8;
+  --input-bg: #18181b;
+  --shadow: 0 1px 3px rgb(0 0 0 / 0.4);
+}
+
+/* ── Light Blue ── */
+[data-theme="light-blue"] {
+  --background: #f0f9ff;
+  --foreground: #0c4a6e;
+  --card: #ffffff;
+  --card-foreground: #0c4a6e;
+  --primary: #0ea5e9;
+  --primary-foreground: #ffffff;
+  --secondary: #e0f2fe;
+  --secondary-foreground: #0369a1;
+  --muted: #e0f2fe;
+  --muted-foreground: #0284c7;
+  --accent: #bae6fd;
+  --accent-foreground: #075985;
+  --border: #7dd3fc;
+  --ring: #0ea5e9;
+  --surface: #0369a1;
+  --surface-foreground: #f0f9ff;
+  --chart: #0ea5e9;
+  --input-bg: #ffffff;
+  --shadow: 0 1px 3px rgb(14 165 233 / 0.15);
+}
+
+/* ── Bright ── */
+[data-theme="bright"] {
+  --background: #fffbeb;
+  --foreground: #422006;
+  --card: #ffffff;
+  --card-foreground: #422006;
+  --primary: #f59e0b;
+  --primary-foreground: #422006;
+  --secondary: #fef3c7;
+  --secondary-foreground: #92400e;
+  --muted: #fef3c7;
+  --muted-foreground: #b45309;
+  --accent: #fde68a;
+  --accent-foreground: #78350f;
+  --border: #fcd34d;
+  --ring: #f59e0b;
+  --surface: #d97706;
+  --surface-foreground: #fffbeb;
+  --chart: #f59e0b;
+  --input-bg: #ffffff;
+  --shadow: 0 1px 3px rgb(245 158 11 / 0.2);
+}
+
+@theme inline {
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --font-display: "Geist", ui-sans-serif, system-ui, sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-surface: var(--surface);
+  --color-surface-foreground: var(--surface-foreground);
+  --color-chart: var(--chart);
+  --color-input-bg: var(--input-bg);
+}
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  font-size: 14px;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  background: var(--background);
+  color: var(--foreground);
+  margin: 0;
+  min-height: 100vh;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+h1 { font-size: 1.25rem; }
+h2 { font-size: 1.125rem; }
+h3 { font-size: 1rem; }
+h4 { font-size: 0.9375rem; }
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out;
+}
+
+/* Login animated background */
+.login-bg {
+  background: var(--background);
+}
+
+.login-bg-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: 0.55;
+  will-change: transform;
+}
+
+.login-bg-orb-1 {
+  width: 420px;
+  height: 420px;
+  top: -8%;
+  left: -6%;
+  background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
+  animation: login-drift-1 18s ease-in-out infinite;
+}
+
+.login-bg-orb-2 {
+  width: 360px;
+  height: 360px;
+  top: 55%;
+  right: -10%;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+  animation: login-drift-2 22s ease-in-out infinite;
+}
+
+.login-bg-orb-3 {
+  width: 300px;
+  height: 300px;
+  bottom: -5%;
+  left: 20%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--primary) 70%, white) 0%, transparent 70%);
+  animation: login-drift-3 20s ease-in-out infinite;
+}
+
+.login-bg-orb-4 {
+  width: 240px;
+  height: 240px;
+  top: 25%;
+  right: 25%;
+  background: radial-gradient(circle, var(--secondary) 0%, transparent 70%);
+  animation: login-drift-4 16s ease-in-out infinite;
+}
+
+.login-bg-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    125deg,
+    transparent 40%,
+    color-mix(in srgb, var(--primary) 8%, transparent) 50%,
+    transparent 60%
+  );
+  background-size: 200% 200%;
+  animation: login-shimmer 12s ease-in-out infinite;
+}
+
+@keyframes login-drift-1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(60px, 40px) scale(1.08); }
+}
+
+@keyframes login-drift-2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-50px, -30px) scale(1.12); }
+}
+
+@keyframes login-drift-3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(40px, -50px) scale(0.92); }
+}
+
+@keyframes login-drift-4 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-30px, 35px) scale(1.05); }
+}
+
+@keyframes login-shimmer {
+  0%, 100% { background-position: 0% 50%; opacity: 0.4; }
+  50% { background-position: 100% 50%; opacity: 0.7; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-bg-orb,
+  .login-bg-shimmer {
+    animation: none;
+  }
+}
+
+.lexical-editor {
+  min-height: 100px;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  background: var(--input-bg);
+  color: var(--foreground);
+}
+
+.lexical-editor:focus-within {
+  outline: 2px solid var(--ring);
+  border-color: transparent;
+}

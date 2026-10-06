@@ -1,0 +1,52 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^5.4.0",
+    "@lexical/html": "^0.46.0",
+    "@lexical/link": "^0.46.0",
+    "@lexical/list": "^0.46.0",
+    "@lexical/react": "^0.46.0",
+    "@lexical/rich-text": "^0.46.0",
+    "@lexical/utils": "^0.46.0",
+    "@react-pdf-kit/viewer": "^2.7.2",
+    "@react-pdf/renderer": "^4.5.1",
+    "@tanstack/react-query": "^5.101.2",
+    "axios": "^1.18.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "framer-motion": "^12.42.2",
+    "geist": "^1.7.2",
+    "lexical": "^0.46.0",
+    "lucide-react": "^1.22.0",
+    "pdfjs-dist": "^6.1.200",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-easy-crop": "^6.0.2",
+    "react-hook-form": "^7.80.0",
+    "react-router-dom": "^7.18.1",
+    "recharts": "^3.9.1",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "oxlint": "^1.71.0",
+    "tailwindcss": "^4.3.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1"
+  }
+}

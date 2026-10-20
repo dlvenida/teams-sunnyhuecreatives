@@ -8,9 +8,14 @@ from pydantic import BaseModel, BeforeValidator, Field
 
 from app.models import (
     BillingType,
+    Cadence,
+    ClockStatus,
     Currency,
     InvoiceStatus,
     PaymentMethod,
+    ProjectStatus,
+    TaskPriority,
+    TaskStatus,
     UserRole,
     WorkLogStatus,
 )
@@ -56,6 +61,24 @@ class CreateVAUserRequest(BaseModel):
     password: str = Field(min_length=8)
     name: str
     currency: Currency
+
+
+class CreateAppUserRequest(BaseModel):
+    email: AppEmail
+    password: str = Field(min_length=8)
+    name: str
+    role: str = "auditor"  # admin | auditor | va
+    currency: Currency = Currency.PHP
+
+
+class AppUserResponse(BaseModel):
+    id: UUID
+    email: str
+    name: str
+    role: str
+    is_active: bool
+    va_id: UUID | None = None
+    auditing_count: int = 0
 
 
 # Clients
@@ -109,8 +132,15 @@ class VAResponse(BaseModel):
     currency: Currency
     is_active: bool
     email: str | None = None
+    user_id: UUID | None = None
+    reviewer_user_id: UUID | None = None
+    reviewer_name: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class VAReviewerUpdate(BaseModel):
+    reviewer_user_id: UUID | None = None
 
 
 class VAUpdate(BaseModel):
@@ -124,6 +154,12 @@ class AdminResetPasswordRequest(BaseModel):
     password: str = Field(min_length=8)
 
 
+class VADelegateRequest(BaseModel):
+    delegate_to_va_id: UUID
+    include_done_tasks: bool = True
+    transfer_logs: bool = True
+
+
 # Profile
 class ProfileUpdate(BaseModel):
     display_name: str | None = None
@@ -133,6 +169,18 @@ class ProfileUpdate(BaseModel):
     ph_bank_account: str | None = None
     ph_bank_account_name: str | None = None
     ph_bank_name: str | None = None
+    job_title: str | None = None
+    bio: str | None = None
+    timezone: str | None = None
+    skills: list[str] | None = None
+    emergency_contact_name: str | None = None
+    emergency_contact_phone: str | None = None
+    emergency_contact_relationship: str | None = None
+    hire_date: date | None = None
+    date_of_birth: date | None = None
+    linkedin_url: str | None = None
+    portfolio_url: str | None = None
+    status_message: str | None = None
 
 
 class EmailChangeRequest(BaseModel):
@@ -158,6 +206,192 @@ class ProfileResponse(BaseModel):
     ph_bank_name: str | None = None
     currency: Currency | None = None
     must_change_password: bool = False
+    job_title: str | None = None
+    bio: str | None = None
+    timezone: str | None = None
+    skills: list[str] | None = None
+    emergency_contact_name: str | None = None
+    emergency_contact_phone: str | None = None
+    emergency_contact_relationship: str | None = None
+    hire_date: date | None = None
+    date_of_birth: date | None = None
+    linkedin_url: str | None = None
+    portfolio_url: str | None = None
+    status_message: str | None = None
+    created_at: datetime | None = None
+
+
+# Projects / Tasks / Time clock
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    client_id: UUID
+    sub_client_id: UUID | None = None
+    description: str | None = None
+    color: str = "#ec4899"
+    status: ProjectStatus = ProjectStatus.active
+    cadence: Cadence = Cadence.weekly
+    start_date: date | None = None
+    due_date: date | None = None
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    client_id: UUID | None = None
+    sub_client_id: UUID | None = None
+    description: str | None = None
+    color: str | None = None
+    status: ProjectStatus | None = None
+    cadence: Cadence | None = None
+    start_date: date | None = None
+    due_date: date | None = None
+
+
+class ProjectResponse(BaseModel):
+    id: UUID
+    client_id: UUID
+    client_name: str | None = None
+    sub_client_id: UUID | None = None
+    sub_client_name: str | None = None
+    name: str
+    description: str | None = None
+    color: str
+    status: ProjectStatus
+    cadence: Cadence
+    start_date: date | None = None
+    due_date: date | None = None
+    task_total: int = 0
+    task_done: int = 0
+    task_in_progress: int = 0
+    total_hours: Decimal = Decimal("0")
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class TaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    description: str | None = None
+    client_id: UUID
+    sub_client_id: UUID | None = None
+    project_id: UUID | None = None
+    assignee_va_id: UUID | None = None
+    status: TaskStatus = TaskStatus.todo
+    priority: TaskPriority = TaskPriority.medium
+    start_date: date | None = None
+    due_date: date | None = None
+    estimated_hours: Decimal | None = None
+    tags: list[str] | None = None
+    checklist: list[dict[str, Any]] | None = None
+
+
+class TaskUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    client_id: UUID | None = None
+    sub_client_id: UUID | None = None
+    project_id: UUID | None = None
+    assignee_va_id: UUID | None = None
+    status: TaskStatus | None = None
+    priority: TaskPriority | None = None
+    start_date: date | None = None
+    due_date: date | None = None
+    estimated_hours: Decimal | None = None
+    position: int | None = None
+    tags: list[str] | None = None
+    checklist: list[dict[str, Any]] | None = None
+
+
+class TaskResponse(BaseModel):
+    id: UUID
+    title: str
+    description: str | None = None
+    client_id: UUID
+    client_name: str | None = None
+    sub_client_id: UUID | None = None
+    sub_client_name: str | None = None
+    project_id: UUID | None = None
+    project_name: str | None = None
+    project_color: str | None = None
+    assignee_va_id: UUID | None = None
+    assignee_name: str | None = None
+    status: TaskStatus
+    priority: TaskPriority
+    start_date: date | None = None
+    due_date: date | None = None
+    estimated_hours: Decimal | None = None
+    logged_hours: Decimal = Decimal("0")
+    position: int = 0
+    tags: list[str] | None = None
+    checklist: list[dict[str, Any]] | None = None
+    completed_at: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class TaskCommentCreate(BaseModel):
+    body: str = Field(min_length=1)
+
+
+class TaskCommentResponse(BaseModel):
+    id: UUID
+    task_id: UUID
+    author_user_id: UUID
+    author_name: str
+    body: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ClockInRequest(BaseModel):
+    task_id: UUID | None = None
+    client_id: UUID | None = None
+    project_id: UUID | None = None
+    notes: str | None = None
+
+
+class ClockOutRequest(BaseModel):
+    notes: str | None = None
+    create_work_log: bool = True
+    description: str | None = None
+    comment: str | None = None
+
+
+class VAWorkLogUpdate(BaseModel):
+    work_date: date | None = None
+    client_id: UUID | None = None
+    sub_client_id: UUID | None = None
+    project_id: UUID | None = None
+    task_id: UUID | None = None
+    description_plain: str | None = None
+    description_lexical: dict[str, Any] | None = None
+    start_time: time | None = None
+    end_time: time | None = None
+    notes: str | None = None
+
+
+class TimeClockResponse(BaseModel):
+    id: UUID
+    va_id: UUID
+    va_name: str | None = None
+    task_id: UUID | None = None
+    task_title: str | None = None
+    client_id: UUID | None = None
+    client_name: str | None = None
+    project_id: UUID | None = None
+    project_name: str | None = None
+    work_log_id: UUID | None = None
+    clock_in: datetime
+    clock_out: datetime | None = None
+    duration_seconds: int | None = None
+    elapsed_seconds: int = 0
+    status: ClockStatus
+    notes: str | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
 
 
 # Work logs
@@ -165,6 +399,8 @@ class WorkLogCreate(BaseModel):
     work_date: date
     client_id: UUID
     sub_client_id: UUID | None = None
+    project_id: UUID | None = None
+    task_id: UUID | None = None
     description_lexical: dict[str, Any] | None = None
     description_plain: str
     start_time: time
@@ -177,6 +413,8 @@ class WorkLogUpdate(BaseModel):
     work_date: date | None = None
     client_id: UUID | None = None
     sub_client_id: UUID | None = None
+    project_id: UUID | None = None
+    task_id: UUID | None = None
     description_lexical: dict[str, Any] | None = None
     description_plain: str | None = None
     start_time: time | None = None
@@ -205,6 +443,13 @@ class WorkLogResponse(BaseModel):
     notes: str | None
     status: WorkLogStatus
     invoice_id: UUID | None
+    project_id: UUID | None = None
+    project_name: str | None = None
+    task_id: UUID | None = None
+    task_title: str | None = None
+    clock_in_at: datetime | None = None
+    clock_out_at: datetime | None = None
+    source: str = "manual"
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -288,6 +533,21 @@ class PayrollEntry(BaseModel):
     hours: Decimal
     rate: Decimal
     pay: Decimal
+    project_name: str | None = None
+    task_title: str | None = None
+    source: str = "manual"
+    status: str = "approved"
+
+
+class PayrollBreakdown(BaseModel):
+    label: str
+    hours: Decimal
+    pay: Decimal = Decimal("0")
+
+
+class PayrollDay(BaseModel):
+    work_date: date
+    hours: Decimal
 
 
 class PayrollVAResult(BaseModel):
@@ -298,6 +558,21 @@ class PayrollVAResult(BaseModel):
     total_pay: Decimal
     entry_count: int
     entries: list[PayrollEntry]
+    pending_hours: Decimal = Decimal("0")
+    pending_count: int = 0
+    days_worked: int = 0
+    avg_hours_per_day: Decimal = Decimal("0")
+    clock_hours: Decimal = Decimal("0")
+    manual_hours: Decimal = Decimal("0")
+    tasks_done: int = 0
+    by_client: list[PayrollBreakdown] = []
+    daily: list[PayrollDay] = []
+    prev_hours: Decimal = Decimal("0")
+    prev_pay: Decimal = Decimal("0")
+    change_pct: float | None = None
+    payment_label: str | None = None
+    is_paid: bool = False
+    run_id: UUID | None = None
 
 
 class PayrollResponse(BaseModel):
@@ -306,6 +581,33 @@ class PayrollResponse(BaseModel):
     vas: list[PayrollVAResult]
     total_php: Decimal
     total_usd: Decimal
+    total_hours: Decimal = Decimal("0")
+    total_pending_hours: Decimal = Decimal("0")
+
+
+class PayrollRunCreate(BaseModel):
+    va_id: UUID
+    period_start: date
+    period_end: date
+    total_hours: Decimal
+    total_pay: Decimal
+    currency: str = "PHP"
+    method: str | None = None
+    notes: str | None = None
+
+
+class PayrollRunResponse(BaseModel):
+    id: UUID
+    va_id: UUID
+    va_name: str | None = None
+    period_start: date
+    period_end: date
+    total_hours: Decimal
+    total_pay: Decimal
+    currency: str
+    method: str | None = None
+    notes: str | None = None
+    paid_at: datetime
 
 
 class ReportRequest(BaseModel):
@@ -322,6 +624,24 @@ class ReportLine(BaseModel):
     hours: Decimal
     rate: Decimal | None = None
     amount: Decimal | None = None
+    va_name: str | None = None
+    sub_client_name: str | None = None
+    project_name: str | None = None
+    task_title: str | None = None
+    source: str = "manual"
+    start_time: str | None = None
+    end_time: str | None = None
+
+
+class ReportBreakdown(BaseModel):
+    label: str
+    hours: Decimal
+    entries: int = 0
+
+
+class ReportDay(BaseModel):
+    work_date: date
+    hours: Decimal
 
 
 class ReportResponse(BaseModel):
@@ -334,6 +654,60 @@ class ReportResponse(BaseModel):
     lines: list[ReportLine]
     total_hours: Decimal
     total_amount: Decimal | None = None
+    by_va: list[ReportBreakdown] = []
+    by_project: list[ReportBreakdown] = []
+    by_sub_client: list[ReportBreakdown] = []
+    by_day: list[ReportDay] = []
+    pending_hours: Decimal = Decimal("0")
+    pending_count: int = 0
+    tasks_done: int = 0
+    days_worked: int = 0
+
+
+class ReportClientSummary(BaseModel):
+    client_id: UUID
+    client_name: str
+    billing_type: str
+    is_active: bool = True
+    billable_hours: Decimal = Decimal("0")
+    entries: int = 0
+    pending_hours: Decimal = Decimal("0")
+    pending_count: int = 0
+    ready_to_invoice_hours: Decimal = Decimal("0")
+    invoiced_hours: Decimal = Decimal("0")
+    amount: Decimal | None = None
+    va_names: list[str] = []
+    last_activity: date | None = None
+    invoice_number: str | None = None
+    invoice_status: str | None = None
+    prev_period_hours: Decimal = Decimal("0")
+    change_pct: float | None = None
+
+
+class ReportClientsResponse(BaseModel):
+    period_label: str
+    period_start: date
+    period_end: date
+    show_rate: bool
+    clients: list[ReportClientSummary]
+    total_hours: Decimal = Decimal("0")
+    total_pending_hours: Decimal = Decimal("0")
+
+
+class NotificationResponse(BaseModel):
+    id: UUID
+    type: str
+    title: str
+    body: str | None = None
+    link: str | None = None
+    is_read: bool
+    created_at: datetime
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationResponse]
+    unread: int
+    total: int
 
 
 # Dashboard
@@ -365,6 +739,9 @@ class SettingsUpdate(BaseModel):
     booking_url: str | None = None
     booking_hide_pricing: bool | None = None
     default_va_hourly_rate: Decimal | None = None
+    resend_api_key: str | None = None
+    resend_from_email: str | None = None
+    admin_notify_email: str | None = None
 
 
 class SettingsResponse(BaseModel):
@@ -377,6 +754,56 @@ class SettingsResponse(BaseModel):
     booking_url: str = ""
     booking_hide_pricing: bool = True
     default_va_hourly_rate: Decimal = Decimal("75.00")
+    resend_api_key: str = ""
+    resend_from_email: str = "onboarding@resend.dev"
+    admin_notify_email: str = "janelaurine@gmail.com"
+
+
+class EmailTemplateResponse(BaseModel):
+    id: UUID
+    key: str
+    name: str
+    subject: str
+    body_html: str
+    cta_label: str | None = None
+    cta_url: str | None = None
+    variables: list[str] = []
+    is_active: bool = True
+    updated_at: datetime | None = None
+
+
+class EmailTemplateUpdate(BaseModel):
+    subject: str | None = None
+    body_html: str | None = None
+    cta_label: str | None = None
+    cta_url: str | None = None
+    is_active: bool | None = None
+
+
+class EmailTestRequest(BaseModel):
+    to_email: str
+
+
+class EmailLogResponse(BaseModel):
+    id: UUID
+    template_key: str | None = None
+    to_email: str
+    subject: str
+    status: str
+    error: str | None = None
+    created_at: datetime
+
+
+class ActivityLogResponse(BaseModel):
+    id: UUID
+    user_id: UUID | None = None
+    user_name: str
+    user_role: str | None = None
+    action: str
+    description: str
+    path: str | None = None
+    method: str | None = None
+    created_at: datetime
 
 
 class DisplaySettingsResponse(BaseModel):

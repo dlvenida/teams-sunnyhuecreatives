@@ -1,66 +1,161 @@
-import random
+"""Monday-style branded emails via Resend.
+
+Every template shares one shell: pink gradient header, white card, detail rows,
+and a big CTA button. If RESEND_API_KEY is not set, sends are skipped gracefully
+(the in-app notification still happens) and functions return False.
+"""
+import html as _html
 
 import resend
 
 from app.config import settings
 
+PRIMARY = "#ec4899"
+DARK = "#500724"
 
+
+def _esc(v) -> str:
+    return _html.escape(str(v)) if v is not None else ""
+
+
+def branded_email(title: str, preheader: str, body_html: str, cta_label: str | None = None, cta_url: str | None = None, accent: str = PRIMARY) -> str:
+    cta = ""
+    if cta_label and cta_url:
+        cta = f"""
+        <tr><td style="padding:8px 32px 28px;">
+          <a href="{_esc(cta_url)}" style="display:inline-block;background:{accent};color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:13px 28px;border-radius:999px;box-shadow:0 8px 20px -6px {accent};">{_esc(cta_label)}</a>
+        </td></tr>"""
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(title)}</title></head>
+<body style="margin:0;padding:0;background:#fff1f5;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:{DARK};">
+<span style="display:none;max-height:0;overflow:hidden;">{_esc(preheader)}</span>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff1f5;padding:28px 12px;">
+<tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 16px 40px -16px rgba(236,72,153,.35);">
+  <tr><td style="background:linear-gradient(120deg,#ec4899,#f472b6 55%,#a855f7);padding:26px 32px;">
+    <div style="font-size:20px;font-weight:800;color:#ffffff;letter-spacing:-.02em;">☀️ Teams.SHC</div>
+    <div style="font-size:12px;color:#ffe4f1;margin-top:2px;">Sunny Hue Creatives · Work that shines</div>
+  </td></tr>
+  <tr><td style="padding:26px 32px 6px;">
+    <h1 style="margin:0;font-size:21px;line-height:1.3;letter-spacing:-.02em;">{_esc(title)}</h1>
+  </td></tr>
+  <tr><td style="padding:6px 32px 18px;font-size:14px;line-height:1.65;color:#831843;">{body_html}</td></tr>
+  {cta}
+  <tr><td style="padding:16px 32px;background:#fff7fa;border-top:1px solid #fce7f3;font-size:11px;color:#be185d;">
+    You're receiving this because you're part of Sunny Hue Creatives. Manage notifications with your admin.
+    <br><a href="{_esc(settings.app_url)}" style="color:{PRIMARY};font-weight:600;text-decoration:none;">Open Teams.SHC →</a>
+  </td></tr>
+</table>
+<p style="font-size:11px;color:#f9a8d4;margin:14px 0 0;">© Sunny Hue Creatives · Dumaguete City, Philippines</p>
+</td></tr></table>
+</body></html>"""
+
+
+def detail_rows(rows: list[tuple[str, str]]) -> str:
+    items = "".join(
+        f"""<tr>
+          <td style="padding:8px 12px;font-size:12px;color:#9d174d;background:#fff7fa;border-bottom:1px solid #fce7f3;width:34%;font-weight:600;">{_esc(k)}</td>
+          <td style="padding:8px 12px;font-size:13px;border-bottom:1px solid #fce7f3;">{_esc(v)}</td>
+        </tr>"""
+        for k, v in rows if v
+    )
+    return f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #fce7f3;border-radius:12px;overflow:hidden;margin:12px 0;">{items}</table>'
+
+
+def _resend_config() -> tuple[str, str, str]:
+    """Resend config from Settings (DB) first, env second. Returns (api_key, from_email, admin_email)."""
+    api_key, from_email, admin_email = settings.resend_api_key, settings.resend_from_email, settings.admin_notify_email
+    try:
+        from app.database import SessionLocal
+        from app.models import SystemSetting
+        db = SessionLocal()
+        try:
+            row = db.query(SystemSetting).filter(SystemSetting.key == "company").first()
+            if row and row.value:
+                api_key = row.value.get("resend_api_key") or api_key
+                from_email = row.value.get("resend_from_email") or from_email
+                admin_email = row.value.get("admin_notify_email") or admin_email
+        finally:
+            db.close()
+    except Exception:
+        pass
+    return api_key, from_email, admin_email
+
+
+def _log_email(to_email: str, subject: str, status: str, template_key: str | None = None, error: str | None = None) -> None:
+    try:
+        from app.database import SessionLocal
+        from app.models import EmailLog
+        db = SessionLocal()
+        try:
+            db.add(EmailLog(to_email=to_email or "", subject=subject, status=status, template_key=template_key, error=error))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+
+def send_email(to_email: str, subject: str, html_body: str, template_key: str | None = None) -> bool:
+    api_key, from_email, _ = _resend_config()
+    if not api_key or not to_email:
+        _log_email(to_email, subject, "skipped", template_key, None if to_email else "No recipient")
+        return False
+    resend.api_key = api_key
+    try:
+        resend.Emails.send({"from": from_email, "to": [to_email], "subject": subject, "html": html_body})
+        _log_email(to_email, subject, "sent", template_key)
+        return True
+    except Exception as exc:
+        _log_email(to_email, subject, "failed", template_key, str(exc)[:300])
+        return False
+
+
+def render_template(db, key: str, variables: dict) -> tuple[str, str] | None:
+    """Render an active DB email template with {{variables}}. Returns (subject, full_html) or None."""
+    try:
+        from app.models import EmailTemplate
+        t = db.query(EmailTemplate).filter(EmailTemplate.key == key, EmailTemplate.is_active.is_(True)).first()
+        if not t:
+            return None
+
+        def fill(text: str, escape: bool = True) -> str:
+            out = text or ""
+            for k, v in variables.items():
+                out = out.replace("{{" + k + "}}", _esc(v) if escape else str(v if v is not None else ""))
+            return out
+
+        subject = fill(t.subject, escape=False)
+        cta_url = fill(t.cta_url) if t.cta_url else None
+        return subject, branded_email(subject, subject, fill(t.body_html), t.cta_label, cta_url)
+    except Exception:
+        return None
+
+
+# ── Legacy helpers (kept) ──────────────────────────────────────────────
 def send_email_verification(to_email: str, code: str, display_name: str) -> tuple[bool, str | None]:
     """Send verification code. Returns (sent, dev_code if Resend unavailable)."""
-    html = f"""
-    <h2>Verify your new email</h2>
-    <p>Hi {display_name},</p>
-    <p>Your Teams.SHC verification code is:</p>
-    <p style="font-size:28px;font-weight:bold;letter-spacing:4px;">{code}</p>
-    <p>This code expires in 15 minutes.</p>
-    <p>If you did not request this change, you can ignore this email.</p>
-    """
-    if not settings.resend_api_key:
+    html_body = branded_email(
+        "Verify your new email",
+        f"Your Teams.SHC code is {code}",
+        f"<p>Hi {_esc(display_name)},</p><p>Your verification code is:</p>"
+        f'<p style="font-size:30px;font-weight:800;letter-spacing:6px;color:{PRIMARY};margin:10px 0;">{_esc(code)}</p>'
+        "<p>This code expires in 15 minutes. If you did not request this change, you can ignore this email.</p>",
+    )
+    if not _resend_config()[0]:
         return False, code
-    resend.api_key = settings.resend_api_key
-    try:
-        resend.Emails.send(
-            {
-                "from": settings.resend_from_email,
-                "to": [to_email],
-                "subject": "Verify your new Teams.SHC email",
-                "html": html,
-            }
-        )
-        return True, None
-    except Exception:
-        return False, None
+    sent = send_email(to_email, "Verify your new Teams.SHC email", html_body, template_key="email_verification")
+    return (True, None) if sent else (False, None)
 
 
-def send_va_submission_notification(
-    va_name: str,
-    client_name: str,
-    hours: str,
-    work_date: str,
-    description: str,
-) -> bool:
-    if not settings.resend_api_key:
-        return False
-
-    resend.api_key = settings.resend_api_key
-    html = f"""
-    <h2>New VA Work Log Submission</h2>
-    <p><strong>VA:</strong> {va_name}</p>
-    <p><strong>Client:</strong> {client_name}</p>
-    <p><strong>Date:</strong> {work_date}</p>
-    <p><strong>Hours:</strong> {hours}</p>
-    <p><strong>Description:</strong> {description}</p>
-    <p><a href="{settings.app_url}/admin/logs">Review in dashboard</a></p>
-    """
-    try:
-        resend.Emails.send(
-            {
-                "from": settings.resend_from_email,
-                "to": [settings.admin_notify_email],
-                "subject": f"New submission from {va_name} — {client_name}",
-                "html": html,
-            }
-        )
-        return True
-    except Exception:
-        return False
+def send_va_submission_notification(va_name: str, client_name: str, hours: str, work_date: str, description: str) -> bool:
+    html_body = branded_email(
+        f"New time log from {va_name}",
+        f"{va_name} logged {hours}h for {client_name}",
+        f"<p>A VA just submitted a time log for review.</p>" + detail_rows([
+            ("VA", va_name), ("Client", client_name), ("Date", work_date), ("Hours", hours), ("Work", description),
+        ]),
+        "Review in All Logs", f"{settings.app_url}/admin/logs",
+    )
+    return send_email(_resend_config()[2], f"New submission from {va_name} — {client_name}", html_body, template_key="log_submitted")

@@ -7,9 +7,14 @@ from app.auth import hash_password
 from app.config import settings
 from app.models import (
     BillingType,
+    Cadence,
     Client,
     Currency,
+    Project,
     SubClient,
+    Task,
+    TaskPriority,
+    TaskStatus,
     User,
     UserRole,
     VA,
@@ -25,12 +30,29 @@ def seed_database(db: Session) -> None:
             email=settings.admin_email,
             password_hash=hash_password(settings.admin_password),
             role=UserRole.admin,
+            display_name="Jane Laurine Venida",
+            job_title="Founder / Admin",
         )
         db.add(admin)
+        db.commit()
+    elif not admin.display_name:
+        admin.display_name = "Jane Laurine Venida"
+        db.commit()
+
+    # Demo Auditor — monitors VA activity, no destructive access (auditor@sunnyhue.local / auditor2024)
+    if not db.query(User).filter(User.email == "auditor@sunnyhue.local").first():
+        db.add(User(
+            email="auditor@sunnyhue.local",
+            password_hash=hash_password("auditor2024"),
+            role=UserRole.auditor,
+            display_name="Audrey Auditor",
+            job_title="Auditor",
+        ))
         db.commit()
 
     if db.query(Client).count() > 0:
         seed_sample_work_logs(db)
+        seed_demo_board(db)
         return
 
     clients_data = [
@@ -85,6 +107,33 @@ def seed_database(db: Session) -> None:
 
     db.commit()
     seed_sample_work_logs(db)
+    seed_demo_board(db)
+
+
+def seed_demo_board(db: Session) -> None:
+    if db.query(Project).count() > 0:
+        return
+    clients = db.query(Client).filter(Client.is_active == True).all()
+    vas = db.query(VA).filter(VA.is_active == True).all()
+    if not clients or not vas:
+        return
+    from datetime import timedelta
+    today = date.today()
+    colors = ["#ec4899", "#8b5cf6", "#06b6d4", "#f59e0b"]
+    cadences = [Cadence.weekly, Cadence.biweekly, Cadence.monthly]
+    for i, client in enumerate(clients):
+        project = Project(client_id=client.id, name=f"{client.name} — Operations", description=f"Ongoing delivery board for {client.name}", color=colors[i % len(colors)], cadence=cadences[i % len(cadences)], start_date=today - timedelta(days=7), due_date=today + timedelta(days=21))
+        db.add(project); db.flush()
+        samples = [
+            ("Inbox & email triage", TaskStatus.in_progress, TaskPriority.high, 0),
+            ("Weekly report preparation", TaskStatus.todo, TaskPriority.medium, 3),
+            ("Calendar & meeting coordination", TaskStatus.in_review, TaskPriority.medium, 2),
+            ("Document cleanup & filing", TaskStatus.done, TaskPriority.low, -2),
+            ("Research & data entry", TaskStatus.todo, TaskPriority.low, 7),
+        ]
+        for pos, (title, st, prio, offset) in enumerate(samples):
+            db.add(Task(title=title, description=f"{title} for {client.name}", client_id=client.id, project_id=project.id, assignee_va_id=vas[pos % len(vas)].id, status=st, priority=prio, start_date=today, due_date=today + timedelta(days=offset), estimated_hours=Decimal("4.00"), position=pos, tags=["operations"]))
+    db.commit()
 
 
 def seed_sample_work_logs(db: Session) -> None:

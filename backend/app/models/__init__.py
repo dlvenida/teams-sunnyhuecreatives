@@ -24,6 +24,7 @@ from app.database import Base
 
 class UserRole(str, enum.Enum):
     admin = "admin"
+    auditor = "auditor"
     va = "va"
 
 
@@ -55,6 +56,40 @@ class PaymentMethod(str, enum.Enum):
     bank_transfer = "bank_transfer"
 
 
+class ProjectStatus(str, enum.Enum):
+    active = "active"
+    on_hold = "on_hold"
+    completed = "completed"
+    archived = "archived"
+
+
+class Cadence(str, enum.Enum):
+    weekly = "weekly"
+    biweekly = "biweekly"
+    monthly = "monthly"
+
+
+class TaskStatus(str, enum.Enum):
+    todo = "todo"
+    in_progress = "in_progress"
+    in_review = "in_review"
+    done = "done"
+    blocked = "blocked"
+
+
+class TaskPriority(str, enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    urgent = "urgent"
+
+
+class ClockStatus(str, enum.Enum):
+    running = "running"
+    paused = "paused"
+    completed = "completed"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -75,9 +110,22 @@ class User(Base):
     pending_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email_verification_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
     email_verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Extended profile (004)
+    job_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    skills: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    emergency_contact_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    emergency_contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    emergency_contact_relationship: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    hire_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    linkedin_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    portfolio_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    va_profile: Mapped["VA | None"] = relationship(back_populates="user", uselist=False)
+    va_profile: Mapped["VA | None"] = relationship(back_populates="user", uselist=False, foreign_keys="[VA.user_id]")
 
 
 class Client(Base):
@@ -115,10 +163,101 @@ class VA(Base):
     name: Mapped[str] = mapped_column(String(255))
     currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    user: Mapped["User"] = relationship(back_populates="va_profile")
+    user: Mapped["User"] = relationship(back_populates="va_profile", foreign_keys=[user_id])
+    reviewer: Mapped["User | None"] = relationship(foreign_keys=[reviewer_user_id])
     work_logs: Mapped[list["WorkLog"]] = relationship(back_populates="va")
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"))
+    sub_client_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sub_clients.id", ondelete="SET NULL"), nullable=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    color: Mapped[str] = mapped_column(String(20), default="#ec4899")
+    status: Mapped[ProjectStatus] = mapped_column(Enum(ProjectStatus, name="project_status"), default=ProjectStatus.active)
+    cadence: Mapped[Cadence] = mapped_column(Enum(Cadence, name="cadence"), default=Cadence.weekly)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    client: Mapped["Client"] = relationship()
+    sub_client: Mapped["SubClient | None"] = relationship()
+    tasks: Mapped[list["Task"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"))
+    sub_client_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sub_clients.id", ondelete="SET NULL"), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    assignee_va_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="SET NULL"), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name="task_status"), default=TaskStatus.todo)
+    priority: Mapped[TaskPriority] = mapped_column(Enum(TaskPriority, name="task_priority"), default=TaskPriority.medium)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    estimated_hours: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    checklist: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    client: Mapped["Client"] = relationship()
+    sub_client: Mapped["SubClient | None"] = relationship()
+    project: Mapped["Project | None"] = relationship(back_populates="tasks")
+    assignee: Mapped["VA | None"] = relationship()
+    comments: Mapped[list["TaskComment"]] = relationship(back_populates="task", cascade="all, delete-orphan")
+
+
+class TaskComment(Base):
+    __tablename__ = "task_comments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"))
+    author_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    author_name: Mapped[str] = mapped_column(String(255), default="")
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    task: Mapped["Task"] = relationship(back_populates="comments")
+
+
+class TimeClockEntry(Base):
+    __tablename__ = "time_clock_entries"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    va_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"))
+    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
+    client_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    work_log_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("work_logs.id", ondelete="SET NULL"), nullable=True)
+    clock_in: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    clock_out: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    total_paused_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[ClockStatus] = mapped_column(Enum(ClockStatus, name="clock_status"), default=ClockStatus.running)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    va: Mapped["VA"] = relationship()
+    task: Mapped["Task | None"] = relationship()
+    client: Mapped["Client | None"] = relationship()
+    project: Mapped["Project | None"] = relationship()
 
 
 class WorkLog(Base):
@@ -129,6 +268,11 @@ class WorkLog(Base):
     va_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id"))
     client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id"))
     sub_client_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sub_clients.id"), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
+    clock_in_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    clock_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="manual")
     description_lexical: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     description_plain: Mapped[str] = mapped_column(Text)
     start_time: Mapped[time] = mapped_column(Time)
@@ -150,6 +294,8 @@ class WorkLog(Base):
     client: Mapped["Client"] = relationship(back_populates="work_logs")
     sub_client: Mapped["SubClient | None"] = relationship(back_populates="work_logs")
     invoice: Mapped["Invoice | None"] = relationship(back_populates="work_logs")
+    project: Mapped["Project | None"] = relationship()
+    task: Mapped["Task | None"] = relationship()
 
 
 class Invoice(Base):
@@ -192,6 +338,91 @@ class InvoiceLineItem(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
 
     invoice: Mapped["Invoice"] = relationship(back_populates="line_items")
+
+
+class AgentAuditLog(Base):
+    __tablename__ = "agent_audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor: Mapped[str] = mapped_column(String(100), default="grok-bot")
+    action: Mapped[str] = mapped_column(String(100))
+    entity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    entity_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PayrollRun(Base):
+    __tablename__ = "payroll_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    va_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    total_hours: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
+    total_pay: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    currency: Mapped[str] = mapped_column(String(10), default="PHP")
+    method: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    va: Mapped["VA"] = relationship()
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    type: Mapped[str] = mapped_column(String(50), default="update")  # comment | task | log | clock | invoice | delegation | system
+    title: Mapped[str] = mapped_column(String(500))
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EmailTemplate(Base):
+    __tablename__ = "email_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(500))
+    body_html: Mapped[str] = mapped_column(Text)
+    cta_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cta_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    variables: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class EmailLog(Base):
+    __tablename__ = "email_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    template_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    to_email: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(30), default="sent")  # sent | failed | skipped
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_name: Mapped[str] = mapped_column(String(255), default="Someone")
+    user_role: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    action: Mapped[str] = mapped_column(String(100), default="update")
+    description: Mapped[str] = mapped_column(Text)
+    path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    method: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SystemSetting(Base):

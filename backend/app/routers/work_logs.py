@@ -9,10 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, require_admin
+from app.deps import CurrentUser, require_admin, require_admin_or_auditor
 from app.models import Client, SubClient, VA, WorkLog, WorkLogStatus
 from app.schemas import WorkLogResponse, WorkLogUpdate
 from app.services.calculations import calculate_hours, calculate_pay
+from app.services.notifications import admin_user_ids, push, va_user_id
 
 router = APIRouter(prefix="/work-logs", tags=["work-logs"])
 
@@ -37,13 +38,16 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         notes=log.notes,
         status=log.status,
         invoice_id=log.invoice_id,
+        project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
+        task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
+        clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
         created_at=log.created_at,
     )
 
 
 @router.get("", response_model=list[WorkLogResponse])
 def list_work_logs(
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
     client_id: UUID | None = None,
     va_id: UUID | None = None,
@@ -64,7 +68,7 @@ def _query_logs(
 ) -> list[WorkLog]:
     q = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client))
+        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.project), joinedload(WorkLog.task))
         .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
     )
     if client_id:
@@ -80,6 +84,7 @@ def _query_logs(
     return q.all()
 
 
+@router.get("/export/csv")
 @router.get("/export")
 def export_csv(
     _: Annotated[CurrentUser, Depends(require_admin)],
@@ -115,7 +120,7 @@ def update_work_log(
 ):
     log = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client))
+        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.project), joinedload(WorkLog.task))
         .filter(WorkLog.id == log_id)
         .first()
     )
@@ -144,7 +149,10 @@ def approve_log(
     _: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    return update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.approved), _, db)
+    result = update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.approved), _, db)
+    push(db, [va_user_id(db, result.va_id)], "log", "✅ Your time log was approved",
+         f"{result.client_name} · {result.work_date} · {result.hours} hrs is now approved.", "/va/time-log")
+    return result
 
 
 @router.post("/{log_id}/reject", response_model=WorkLogResponse)
@@ -153,7 +161,10 @@ def reject_log(
     _: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    return update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.rejected), _, db)
+    result = update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.rejected), _, db)
+    push(db, [va_user_id(db, result.va_id)], "log", "⚠️ Your time log needs changes",
+         f"{result.client_name} · {result.work_date} · {result.hours} hrs was rejected — please review and resubmit.", "/va/time-log")
+    return result
 
 
 @router.delete("/{log_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -7,13 +7,257 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, require_admin
-from app.models import Client, Invoice, InvoiceStatus, VA, WorkLog, WorkLogStatus
+from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
+from app.models import Client, Invoice, InvoiceStatus, Project, Task, TaskComment, TaskStatus, TimeClockEntry, ClockStatus, UserRole, VA, WorkLog, WorkLogStatus
 from app.routers.work_logs import _serialize_log
 from app.schemas import DashboardSummary
 from app.services.billing import get_week_period
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+def _task_mini(db, t: Task) -> dict:
+    from app.routers.tasks import _serialize
+    s = _serialize(db, t)
+    return s.model_dump(mode="json")
+
+
+@router.get("/overview")
+def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    """Monday-style morning overview for admin (team) or VA (personal)."""
+    from datetime import timedelta
+    from sqlalchemy import func as _func, or_
+
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    is_admin = current.role == UserRole.admin
+
+    tq = db.query(Task).options(joinedload(Task.client), joinedload(Task.project), joinedload(Task.assignee))
+    if not is_admin:
+        tq = tq.filter(or_(Task.assignee_va_id == current.va_id, Task.created_by == current.user.id))
+    all_tasks = tq.order_by(Task.due_date.asc().nullslast(), Task.created_at.asc()).all()
+
+    def by_status(s): return [t for t in all_tasks if t.status == s]
+    overdue = [t for t in all_tasks if t.due_date and t.due_date < today and t.status != TaskStatus.done]
+    due_today = [t for t in all_tasks if t.due_date == today and t.status != TaskStatus.done]
+    in_progress = by_status(TaskStatus.in_progress)
+    blocked = by_status(TaskStatus.blocked)
+    backlog = [t for t in by_status(TaskStatus.todo) if not t.due_date or t.due_date < today][:10] or by_status(TaskStatus.todo)[:10]
+    upcoming = [t for t in all_tasks if t.due_date and today < t.due_date <= today + timedelta(days=7) and t.status != TaskStatus.done]
+    unassigned = [t for t in all_tasks if not t.assignee_va_id and t.status != TaskStatus.done] if is_admin else []
+
+    # Hours
+    lq = db.query(WorkLog)
+    if not is_admin:
+        lq = lq.filter(WorkLog.va_id == current.va_id)
+    hours_today = lq.filter(WorkLog.work_date == today).with_entities(_func.coalesce(_func.sum(WorkLog.hours), 0)).scalar() or 0
+    hours_week = lq.filter(WorkLog.work_date >= week_start, WorkLog.work_date <= week_end).with_entities(_func.coalesce(_func.sum(WorkLog.hours), 0)).scalar() or 0
+    done_week = [t for t in by_status(TaskStatus.done) if t.completed_at and week_start <= t.completed_at.date() <= week_end]
+
+    # Attention + prepare
+    attention, prepare = [], []
+    for t in overdue[:5]:
+        attention.append({"type": "overdue_task", "severity": "high", "title": f"Overdue: {t.title}", "detail": f"{t.client.name if t.client else ''} · due {t.due_date}", "link": "/admin/tasks" if is_admin else "/va/tasks"})
+    for t in blocked[:5]:
+        attention.append({"type": "blocked_task", "severity": "high", "title": f"Blocked: {t.title}", "detail": t.client.name if t.client else "", "link": "/admin/tasks" if is_admin else "/va/tasks"})
+    for t in unassigned[:5]:
+        attention.append({"type": "unassigned", "severity": "medium", "title": f"Unassigned: {t.title}", "detail": "Assign a VA so work can start", "link": "/admin/tasks"})
+    if is_admin:
+        pending = db.query(WorkLog).filter(WorkLog.status == WorkLogStatus.submitted).count()
+        if pending: attention.append({"type": "pending_logs", "severity": "medium", "title": f"{pending} time log(s) waiting for approval", "detail": "Review in All Logs", "link": "/admin/logs"})
+        unpaid = db.query(Invoice).filter(Invoice.status == InvoiceStatus.unpaid).count()
+        if unpaid: attention.append({"type": "unpaid_invoices", "severity": "medium", "title": f"{unpaid} unpaid invoice(s)", "detail": "Follow up on payments", "link": "/admin/invoices"})
+        prepare.append(f"Review {pending} pending time log(s)") if pending else None
+    else:
+        rejected = lq.filter(WorkLog.status == WorkLogStatus.rejected).count()
+        if rejected: attention.append({"type": "rejected_logs", "severity": "high", "title": f"{rejected} rejected log(s) need fixing", "detail": "Edit & resubmit in Log Time", "link": "/va/time-log"})
+    if due_today: prepare.append(f"Finish {len(due_today)} task(s) due today: " + ", ".join(t.title for t in due_today[:3]))
+    if in_progress: prepare.append(f"Continue in-progress work: {in_progress[0].title}")
+    if not is_admin: prepare.append("Clock in when you start — your hours log automatically")
+    prepare.append("Check comments on your tasks for updates from the team")
+    if overdue: prepare.insert(0, f"Clear {len(overdue)} overdue item(s) first")
+
+    # Live clock
+    cq = db.query(TimeClockEntry).options(joinedload(TimeClockEntry.va), joinedload(TimeClockEntry.task), joinedload(TimeClockEntry.client)).filter(TimeClockEntry.status.in_([ClockStatus.running, ClockStatus.paused]))
+    if not is_admin: cq = cq.filter(TimeClockEntry.va_id == current.va_id)
+    from app.routers.timeclock import _serialize as serialize_clock
+    live = [serialize_clock(e).model_dump(mode="json") for e in cq.all()]
+
+    # Projects progress
+    pq = db.query(Project).options(joinedload(Project.client)).filter(Project.status == "active")
+    projects = []
+    from app.routers.projects import _serialize as serialize_project
+    for p in pq.order_by(Project.due_date.asc().nullslast()).limit(6).all():
+        projects.append(serialize_project(db, p).model_dump(mode="json"))
+
+    # Recent comments on visible tasks
+    task_ids = [t.id for t in all_tasks]
+    comments = []
+    if task_ids:
+        rows = db.query(TaskComment).filter(TaskComment.task_id.in_(task_ids)).order_by(TaskComment.created_at.desc()).limit(5).all()
+        comments = [{"id": str(c.id), "task_id": str(c.task_id), "author_name": c.author_name, "body": c.body, "created_at": c.created_at.isoformat() if c.created_at else None} for c in rows]
+
+    tomorrow = today + timedelta(days=1)
+    tomorrow_tasks = [t for t in all_tasks if t.due_date == tomorrow and t.status != TaskStatus.done]
+    est_today = sum(float(t.estimated_hours or 0) for t in due_today)
+    # Workload per VA (admin) — who is overloaded / free
+    team_load = []
+    if is_admin:
+        va_map: dict[str, dict] = {}
+        for t in all_tasks:
+            if t.status == TaskStatus.done or not t.assignee:
+                continue
+            row = va_map.setdefault(t.assignee.name, {"name": t.assignee.name, "open": 0, "overdue": 0, "due_today": 0})
+            row["open"] += 1
+            if t.due_date and t.due_date < today: row["overdue"] += 1
+            if t.due_date == today: row["due_today"] += 1
+        team_load = sorted(va_map.values(), key=lambda r: (-r["overdue"], -r["open"]))[:6]
+
+    return {
+        "role": current.role.value, "today": str(today), "week_start": str(week_start), "week_end": str(week_end),
+        "tomorrow_tasks": [_task_mini(db, t) for t in tomorrow_tasks[:6]],
+        "estimated_hours_today": str(est_today),
+        "team_load": team_load,
+        "counts": {"total_tasks": len(all_tasks), "todo": len(by_status(TaskStatus.todo)), "in_progress": len(in_progress), "in_review": len(by_status(TaskStatus.in_review)), "done": len(by_status(TaskStatus.done)), "blocked": len(blocked), "overdue": len(overdue), "due_today": len(due_today), "unassigned": len(unassigned), "done_this_week": len(done_week)},
+        "hours_today": str(hours_today), "hours_this_week": str(hours_week),
+        "today_tasks": [_task_mini(db, t) for t in (due_today + [t for t in in_progress if t not in due_today])[:8]],
+        "backlog": [_task_mini(db, t) for t in backlog[:8]],
+        "upcoming": [_task_mini(db, t) for t in upcoming[:8]],
+        "needs_attention": attention, "prepare": [p for p in prepare if p],
+        "live_clock": live, "projects": projects, "recent_comments": comments,
+    }
+
+
+@router.get("/activity")
+def get_team_activity(_: Annotated[CurrentUser, Depends(require_admin_or_auditor)], db: Annotated[Session, Depends(get_db)]):
+    """Monday-style team activity: who is working, who is low, and who has assigned
+    clients/tasks but no logs today or this week. Flags them and lightly notifies
+    the admin + assigned reviewer (once per day per VA)."""
+    from datetime import datetime, timedelta, timezone as _tz
+    from app.models import Notification, User
+    from app.services.notifications import admin_user_ids, push
+
+    today = date.today()
+    week_start, week_end = get_week_period("this_week")
+    vas = db.query(VA).options(joinedload(VA.user), joinedload(VA.reviewer)).filter(VA.is_active.is_(True)).order_by(VA.name).all()
+
+    out = []
+    for va in vas:
+        tasks = db.query(Task).options(joinedload(Task.client)).filter(Task.assignee_va_id == va.id).all()
+        open_tasks = [t for t in tasks if t.status != TaskStatus.done]
+        overdue = [t for t in open_tasks if t.due_date and t.due_date < today]
+        due_today = [t for t in open_tasks if t.due_date == today]
+
+        logs = db.query(WorkLog).options(joinedload(WorkLog.client)).filter(WorkLog.va_id == va.id).order_by(WorkLog.work_date.desc()).all()
+        logs_today = [l for l in logs if l.work_date == today]
+        logs_week = [l for l in logs if week_start <= l.work_date <= week_end]
+        hours_today = sum((l.hours for l in logs_today), Decimal("0"))
+        hours_week = sum((l.hours for l in logs_week), Decimal("0"))
+
+        live = db.query(TimeClockEntry).filter(
+            TimeClockEntry.va_id == va.id, TimeClockEntry.status.in_([ClockStatus.running, ClockStatus.paused])
+        ).first()
+
+        # Clients this VA is assigned to (via open tasks), with their logged hours this week
+        client_map: dict = {}
+        for t in open_tasks:
+            if not t.client:
+                continue
+            c = client_map.setdefault(t.client.id, {"client_id": str(t.client.id), "name": t.client.name, "open_tasks": 0, "hours_week": Decimal("0"), "last_log_date": None})
+            c["open_tasks"] += 1
+        for l in logs_week:
+            if l.client_id in client_map:
+                client_map[l.client_id]["hours_week"] += l.hours
+        for l in logs:
+            if l.client_id in client_map and client_map[l.client_id]["last_log_date"] is None:
+                client_map[l.client_id]["last_log_date"] = l.work_date
+        assigned_clients = [
+            {**c, "hours_week": str(c["hours_week"]), "last_log_date": str(c["last_log_date"]) if c["last_log_date"] else None,
+             "no_activity_week": c["hours_week"] == 0}
+            for c in sorted(client_map.values(), key=lambda x: x["hours_week"])
+        ]
+        idle_clients = [c for c in assigned_clients if c["no_activity_week"]]
+
+        last_activity = None
+        if logs:
+            last_activity = logs[0].work_date
+        reasons: list[str] = []
+        if open_tasks and not logs_today:
+            reasons.append("No logs today")
+        if open_tasks and not logs_week:
+            reasons.append("No logs this week")
+        if idle_clients:
+            reasons.append(f"No activity this week for {', '.join(c['name'] for c in idle_clients[:2])}")
+        if overdue:
+            reasons.append(f"{len(overdue)} overdue task(s)")
+        if hours_week and hours_week < Decimal("8"):
+            reasons.append(f"Only {hours_week}h logged this week")
+
+        if not open_tasks and not logs_week:
+            act_status = "idle"  # nothing assigned — available for work
+        elif open_tasks and not logs_week:
+            act_status = "inactive"
+        elif (not logs_today and hours_week < Decimal("15")) or overdue:
+            act_status = "low"
+        else:
+            act_status = "active"
+
+        out.append({
+            "va_id": str(va.id), "user_id": str(va.user_id), "name": va.name,
+            "email": va.user.email if va.user else None,
+            "reviewer_user_id": str(va.reviewer_user_id) if va.reviewer_user_id else None,
+            "reviewer_name": (va.reviewer.display_name or va.reviewer.email) if va.reviewer else None,
+            "status": act_status, "reasons": reasons,
+            "assigned_clients": assigned_clients,
+            "open_tasks": len(open_tasks), "overdue": len(overdue), "due_today": len(due_today),
+            "in_progress": len([t for t in open_tasks if t.status == TaskStatus.in_progress]),
+            "hours_today": str(hours_today), "hours_week": str(hours_week),
+            "logs_today": len(logs_today), "logs_week": len(logs_week),
+            "clock_status": live.status.value if live else None,
+            "last_activity": str(last_activity) if last_activity else None,
+        })
+
+    # Light daily alert for inactive VAs → admins + that VA's assigned reviewer (deduped per day)
+    try:
+        day_start = datetime.now(_tz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        for row in out:
+            if row["status"] != "inactive":
+                continue
+            title = f"🚨 {row['name']} has no activity this week"
+            auditor_ids = [str(u.id) for u in db.query(User).filter(User.role == UserRole.auditor, User.is_active.is_(True)).all()]
+            recipients = admin_user_ids(db) + auditor_ids + ([row["reviewer_user_id"]] if row["reviewer_user_id"] else [])
+            from uuid import UUID as _UUID
+            todo_recipients = []
+            for rid in recipients:
+                rid_uuid = _UUID(rid) if isinstance(rid, str) else rid
+                exists = db.query(Notification).filter(
+                    Notification.user_id == rid_uuid, Notification.title == title, Notification.created_at >= day_start,
+                ).first()
+                if not exists:
+                    todo_recipients.append(rid_uuid)
+            if todo_recipients:
+                push(db, todo_recipients, "system", title,
+                     "Assigned work is waiting but no hours were logged today or this week. Check the board and follow up.",
+                     "/admin/dashboard")
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+    order = {"inactive": 0, "low": 1, "active": 2, "idle": 3}
+    out.sort(key=lambda r: (order.get(r["status"], 9), -int(r["overdue"]), r["name"]))
+    return {
+        "week_start": str(week_start), "week_end": str(week_end), "today": str(today),
+        "members": out,
+        "counts": {
+            "inactive": len([r for r in out if r["status"] == "inactive"]),
+            "low": len([r for r in out if r["status"] == "low"]),
+            "active": len([r for r in out if r["status"] == "active"]),
+            "idle": len([r for r in out if r["status"] == "idle"]),
+        },
+    }
 
 
 @router.get("/summary", response_model=DashboardSummary)

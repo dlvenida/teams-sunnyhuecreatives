@@ -53,6 +53,13 @@ def require_admin(current: Annotated[CurrentUser, Depends(get_current_user)]) ->
     return current
 
 
+def require_admin_or_auditor(current: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
+    """Read-only monitoring access: admins and auditors (auditors watch, admins act)."""
+    if current.role not in (UserRole.admin, UserRole.auditor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Auditor access required")
+    return current
+
+
 def require_va(current: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
     if current.role != UserRole.va:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VA access required")

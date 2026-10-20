@@ -1,3 +1,5 @@
+# Teams.SHC API — Railway service (repo-root fallback; prefer backend/railway.toml
+# with the service root directory set to "backend")
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "backend/Dockerfile"
@@ -6,4 +8,10 @@ watchPatterns = ["backend/**"]
 [deploy]
 startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Singapore
+[deploy.multiRegionConfig."asia-southeast1-eqsg3a"]
+numReplicas = 1

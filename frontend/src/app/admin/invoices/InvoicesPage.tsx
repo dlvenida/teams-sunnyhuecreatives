@@ -10,7 +10,7 @@ import { StatCard } from "@/components/magicui/stat-card"
 import { buttonVariants } from "@/components/ui/button"
 import { cn, formatCurrency, formatDate } from "@/lib/utils"
 import { InvoiceDocument } from "@/components/pdf/InvoiceDocument"
-import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
+import { ReactPdfViewer } from "@/components/pdf-viewer/ReactPdfViewer"
 import { generatePdfBlob } from "@/lib/pdf"
 import {
   AlertCircle,
@@ -53,6 +53,7 @@ export function InvoicesPage() {
   const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null)
   const [detail, setDetail] = useState<Invoice | null>(null)
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
+  const [pdfFilename, setPdfFilename] = useState("invoice.pdf")
   const [generateError, setGenerateError] = useState("")
   const [generateSuccess, setGenerateSuccess] = useState("")
   const { showPricing } = useDisplaySettings()
@@ -177,12 +178,28 @@ export function InvoicesPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices"] }),
   })
 
-  const exportPdf = async (inv: Invoice) => {
-    if (!settings) return
-    const blob = await generatePdfBlob(
+  const buildPdf = async (inv: Invoice) => {
+    if (!settings) return null
+    return generatePdfBlob(
       <InvoiceDocument invoice={inv} settings={settings} showPricing={showPricing} />,
     )
+  }
+  /** View in the React PDF viewer (view + download inside the viewer). */
+  const exportPdf = async (inv: Invoice) => {
+    const blob = await buildPdf(inv)
+    if (!blob) return
+    setPdfFilename(`${inv.invoice_number}.pdf`)
     setPdfBlob(blob)
+  }
+  /** Download immediately to send to the client, without opening the viewer. */
+  const downloadPdf = async (inv: Invoice) => {
+    const blob = await buildPdf(inv)
+    if (!blob) return
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url; a.download = `${inv.invoice_number}.pdf`
+    document.body.appendChild(a); a.click(); a.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
 
   const todayStr = new Date().toISOString().slice(0, 10)
@@ -399,9 +416,14 @@ export function InvoicesPage() {
           <span className="text-sm font-medium">
             Latest: {previewInvoice.invoice_number}{showPricing ? ` — ${formatCurrency(previewInvoice.amount)}` : ""}
           </span>
+          <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => exportPdf(previewInvoice)}>
-            <FileDown className="h-3.5 w-3.5" /> Preview PDF
+            <Eye className="h-3.5 w-3.5" /> View PDF
           </Button>
+          <Button variant="outline" size="sm" onClick={() => downloadPdf(previewInvoice)}>
+            <FileDown className="h-3.5 w-3.5" /> Download
+          </Button>
+          </div>
         </div>
       )}
 
@@ -461,7 +483,10 @@ export function InvoicesPage() {
                         <Button size="sm" variant="ghost" title="View details" onClick={() => setDetail(inv)}>
                           <Eye className="h-3.5 w-3.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" title="Download PDF" onClick={() => exportPdf(inv)}>
+                        <Button size="sm" variant="ghost" title="View PDF" onClick={() => exportPdf(inv)}>
+                          <Eye className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" title="Download PDF (send to client)" onClick={() => downloadPdf(inv)}>
                           <FileDown className="h-3.5 w-3.5" />
                         </Button>
                         {inv.status === "unpaid" && (
@@ -513,7 +538,8 @@ export function InvoicesPage() {
               </table>
             </div>
             <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <Button variant="outline" onClick={() => exportPdf(detail)}><FileDown className="h-4 w-4" /> PDF</Button>
+              <Button variant="outline" onClick={() => exportPdf(detail)}><Eye className="h-4 w-4" /> View PDF</Button>
+              <Button variant="outline" onClick={() => downloadPdf(detail)}><FileDown className="h-4 w-4" /> Download PDF</Button>
               {detail.status === "unpaid" && <Button variant="success" onClick={() => markPaid.mutate(detail.id)}>Mark paid</Button>}
               {detail.status === "paid" && <Button variant="outline" onClick={() => markUnpaid.mutate(detail.id)}><Undo2 className="h-4 w-4" /> Mark unpaid</Button>}
             </div>
@@ -521,7 +547,7 @@ export function InvoicesPage() {
         </div>
       )}
 
-      <PdfPreviewModal blob={pdfBlob} filename="invoice.pdf" onClose={() => setPdfBlob(null)} />
+      <ReactPdfViewer blob={pdfBlob} filename={pdfFilename} onClose={() => setPdfBlob(null)} />
     </div>
   )
 }

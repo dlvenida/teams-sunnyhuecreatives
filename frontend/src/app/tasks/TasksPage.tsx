@@ -77,7 +77,7 @@ export function TasksPage() {
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-base font-semibold tracking-tight">{isAdmin ? "Tasks — All Boards" : "My Tasks"}</h1>
+          <h1 className="text-base font-semibold tracking-tight">{isAdmin ? "Task Board — All Tasks" : "Task Board — My Tasks"}</h1>
           <p className="text-xs text-muted-foreground">Manage work per client & project · Kanban, list, or timeline by week / bi-week / month</p>
         </div>
         <div className="flex gap-2">

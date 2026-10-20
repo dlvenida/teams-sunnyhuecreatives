@@ -29,7 +29,7 @@ export interface NavItem {
 
 export const ADMIN_NAV: NavItem[] = [
   { to: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, keywords: ["home", "overview", "stats"], section: "Workspace", color: "#ec4899" },
-  { to: "/admin/tasks", label: "Board", icon: KanbanSquare, keywords: ["kanban", "monday", "tasks", "board"], section: "Workspace", color: "#8b5cf6" },
+  { to: "/admin/tasks", label: "Task Board", icon: KanbanSquare, keywords: ["kanban", "monday", "tasks", "board", "task board"], section: "Workspace", color: "#8b5cf6" },
   { to: "/admin/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "client project"], section: "Workspace", color: "#06b6d4" },
   { to: "/admin/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock", "live", "team time"], section: "Workspace", color: "#22c55e" },
   { to: "/admin/logs", label: "All Logs", icon: FileText, keywords: ["work logs", "entries", "approve"], section: "Operations", color: "#f59e0b" },
@@ -47,7 +47,7 @@ export const ADMIN_NAV: NavItem[] = [
 
 export const VA_NAV: NavItem[] = [
   { to: "/va/dashboard", label: "Dashboard", icon: LayoutDashboard, keywords: ["home", "today", "overview", "morning"], section: "Workspace", color: "#ec4899" },
-  { to: "/va/tasks", label: "My Board", icon: KanbanSquare, keywords: ["kanban", "tasks", "my tasks", "board"], section: "Workspace", color: "#8b5cf6" },
+  { to: "/va/tasks", label: "Task Board", icon: KanbanSquare, keywords: ["kanban", "tasks", "my tasks", "board", "task board"], section: "Workspace", color: "#8b5cf6" },
   { to: "/va/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "client project"], section: "Workspace", color: "#06b6d4" },
   { to: "/va/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock in", "clock out", "timer"], section: "Workspace", color: "#22c55e" },
   { to: "/va/time-log", label: "Log Time", icon: Clock, keywords: ["submit", "hours", "work"], section: "Workspace", color: "#f59e0b" },

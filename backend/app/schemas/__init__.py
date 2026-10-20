@@ -45,6 +45,10 @@ class TokenResponse(BaseModel):
     must_change_password: bool = False
     va_id: UUID | None = None
     name: str | None = None
+    user_id: UUID | None = None
+    is_impersonating: bool = False
+    impersonated_by: UUID | None = None
+    impersonated_by_name: str | None = None
 
 
 class RefreshRequest(BaseModel):

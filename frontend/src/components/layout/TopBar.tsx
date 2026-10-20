@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
-import { ArrowRight, ChevronDown, History, Menu, Pause, Play, Square, Timer } from "lucide-react"
-import { apiFetch, getAuthUser } from "@/lib/api"
-import type { TimeClockEntry } from "@/lib/types"
+import { ArrowRight, ChevronDown, History, Menu, Pause, Play, Square, SwitchCamera, Timer } from "lucide-react"
+import { apiFetch, getAuthUser, homeForRole, isImpersonating, startImpersonation } from "@/lib/api"
+import type { AppUser, TimeClockEntry } from "@/lib/types"
 import { GlobalSearch } from "@/components/layout/GlobalSearch"
 import { NotificationsPanel } from "@/components/layout/NotificationsPanel"
 import { formatDuration } from "@/components/tasks/task-utils"
@@ -135,6 +135,48 @@ function HeaderAdminClock() {
   )
 }
 
+/** Admin-only: switch into any VA/auditor account to see exactly their view. */
+function AdminUserSwitcher() {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const { data: users = [] } = useQuery({ queryKey: ["switcher-users"], queryFn: () => apiFetch<AppUser[]>("/auth/users"), enabled: open })
+  const targets = users.filter((u) => u.is_active && u.role !== "admin")
+  const switchTo = async (u: AppUser) => {
+    setBusy(true)
+    try {
+      const user = await startImpersonation(u.id)
+      window.location.href = homeForRole(user.role)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not switch user")
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="relative shrink-0">
+      <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-[11px] font-bold text-primary shadow-sm transition hover:bg-primary/10 sm:text-xs" title="Switch user — see what they see">
+        <SwitchCamera className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Switch user</span>
+        <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (<>
+        <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+        <div className="absolute right-0 z-40 mt-2 w-[min(92vw,300px)] overflow-hidden rounded-2xl border bg-card shadow-xl">
+          <p className="border-b bg-muted/40 px-4 py-2.5 text-xs font-bold">View as… (you'll see their exact view)</p>
+          <div className="max-h-72 overflow-y-auto p-2">
+            {targets.map((u) => (
+              <button key={u.id} disabled={busy} onClick={() => void switchTo(u)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-xs hover:bg-muted/50 disabled:opacity-60">
+                <span className="min-w-0"><span className="block truncate font-semibold">{u.name}</span><span className="block truncate text-[11px] text-muted-foreground">{u.email}</span></span>
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold capitalize text-primary">{u.role}</span>
+              </button>
+            ))}
+            {targets.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No active VA/auditor accounts to switch into.</p>}
+          </div>
+          <p className="border-t px-4 py-2 text-[10px] text-muted-foreground">An amber banner will let you exit back to Admin at any time.</p>
+        </div>
+      </>)}
+    </div>
+  )
+}
+
 export function TopBar({ onMenu }: { onMenu?: () => void }) {
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
@@ -147,6 +189,7 @@ export function TopBar({ onMenu }: { onMenu?: () => void }) {
         <p className="truncate text-[13px] font-semibold">Sunny Hue Creatives <span className="font-normal text-muted-foreground">/ {isAdmin ? "Admin" : user?.role === "auditor" ? "Auditor" : "My workspace"}</span></p>
         <p className="hidden text-[10px] text-muted-foreground sm:block">{!isAdmin && current ? "You're on the clock — keep going!" : "Let's make today productive"}</p>
       </div>
+      {isAdmin && !isImpersonating() && <AdminUserSwitcher />}
       {/* Time clock — VA/users clock in here; admin sees the whole team's clock, logs & history */}
       {!!user && (user.role === "va" ? <HeaderClock /> : <HeaderAdminClock />)}
       <GlobalSearch className="hidden w-64 max-w-full md:block xl:w-80" />

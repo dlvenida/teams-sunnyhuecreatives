@@ -14,9 +14,14 @@ security = HTTPBearer()
 
 
 class CurrentUser:
-    def __init__(self, user: User, va_id: UUID | None = None):
+    def __init__(self, user: User, va_id: UUID | None = None, impersonated_by: UUID | None = None):
         self.user = user
         self.va_id = va_id
+        self.impersonated_by = impersonated_by
+
+    @property
+    def is_impersonating(self) -> bool:
+        return self.impersonated_by is not None
 
     @property
     def id(self) -> UUID:
@@ -44,7 +49,8 @@ def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     va_id = UUID(payload["va_id"]) if payload.get("va_id") else None
-    return CurrentUser(user=user, va_id=va_id)
+    impersonated_by = UUID(payload["impersonated_by"]) if payload.get("impersonated_by") else None
+    return CurrentUser(user=user, va_id=va_id, impersonated_by=impersonated_by)
 
 
 def require_admin(current: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:

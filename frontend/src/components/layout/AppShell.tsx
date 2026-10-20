@@ -4,6 +4,7 @@ import { getAuthUser } from "@/lib/api"
 import { getNavForRole } from "@/lib/navigation"
 import { Sidebar } from "@/components/layout/Sidebar"
 import { TopBar } from "@/components/layout/TopBar"
+import { ImpersonationBanner } from "@/components/layout/ImpersonationBanner"
 
 export function AppShell() {
   const user = getAuthUser()
@@ -16,6 +17,7 @@ export function AppShell() {
       <Sidebar items={navItems} mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <TopBar onMenu={() => setMobileOpen(true)} />
+        <ImpersonationBanner />
         <main className="mx-auto w-full max-w-[1600px] flex-1 overflow-auto p-4 sm:p-5">
           <Outlet />
         </main>

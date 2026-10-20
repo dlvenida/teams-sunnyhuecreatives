@@ -18,10 +18,16 @@ from app.config import settings
 
 
 def _s3_config():
-    endpoint = os.getenv("S3_ENDPOINT_URL") or os.getenv("BUCKET_ENDPOINT") or os.getenv("S3_ENDPOINT")
+    endpoint = (
+        os.getenv("S3_ENDPOINT_URL") or os.getenv("BUCKET_ENDPOINT") or os.getenv("S3_ENDPOINT")
+        or os.getenv("AWS_ENDPOINT_URL")
+    )
     access = os.getenv("S3_ACCESS_KEY_ID") or os.getenv("BUCKET_ACCESS_KEY") or os.getenv("AWS_ACCESS_KEY_ID")
     secret = os.getenv("S3_SECRET_ACCESS_KEY") or os.getenv("BUCKET_SECRET_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY")
-    bucket = os.getenv("S3_BUCKET") or os.getenv("BUCKET_NAME") or os.getenv("AWS_S3_BUCKET")
+    bucket = (
+        os.getenv("S3_BUCKET") or os.getenv("BUCKET_NAME")
+        or os.getenv("AWS_S3_BUCKET") or os.getenv("AWS_S3_BUCKET_NAME")
+    )
     if endpoint and access and secret and bucket:
         return {"endpoint": endpoint, "access": access, "secret": secret, "bucket": bucket,
                 "region": os.getenv("S3_REGION", "auto")}
@@ -34,14 +40,18 @@ def bucket_enabled() -> bool:
 
 def _client():
     import boto3  # imported lazily so local dev doesn't require it
+    from botocore.config import Config
 
     cfg = _s3_config()
+    style = os.getenv("S3_URL_STYLE") or os.getenv("AWS_S3_URL_STYLE") or "path"
+    addressing = "virtual" if style.startswith("virtual") else "path"
     return boto3.client(
         "s3",
         endpoint_url=cfg["endpoint"],
         aws_access_key_id=cfg["access"],
         aws_secret_access_key=cfg["secret"],
         region_name=cfg["region"],
+        config=Config(s3={"addressing_style": addressing}),
     ), cfg["bucket"]
 
 

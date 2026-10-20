@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { Search } from "lucide-react"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import { getNavForRole } from "@/lib/navigation"
-import type { Client, WorkLog } from "@/lib/types"
+import type { Client, Project, TaskItem, WorkLog } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 interface SearchResult {
@@ -12,7 +12,7 @@ interface SearchResult {
   label: string
   sublabel?: string
   path: string
-  type: "page" | "client" | "log"
+  type: "page" | "client" | "log" | "task" | "project"
 }
 
 export function GlobalSearch({ className }: { className?: string }) {
@@ -42,6 +42,17 @@ export function GlobalSearch({ className }: { className?: string }) {
     enabled: !!user && !isAdmin && query.length >= 2,
   })
 
+  const { data: foundTasks = [] } = useQuery({
+    queryKey: ["search-tasks", query],
+    queryFn: () => apiFetch<TaskItem[]>(`/tasks?search=${encodeURIComponent(query)}`),
+    enabled: !!user && query.length >= 2,
+  })
+  const { data: foundProjects = [] } = useQuery({
+    queryKey: ["search-projects"],
+    queryFn: () => apiFetch<Project[]>("/projects?include_archived=false"),
+    enabled: !!user && query.length >= 2,
+  })
+
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
@@ -63,6 +74,14 @@ export function GlobalSearch({ className }: { className?: string }) {
       }
     }
 
+    foundTasks.slice(0, 5).forEach((t) =>
+      results.push({ id: t.id, label: t.title, sublabel: `Task · ${t.client_name || ""} · ${t.status.replace("_", " ")}`, path: `${isAdmin ? "/admin" : "/va"}/tasks`, type: "task" }),
+    )
+    foundProjects
+      .filter((p) => p.name.toLowerCase().includes(q))
+      .slice(0, 4)
+      .forEach((p) => results.push({ id: p.id, label: p.name, sublabel: `Project · ${p.client_name || ""}`, path: `${isAdmin ? "/admin" : "/va"}/tasks?project=${p.id}`, type: "project" }))
+
     if (isAdmin) {
       clients
         .filter((c) => c.name.toLowerCase().includes(q))
@@ -72,7 +91,7 @@ export function GlobalSearch({ className }: { className?: string }) {
             id: c.id,
             label: c.name,
             sublabel: "Client",
-            path: "/admin/settings",
+            path: "/admin/clients",
             type: "client",
           }),
         )
@@ -126,7 +145,7 @@ export function GlobalSearch({ className }: { className?: string }) {
         <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <input
           type="search"
-          placeholder={user ? "Search pages, clients, logs..." : "Sign in to search..."}
+          placeholder={user ? "Search tasks, projects, clients, logs..." : "Sign in to search..."}
           value={query}
           disabled={!user}
           onChange={(e) => {

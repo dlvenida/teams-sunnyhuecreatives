@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, getAuthUser, setAuthUser } from "@/lib/api"
-import { profileToForm, type ProfileFormData, type UserProfile } from "@/lib/profile"
+import { profileToForm, TIMEZONES, type ProfileFormData, type UserProfile } from "@/lib/profile"
 import { ProfilePhotoUpload } from "@/components/profile/ProfilePhotoUpload"
 import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher"
 import { Button } from "@/components/ui/button"
-import { Input, Label } from "@/components/ui/input"
+import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Mail, MapPin, Phone, Landmark, Wallet } from "lucide-react"
+import { Briefcase, HeartHandshake, Link2, Mail, MapPin, Phone, Landmark, Wallet } from "lucide-react"
 
 export function ProfilePage() {
   const qc = useQueryClient()
@@ -45,6 +45,18 @@ export function ProfilePage() {
           ph_bank_account: body.ph_bank_account || null,
           ph_bank_account_name: body.ph_bank_account_name || null,
           ph_bank_name: body.ph_bank_name || null,
+          job_title: body.job_title || null,
+          bio: body.bio || null,
+          timezone: body.timezone || null,
+          skills: body.skills ? body.skills.split(",").map(s => s.trim()).filter(Boolean) : [],
+          emergency_contact_name: body.emergency_contact_name || null,
+          emergency_contact_phone: body.emergency_contact_phone || null,
+          emergency_contact_relationship: body.emergency_contact_relationship || null,
+          hire_date: body.hire_date || null,
+          date_of_birth: body.date_of_birth || null,
+          linkedin_url: body.linkedin_url || null,
+          portfolio_url: body.portfolio_url || null,
+          status_message: body.status_message || null,
         }),
       }),
     onSuccess: (data) => {
@@ -141,7 +153,10 @@ export function ProfilePage() {
           <div className="mt-4 flex flex-wrap gap-2">
             <Badge variant="default" className="capitalize">{profile.role}</Badge>
             {profile.currency && <Badge variant={profile.currency === "PHP" ? "php" : "usd"}>{profile.currency}</Badge>}
+            {profile.job_title && <Badge>{profile.job_title}</Badge>}
+            {profile.timezone && <Badge>{profile.timezone}</Badge>}
           </div>
+          {profile.status_message && <p className="mt-2 text-xs text-muted-foreground">“{profile.status_message}”</p>}
         </CardContent>
       </Card>
 
@@ -168,6 +183,44 @@ export function ProfilePage() {
           <Button variant="gold" size="sm" disabled={saveProfile.isPending || !form.display_name} onClick={() => saveProfile.mutate(form)}>
             {saveProfile.isPending ? "Saving..." : "Save details"}
           </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><Briefcase className="h-4 w-4 text-primary" /> Work Profile</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div><Label htmlFor="job-title">Job title / Role</Label><Input id="job-title" placeholder="Virtual Assistant, Designer…" value={form.job_title} onChange={(e) => update("job_title", e.target.value)} /></div>
+            <div><Label htmlFor="status-msg">Status message</Label><Input id="status-msg" placeholder="Available, On leave, Focus mode…" value={form.status_message} onChange={(e) => update("status_message", e.target.value)} /></div>
+            <div><Label htmlFor="tz">Timezone</Label><Select id="tz" value={form.timezone} onChange={(e) => update("timezone", e.target.value)}>{TIMEZONES.map(t => <option key={t} value={t}>{t}</option>)}</Select></div>
+            <div><Label htmlFor="hire">Hire / Start date</Label><Input id="hire" type="date" value={form.hire_date} onChange={(e) => update("hire_date", e.target.value)} /></div>
+            <div><Label htmlFor="dob">Date of birth</Label><Input id="dob" type="date" value={form.date_of_birth} onChange={(e) => update("date_of_birth", e.target.value)} /></div>
+          </div>
+          <div><Label htmlFor="skills">Skills (comma separated)</Label><Input id="skills" placeholder="Inbox management, Canva, Bookkeeping" value={form.skills} onChange={(e) => update("skills", e.target.value)} /></div>
+          <div><Label htmlFor="bio">Bio</Label><Textarea id="bio" placeholder="Short intro about your work…" value={form.bio} onChange={(e) => update("bio", e.target.value)} /></div>
+          {(form.skills || profile.skills?.length) && <div className="flex flex-wrap gap-1.5">{(form.skills ? form.skills.split(",").map(s => s.trim()).filter(Boolean) : profile.skills || []).map(s => <Badge key={s}>{s}</Badge>)}</div>}
+          <Button variant="gold" size="sm" disabled={saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>Save work profile</Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><HeartHandshake className="h-4 w-4 text-primary" /> Emergency Contact</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div><Label htmlFor="ec-name">Full name</Label><Input id="ec-name" value={form.emergency_contact_name} onChange={(e) => update("emergency_contact_name", e.target.value)} /></div>
+            <div><Label htmlFor="ec-phone">Phone</Label><Input id="ec-phone" value={form.emergency_contact_phone} onChange={(e) => update("emergency_contact_phone", e.target.value)} /></div>
+            <div><Label htmlFor="ec-rel">Relationship</Label><Input id="ec-rel" placeholder="Spouse, Parent…" value={form.emergency_contact_relationship} onChange={(e) => update("emergency_contact_relationship", e.target.value)} /></div>
+          </div>
+          <Button variant="gold" size="sm" disabled={saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>Save emergency contact</Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><Link2 className="h-4 w-4 text-primary" /> Links</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div><Label htmlFor="linkedin">LinkedIn</Label><Input id="linkedin" type="url" placeholder="https://linkedin.com/in/…" value={form.linkedin_url} onChange={(e) => update("linkedin_url", e.target.value)} /></div>
+          <div><Label htmlFor="portfolio">Portfolio / Website</Label><Input id="portfolio" type="url" placeholder="https://" value={form.portfolio_url} onChange={(e) => update("portfolio_url", e.target.value)} /></div>
+          <Button variant="gold" size="sm" disabled={saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>Save links</Button>
         </CardContent>
       </Card>
 

@@ -1,11 +1,14 @@
 import { Navigate, Outlet } from "react-router-dom"
 import { getAuthUser } from "@/lib/api"
 
-export function ProtectedRoute({ role }: { role?: "admin" | "va" }) {
+const HOME: Record<string, string> = { admin: "/admin/dashboard", auditor: "/admin/analytics", va: "/va/dashboard" }
+
+export function ProtectedRoute({ role }: { role?: string | string[] }) {
   const user = getAuthUser()
   if (!user) return <Navigate to="/login" replace />
-  if (role && user.role !== role) {
-    return <Navigate to={user.role === "admin" ? "/admin/dashboard" : "/va/time-log"} replace />
+  const allowed = role ? (Array.isArray(role) ? role : [role]) : []
+  if (allowed.length && !allowed.includes(user.role)) {
+    return <Navigate to={HOME[user.role] ?? "/login"} replace />
   }
   return <Outlet />
 }

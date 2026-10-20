@@ -4,7 +4,7 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8090"
 
 export { API_URL }
 
-export type UserRole = "admin" | "va"
+export type UserRole = "admin" | "auditor" | "va"
 
 export interface AuthUser {
   role: UserRole

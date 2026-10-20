@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import CurrentUser, require_admin
+from app.deps import CurrentUser, require_admin, require_admin_or_auditor
 from app.models import Client, SubClient, WorkLog, Invoice
 from app.schemas import (
     ClientCreate,
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/clients", tags=["clients"])
 
 @router.get("", response_model=list[ClientResponse])
 def list_clients(
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
     active_only: bool = False,
     include_archived: bool = True,
@@ -47,6 +47,97 @@ def create_client(
     db.commit()
     db.refresh(client)
     return client
+
+
+@router.get("/{client_id}/detail")
+def client_detail(
+    client_id: UUID,
+    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Everything connected to a client: stats, sub-clients, projects, tasks, logs, invoices."""
+    from datetime import date as _date
+    from decimal import Decimal
+    from sqlalchemy import func as _func
+    from sqlalchemy.orm import joinedload as _jl
+    from app.models import Project, Task, TaskStatus, WorkLogStatus
+    from app.routers.tasks import _serialize as serialize_task
+    from app.routers.work_logs import _serialize_log
+
+    client = db.query(Client).options(_jl(Client.sub_clients)).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+
+    today = _date.today()
+    month_start = today.replace(day=1)
+    logs = db.query(WorkLog).filter(WorkLog.client_id == client_id).all()
+    billable = [l for l in logs if l.status in (WorkLogStatus.approved, WorkLogStatus.invoiced)]
+    pending = [l for l in logs if l.status == WorkLogStatus.submitted]
+    tasks = db.query(Task).filter(Task.client_id == client_id).all()
+    open_tasks = [t for t in tasks if t.status != TaskStatus.done]
+    projects = db.query(Project).filter(Project.client_id == client_id).order_by(Project.created_at.desc()).all()
+    invoices = db.query(Invoice).filter(Invoice.client_id == client_id).order_by(Invoice.created_at.desc()).all()
+
+    def hours(items):
+        return sum((l.hours for l in items), Decimal("0"))
+
+    sub_rows = []
+    for s in client.sub_clients:
+        s_logs = [l for l in billable if l.sub_client_id == s.id]
+        sub_rows.append({
+            "id": str(s.id), "name": s.name, "is_active": bool(s.is_active),
+            "hours": str(hours(s_logs)), "logs": len(s_logs),
+            "tasks": len([t for t in tasks if t.sub_client_id == s.id]),
+        })
+
+    project_rows = []
+    for p in projects:
+        p_tasks = [t for t in tasks if t.project_id == p.id]
+        project_rows.append({
+            "id": str(p.id), "name": p.name, "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+            "cadence": p.cadence.value if hasattr(p.cadence, "value") else str(p.cadence), "color": p.color,
+            "sub_client_name": p.sub_client.name if p.sub_client else None,
+            "task_total": len(p_tasks), "task_done": len([t for t in p_tasks if t.status == TaskStatus.done]),
+            "hours": str(hours([l for l in billable if l.project_id == p.id])),
+            "due_date": str(p.due_date) if p.due_date else None,
+        })
+
+    recent_tasks = sorted(tasks, key=lambda t: t.updated_at or t.created_at, reverse=True)[:20]
+    recent_logs = sorted(logs, key=lambda l: (l.work_date, l.created_at), reverse=True)[:20]
+
+    return {
+        "client": {
+            "id": str(client.id), "name": client.name,
+            "billing_type": client.billing_type.value if hasattr(client.billing_type, "value") else str(client.billing_type),
+            "default_rate": str(client.default_rate) if client.default_rate is not None else None,
+            "is_active": bool(client.is_active), "created_at": client.created_at.isoformat() if client.created_at else None,
+        },
+        "stats": {
+            "total_hours": str(hours(billable)),
+            "hours_this_month": str(hours([l for l in billable if l.work_date >= month_start])),
+            "pending_hours": str(hours(pending)), "pending_count": len(pending),
+            "invoiced_hours": str(hours([l for l in billable if l.status == WorkLogStatus.invoiced])),
+            "ready_to_invoice_hours": str(hours([l for l in billable if l.status == WorkLogStatus.approved])),
+            "logs_count": len(logs),
+            "tasks_total": len(tasks), "tasks_open": len(open_tasks),
+            "tasks_done": len([t for t in tasks if t.status == TaskStatus.done]),
+            "tasks_overdue": len([t for t in open_tasks if t.due_date and t.due_date < today]),
+            "invoices_count": len(invoices), "invoices_unpaid": len([i for i in invoices if str(getattr(i.status, "value", i.status)) == "unpaid"]),
+            "va_names": sorted({l.va.name for l in logs if l.va}),
+            "last_activity": str(max((l.work_date for l in logs), default=None)) if logs else None,
+        },
+        "sub_clients": sub_rows,
+        "projects": project_rows,
+        "tasks": [serialize_task(db, t).model_dump(mode="json") for t in recent_tasks],
+        "logs": [_serialize_log(l).model_dump(mode="json") for l in recent_logs],
+        "invoices": [{
+            "id": str(i.id), "invoice_number": i.invoice_number, "period_label": i.period_label,
+            "total_hours": str(i.total_hours), "amount": str(i.amount),
+            "status": i.status.value if hasattr(i.status, "value") else str(i.status),
+            "issue_date": str(i.issue_date), "due_date": str(i.due_date),
+            "paid_at": i.paid_at.isoformat() if i.paid_at else None,
+        } for i in invoices],
+    }
 
 
 @router.patch("/{client_id}", response_model=ClientResponse)

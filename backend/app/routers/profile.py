@@ -4,8 +4,7 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -18,6 +17,7 @@ from app.schemas import (
     ProfileResponse,
     ProfileUpdate,
 )
+from app.services import storage
 from app.services.email import send_email_verification
 
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -33,6 +33,10 @@ def _profile_dir() -> Path:
 
 def _photo_path(user_id: UUID) -> Path:
     return _profile_dir() / f"{user_id}.avif"
+
+
+def _photo_key(user_id: UUID) -> str:
+    return f"profiles/{user_id}.avif"
 
 
 def _is_avif(data: bytes) -> bool:
@@ -56,7 +60,8 @@ def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
         pending_email=user.pending_email,
         role=user.role,
         display_name=_display_name(user, va),
-        has_profile_photo=user.profile_photo_path is not None and _photo_path(user.id).exists(),
+        has_profile_photo=user.profile_photo_path is not None
+        and (storage.bucket_enabled() or _photo_path(user.id).exists()),
         phone=user.phone,
         address=user.address,
         wise_email=user.wise_email,
@@ -65,6 +70,11 @@ def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
         ph_bank_name=user.ph_bank_name,
         currency=va.currency if va else None,
         must_change_password=user.must_change_password,
+        job_title=user.job_title, bio=user.bio, timezone=user.timezone, skills=user.skills or [],
+        emergency_contact_name=user.emergency_contact_name, emergency_contact_phone=user.emergency_contact_phone,
+        emergency_contact_relationship=user.emergency_contact_relationship, hire_date=user.hire_date,
+        date_of_birth=user.date_of_birth, linkedin_url=user.linkedin_url, portfolio_url=user.portfolio_url,
+        status_message=user.status_message, created_at=user.created_at,
     )
 
 
@@ -123,9 +133,8 @@ async def upload_profile_photo(
     if not _is_avif(data):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid AVIF file")
 
-    dest = _photo_path(current.user.id)
-    dest.write_bytes(data)
-    current.user.profile_photo_path = str(dest)
+    ref = storage.save_bytes(_photo_key(current.user.id), data, "image/avif")
+    current.user.profile_photo_path = ref
     db.commit()
     return {"message": "Photo updated", "has_profile_photo": True}
 
@@ -135,19 +144,17 @@ def delete_profile_photo(
     current: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    path = _photo_path(current.user.id)
-    if path.exists():
-        path.unlink()
+    storage.delete(_photo_key(current.user.id))
     current.user.profile_photo_path = None
     db.commit()
 
 
 @router.get("/photo")
 def get_profile_photo(current: Annotated[CurrentUser, Depends(get_current_user)]):
-    path = _photo_path(current.user.id)
-    if not path.exists():
+    data = storage.read_bytes(_photo_key(current.user.id))
+    if data is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No profile photo")
-    return FileResponse(path, media_type="image/avif")
+    return Response(content=data, media_type="image/avif")
 
 
 @router.post("/request-email-change")

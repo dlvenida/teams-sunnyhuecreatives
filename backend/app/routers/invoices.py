@@ -240,6 +240,27 @@ def mark_paid(
     return _serialize_invoice(invoice)
 
 
+@router.post("/{invoice_id}/mark-unpaid", response_model=InvoiceResponse)
+def mark_unpaid(
+    invoice_id: UUID,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    invoice = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.client), joinedload(Invoice.line_items))
+        .filter(Invoice.id == invoice_id)
+        .first()
+    )
+    if not invoice:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+    invoice.status = InvoiceStatus.unpaid
+    invoice.paid_at = None
+    db.commit()
+    db.refresh(invoice)
+    return _serialize_invoice(invoice)
+
+
 @router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_invoice(
     invoice_id: UUID,

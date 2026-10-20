@@ -19,10 +19,10 @@ export function LoginPage() {
     try {
       const user = await login(email, password)
       if (user.mustChangePassword) {
-        navigate(user.role === "admin" ? "/admin/profile" : "/va/profile")
+        navigate(user.role === "va" ? "/va/profile" : "/admin/profile")
         return
       }
-      navigate(user.role === "admin" ? "/admin/dashboard" : "/va/time-log")
+      navigate(user.role === "admin" ? "/admin/dashboard" : user.role === "auditor" ? "/admin/analytics" : "/va/time-log")
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed")
     } finally {

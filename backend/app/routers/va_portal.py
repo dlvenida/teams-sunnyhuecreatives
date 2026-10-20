@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
@@ -6,10 +7,11 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.deps import CurrentUser, require_va
 from app.models import Client, SubClient, VA, WorkLog, WorkLogStatus
-from app.schemas import ClientResponse, SubClientResponse
+from app.schemas import ClientResponse, SubClientResponse, VAWorkLogUpdate
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.calculations import calculate_hours, calculate_pay
 from app.services.email import send_va_submission_notification
+from app.services.notifications import admin_user_ids, push
 
 router = APIRouter(prefix="/va", tags=["va"])
 
@@ -34,6 +36,9 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         notes=log.notes,
         status=log.status,
         invoice_id=log.invoice_id,
+        project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
+        task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
+        clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
         created_at=log.created_at,
     )
 
@@ -76,12 +81,54 @@ def list_my_work_logs(
 ):
     logs = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va))
+        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task))
         .filter(WorkLog.va_id == current.va_id)
         .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
         .all()
     )
     return [_serialize_log(log) for log in logs]
+
+
+def _my_log_or_404(db: Session, log_id: UUID, va_id):
+    log = (
+        db.query(WorkLog)
+        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task))
+        .filter(WorkLog.id == log_id, WorkLog.va_id == va_id)
+        .first()
+    )
+    if not log:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work log not found")
+    return log
+
+
+@router.patch("/work-logs/{log_id}", response_model=WorkLogResponse)
+def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
+    """VA can edit their own log while it is still submitted/rejected (not approved/invoiced)."""
+    log = _my_log_or_404(db, log_id, current.va_id)
+    if log.status in (WorkLogStatus.approved, WorkLogStatus.invoiced):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approved/invoiced logs can only be edited by an admin")
+    data = body.model_dump(exclude_unset=True)
+    for k, v in data.items():
+        setattr(log, k, v)
+    if body.start_time or body.end_time:
+        start = body.start_time or log.start_time
+        end = body.end_time or log.end_time
+        log.hours = calculate_hours(start, end)
+        log.va_pay = calculate_pay(log.hours, log.va_rate)
+        if log.status == WorkLogStatus.rejected:
+            log.status = WorkLogStatus.submitted  # editing a rejected log resubmits it
+    db.commit()
+    db.refresh(log)
+    return _serialize_log(_my_log_or_404(db, log.id, current.va_id))
+
+
+@router.delete("/work-logs/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_my_work_log(log_id: UUID, current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
+    log = _my_log_or_404(db, log_id, current.va_id)
+    if log.status in (WorkLogStatus.approved, WorkLogStatus.invoiced):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approved/invoiced logs cannot be deleted")
+    db.delete(log)
+    db.commit()
 
 
 @router.post("/work-logs", response_model=WorkLogResponse, status_code=status.HTTP_201_CREATED)
@@ -98,6 +145,8 @@ def submit_work_log(
         va_id=current.va_id,
         client_id=body.client_id,
         sub_client_id=body.sub_client_id,
+        project_id=body.project_id,
+        task_id=body.task_id,
         description_lexical=body.description_lexical,
         description_plain=body.description_plain,
         start_time=body.start_time,
@@ -113,7 +162,7 @@ def submit_work_log(
     db.refresh(log)
     log = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va))
+        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task))
         .filter(WorkLog.id == log.id)
         .first()
     )
@@ -125,5 +174,7 @@ def submit_work_log(
         work_date=str(log.work_date),
         description=log.description_plain[:200],
     )
+    push(db, admin_user_ids(db), "log", f"🕒 New time log from {log.va.name}",
+         f"{log.client.name} · {log.work_date} · {log.hours} hrs waiting for approval.", "/admin/logs")
 
     return _serialize_log(log)

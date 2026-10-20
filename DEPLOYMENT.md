@@ -1,81 +1,104 @@
-# Railway Deployment Guide
+# Railway Deployment Guide — Teams.SHC
 
-Deploy Sunny Hue Creatives to `teams.sunnyhuecreatives.com`.
+Production target: **https://team.sunnyhuecreatives.com**
+Railway project: **Team Sunny Hue Creatives** (`963cdb03-9298-4232-afa5-90dd80a7175c`)
+Region: **Singapore** for everything (services: `southeast-asia` / `asia-southeast1-eqsg3a`, bucket: `sin`)
 
-## 1. Create Railway Project
+## Architecture (all connected)
 
-1. Go to [railway.app](https://railway.app) and create a new project
-2. Connect your GitHub repo (or deploy from local with `railway up`)
+| Service | Source | Region | Domain |
+|---------|--------|--------|--------|
+| `web` | `frontend/` (Dockerfile, nginx) | Singapore | `team.sunnyhuecreatives.com` |
+| `api` | `backend/` (Dockerfile, FastAPI) | Singapore | `api.team.sunnyhuecreatives.com` |
+| `Postgres` | Railway PostgreSQL | Singapore | internal only |
+| Bucket `teams-shc-uploads` | Railway Bucket (S3-compatible) | `sin` | internal only |
 
-## 2. Add PostgreSQL
+Connections:
+- `web` → `api`: frontend is built with `VITE_API_URL=https://api.team.sunnyhuecreatives.com`
+- `api` → `Postgres`: `DATABASE_URL=${{Postgres.DATABASE_URL}}`
+- `api` → Bucket: `S3_*` variables from the bucket credentials (profile images)
 
-1. Click **+ New** → **Database** → **PostgreSQL**
-2. Copy the `DATABASE_URL` from the Postgres service variables
+## ⚠️ Current blocker (Oct 21, 2026)
 
-## 3. Deploy API Service
+`railway add` fails with **"Deploys have been paused temporarily"** and no resources
+can be created. This is account/platform-level. In the Railway dashboard check for:
+an account verification banner, a billing/payment requirement, or a platform incident
+(status.railway.com). Once cleared, run the steps below (CLI is already logged in and
+the project is linked locally).
 
-1. Click **+ New** → **GitHub Repo** (or Empty Service)
-2. Set **Root Directory** to `backend`
-3. Railway will detect the Dockerfile automatically
-4. Add environment variables:
+## 1. Create the resources (CLI, from repo root)
+
+```bash
+railway link --project 963cdb03-9298-4232-afa5-90dd80a7175c
+railway add --database postgres --service Postgres
+railway bucket create teams-shc-uploads --region sin
+railway add --service api
+railway add --service web
+```
+
+## 2. API variables (`railway variables --service api --set …`)
 
 | Variable | Value |
 |----------|-------|
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` |
-| `JWT_SECRET` | (generate a 64-char random string) |
-| `ADMIN_EMAIL` | janelaurine@gmail.com |
-| `ADMIN_PASSWORD` | (secure password) |
-| `RESEND_API_KEY` | re_... |
-| `RESEND_FROM_EMAIL` | notifications@sunnyhuecreatives.com |
-| `ADMIN_NOTIFY_EMAIL` | janelaurine@gmail.com |
-| `CORS_ORIGINS` | https://teams.sunnyhuecreatives.com |
-| `APP_URL` | https://teams.sunnyhuecreatives.com |
+| `JWT_SECRET` | *(generate: `openssl rand -hex 32`)* |
+| `ADMIN_EMAIL` | `janelaurine@gmail.com` |
+| `ADMIN_PASSWORD` | *(strong production password — not the local dev one)* |
+| `CORS_ORIGINS` | `https://team.sunnyhuecreatives.com` |
+| `APP_URL` | `https://team.sunnyhuecreatives.com` |
+| `API_URL` | `https://api.team.sunnyhuecreatives.com` |
+| `AGENT_API_KEY` | *(generate: `openssl rand -hex 32`)* |
+| `S3_ENDPOINT_URL` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_BUCKET` | from `railway bucket credentials` |
+| `RESEND_API_KEY` | optional here — can also be set later in **Settings → Emails** |
+| `XAI_API_KEY` | optional (Grok agent) |
 
-5. Generate domain: `api.teams.sunnyhuecreatives.com` (or use Railway default + custom domain)
+Scale to Singapore (already pinned in `backend/railway.toml` too):
 
-## 4. Deploy Web Service
+```bash
+railway service scale --service api southeast-asia=1
+```
 
-1. Click **+ New** → **GitHub Repo**
-2. Set **Root Directory** to `frontend`
-3. Add build variable:
+Deploy: `cd backend && railway up --service api`, then
+`railway domain --service api` → generate domain, then add custom domain
+`api.team.sunnyhuecreatives.com`.
+
+## 3. Web variables + deploy
 
 | Variable | Value |
 |----------|-------|
-| `VITE_API_URL` | https://api.teams.sunnyhuecreatives.com |
+| `VITE_API_URL` | `https://api.team.sunnyhuecreatives.com` (build-time) |
 
-4. Railway uses `frontend/Dockerfile` for build
-5. Generate domain: `teams.sunnyhuecreatives.com`
+```bash
+railway service scale --service web southeast-asia=1
+cd frontend && railway up --service web
+railway domain --service web team.sunnyhuecreatives.com
+```
 
-## 5. DNS Configuration
+## 4. DNS (at the `sunnyhuecreatives.com` DNS provider)
 
-In your DNS provider for `sunnyhuecreatives.com`:
+Add the CNAME records Railway shows for each custom domain, typically:
 
 | Type | Name | Value |
 |------|------|-------|
-| CNAME | teams | (Railway web service hostname) |
-| CNAME | api.teams | (Railway API service hostname) |
+| CNAME | `team` | *(Railway target for the `web` service)* |
+| CNAME | `api.team` | *(Railway target for the `api` service)* |
 
-Railway provides the exact CNAME targets in each service's **Settings → Networking**.
+Wait for the certificates to be issued (Railway shows "valid" on the domain).
 
-## 6. Verify Deployment
+## 5. Verify
 
-1. Visit `https://teams.sunnyhuecreatives.com` — login page loads
-2. Visit `https://api.teams.sunnyhuecreatives.com/health` — returns `{"status":"ok"}`
-3. Login as admin with your `ADMIN_EMAIL` / `ADMIN_PASSWORD`
-4. Sample clients and VAs are seeded on first API startup
+1. `https://api.team.sunnyhuecreatives.com/health` → `{"status":"ok"}`
+2. `https://team.sunnyhuecreatives.com` → login page loads
+3. Log in as admin; seeded clients/VAs appear on first API startup
+4. **Settings → Emails → Resend Setup**: paste the Resend API key, set From Email on a
+   verified `sunnyhuecreatives.com` sending domain, Save — then send a test from
+   **Email Templates**
+5. Upload a profile photo and confirm it loads (stored in the bucket)
 
-## 7. Resend Email Setup
-
-1. Create account at [resend.com](https://resend.com)
-2. Verify your sending domain (`sunnyhuecreatives.com`)
-3. Add API key to Railway API service as `RESEND_API_KEY`
-4. VA submissions will email `ADMIN_NOTIFY_EMAIL`
-
-## Local Docker Alternative
+## Local Docker (development)
 
 ```bash
-docker compose up --build
+docker compose up --build -d --no-deps api web
 ```
 
-- Frontend: http://localhost:5190
-- API: http://localhost:8090
+- Frontend: http://localhost:5190 · API: http://localhost:8090

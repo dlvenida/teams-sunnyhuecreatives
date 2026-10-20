@@ -290,6 +290,63 @@ h1, h2, h3, h4 {
   }
 }
 
+/* ── Monday / React Bits inspired shell (theme colors preserved) ── */
+.gradient-text {
+  background: linear-gradient(120deg, var(--primary), color-mix(in srgb, var(--primary) 55%, var(--foreground)), var(--primary));
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: gradient-pan 6s ease infinite;
+}
+@keyframes gradient-pan { 0%,100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+
+.app-orb { position: fixed; border-radius: 9999px; filter: blur(70px); opacity: .35; pointer-events: none; z-index: 0; will-change: transform; }
+.app-orb-1 { width: 480px; height: 480px; top: -160px; right: -80px; background: radial-gradient(circle, var(--primary) 0%, transparent 70%); animation: login-drift-1 22s ease-in-out infinite; }
+.app-orb-2 { width: 380px; height: 380px; bottom: -140px; left: 180px; background: radial-gradient(circle, var(--accent) 0%, transparent 70%); animation: login-drift-2 26s ease-in-out infinite; }
+
+.monday-card { transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+.monday-card:hover { transform: translateY(-2px); box-shadow: 0 12px 32px -12px color-mix(in srgb, var(--primary) 35%, transparent); border-color: color-mix(in srgb, var(--primary) 45%, var(--border)); }
+
+.btn-shine { position: relative; overflow: hidden; }
+.btn-shine::after { content: ""; position: absolute; inset: 0; background: linear-gradient(115deg, transparent 30%, rgb(255 255 255 / .35) 50%, transparent 70%); transform: translateX(-120%); transition: transform .6s ease; }
+.btn-shine:hover::after { transform: translateX(120%); }
+
+.board-scroll { scrollbar-width: thin; scroll-snap-type: x proximity; }
+.board-scroll > * { scroll-snap-align: start; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--primary) 35%, transparent); border-radius: 999px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+@keyframes pulse-dot { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: .6; } }
+.live-dot { animation: pulse-dot 1.6s ease-in-out infinite; }
+
+/* Animated greeting emoji — changes with the time of day */
+@keyframes emoji-wave-kf {
+  0%, 60%, 100% { transform: rotate(0deg); }
+  10% { transform: rotate(16deg); } 20% { transform: rotate(-8deg); }
+  30% { transform: rotate(16deg); } 40% { transform: rotate(-4deg); } 50% { transform: rotate(10deg); }
+}
+.emoji-wave { transform-origin: 70% 70%; animation: emoji-wave-kf 2.4s ease-in-out infinite; }
+@keyframes emoji-sun-kf {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(18deg) scale(1.14); }
+}
+.emoji-sun { animation: emoji-sun-kf 5s ease-in-out infinite; }
+@keyframes emoji-float-kf {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-7px); }
+}
+.emoji-float { animation: emoji-float-kf 3.2s ease-in-out infinite; }
+@keyframes emoji-moon-kf {
+  0%, 100% { transform: rotate(-8deg); opacity: 1; }
+  50% { transform: rotate(10deg); opacity: .75; }
+}
+.emoji-moon { animation: emoji-moon-kf 4.5s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-orb, .gradient-text, .emoji-wave, .emoji-sun, .emoji-float, .emoji-moon { animation: none; }
+  .monday-card:hover { transform: none; }
+}
+
 .lexical-editor {
   min-height: 100px;
   border: 1px solid var(--border);

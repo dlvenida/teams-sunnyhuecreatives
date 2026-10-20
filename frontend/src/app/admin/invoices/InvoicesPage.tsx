@@ -2,24 +2,29 @@ import { useEffect, useMemo, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
-import type { Client, Invoice, InvoicePreview, Settings } from "@/lib/types"
+import type { Client, Invoice, InvoicePreview, ReportClientsResponse, Settings } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { StatusBadge } from "@/components/ui/badge"
 import { StatCard } from "@/components/magicui/stat-card"
 import { buttonVariants } from "@/components/ui/button"
-import { cn, formatCurrency } from "@/lib/utils"
+import { cn, formatCurrency, formatDate } from "@/lib/utils"
 import { InvoiceDocument } from "@/components/pdf/InvoiceDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { generatePdfBlob } from "@/lib/pdf"
 import {
   AlertCircle,
+  CalendarClock,
   CheckCircle2,
+  Eye,
   FileDown,
+  FileSpreadsheet,
   Plus,
   Receipt,
   Search,
   Trash2,
+  Undo2,
+  X,
 } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 
@@ -32,7 +37,7 @@ export function InvoicesPage() {
   const [searchParams] = useSearchParams()
   const qc = useQueryClient()
   const [search, setSearch] = useState("")
-  const [statusFilter, setStatusFilter] = useState<"all" | "paid" | "unpaid">("all")
+  const [statusFilter, setStatusFilter] = useState<"all" | "paid" | "unpaid" | "overdue">("all")
   const [form, setForm] = useState({
     client_id: "",
     year: new Date().getFullYear(),
@@ -46,6 +51,7 @@ export function InvoicesPage() {
     payment_terms_days: 7,
   })
   const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null)
+  const [detail, setDetail] = useState<Invoice | null>(null)
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
   const [generateError, setGenerateError] = useState("")
   const [generateSuccess, setGenerateSuccess] = useState("")
@@ -159,7 +165,11 @@ export function InvoicesPage() {
 
   const markPaid = useMutation({
     mutationFn: (id: string) => apiFetch(`/invoices/${id}/mark-paid`, { method: "POST" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices"] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["invoices"] }); setDetail(null) },
+  })
+  const markUnpaid = useMutation({
+    mutationFn: (id: string) => apiFetch(`/invoices/${id}/mark-unpaid`, { method: "POST" }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["invoices"] }); setDetail(null) },
   })
 
   const remove = useMutation({
@@ -175,11 +185,30 @@ export function InvoicesPage() {
     setPdfBlob(blob)
   }
 
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const isOverdue = (inv: Invoice) => inv.status === "unpaid" && inv.due_date < todayStr
+  const daysOverdue = (inv: Invoice) => Math.floor((new Date(todayStr).getTime() - new Date(inv.due_date).getTime()) / 86400000)
+  const overdueInvoices = invoices.filter(isOverdue)
+
+  const { data: readyList } = useQuery({
+    queryKey: ["invoices-ready"],
+    queryFn: () => apiFetch<ReportClientsResponse>(`/reports/clients?year=${new Date().getFullYear()}&month=${new Date().getMonth() + 1}&cutoff=30&show_rate=false`),
+  })
+  const readyClients = (readyList?.clients ?? []).filter(c => Number(c.ready_to_invoice_hours) > 0 && !c.invoice_number)
+
+  const exportCsv = () => {
+    const rows = [["Invoice #", "Client", "Period", "Issued", "Due", "Hours", "Amount", "Status", "Paid at"],
+      ...filteredInvoices.map(i => [i.invoice_number, i.client_name ?? "", i.period_label, i.issue_date, i.due_date, i.total_hours, i.amount, isOverdue(i) ? "overdue" : i.status, i.paid_at ?? ""])]
+    const blob = new Blob([rows.map(r => r.join(",")).join("\n")], { type: "text/csv" })
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "invoices.csv"; a.click(); URL.revokeObjectURL(a.href)
+  }
+
   const filteredInvoices = useMemo(() => {
     const q = search.trim().toLowerCase()
     return invoices.filter((inv) => {
       if (statusFilter === "paid" && inv.status !== "paid") return false
       if (statusFilter === "unpaid" && inv.status !== "unpaid") return false
+      if (statusFilter === "overdue" && !isOverdue(inv)) return false
       if (!q) return true
       return (
         inv.invoice_number.toLowerCase().includes(q) ||
@@ -200,21 +229,37 @@ export function InvoicesPage() {
         <p className="mt-0.5 text-xs text-muted-foreground">Generate client invoices from approved VA time logs</p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {showPricing ? (
           <>
             <StatCard title="Total Billed" value={formatCurrency(totalBilled)} subtitle={`${invoices.length} invoice${invoices.length === 1 ? "" : "s"}`} />
             <StatCard title="Total Paid" value={formatCurrency(totalPaid)} subtitle="Collected" className="border-green-200/60" />
             <StatCard title="Total Unpaid" value={formatCurrency(totalUnpaid)} subtitle="Outstanding" className="border-amber-200/60" />
+            <StatCard title="Overdue" value={formatCurrency(overdueInvoices.reduce((s, i) => s + parseFloat(i.amount), 0))} subtitle={`${overdueInvoices.length} invoice(s) past due`} className="border-red-200/70" />
           </>
         ) : (
           <>
             <StatCard title="Invoices" value={invoices.length} subtitle="Pricing hidden" />
             <StatCard title="Unpaid" value={invoices.filter((i) => i.status === "unpaid").length} />
             <StatCard title="Paid" value={invoices.filter((i) => i.status === "paid").length} />
+            <StatCard title="Overdue" value={overdueInvoices.length} subtitle="Past due — follow up" className="border-red-200/70" />
           </>
         )}
       </div>
+
+      {readyClients.length > 0 && (
+        <div className="rounded-2xl border border-primary/25 bg-primary/[0.04] p-4">
+          <p className="mb-2 flex items-center gap-2 text-xs font-extrabold"><Receipt className="h-4 w-4 text-primary" /> Ready to invoice this month</p>
+          <div className="flex flex-wrap gap-2">
+            {readyClients.map(c => (
+              <button key={c.client_id} onClick={() => { onClientChange(c.client_id); window.scrollTo({ top: 0, behavior: "smooth" }) }} className="monday-card rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">
+                {c.client_name} · <span className="text-primary">{c.ready_to_invoice_hours} hrs</span> →
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">Approved work that hasn't been invoiced yet. Click a client to load it into the generator.</p>
+        </div>
+      )}
 
       <div className="rounded-xl border border-border bg-card p-4 shadow-sm">
         <div className="mb-4 flex items-center gap-2">
@@ -371,8 +416,10 @@ export function InvoicesPage() {
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="h-8 w-28">
               <option value="all">All</option>
               <option value="unpaid">Unpaid</option>
+              <option value="overdue">Overdue</option>
               <option value="paid">Paid</option>
             </Select>
+            <Button size="sm" variant="outline" onClick={exportCsv}><FileSpreadsheet className="h-3.5 w-3.5" /> CSV</Button>
           </div>
         </div>
 
@@ -383,6 +430,7 @@ export function InvoicesPage() {
                 <th className="p-3 font-medium">Invoice #</th>
                 <th className="p-3 font-medium">Client</th>
                 <th className="p-3 font-medium">Period</th>
+                <th className="p-3 font-medium">Due</th>
                 <th className="p-3 font-medium">Hours</th>
                 {showPricing && <th className="p-3 font-medium">Amount</th>}
                 <th className="p-3 font-medium">Status</th>
@@ -392,7 +440,7 @@ export function InvoicesPage() {
             <tbody>
               {filteredInvoices.length === 0 ? (
                 <tr>
-                  <td colSpan={showPricing ? 7 : 6} className="p-8 text-center text-muted-foreground">
+                  <td colSpan={showPricing ? 8 : 7} className="p-8 text-center text-muted-foreground">
                     {invoices.length === 0
                       ? "No invoices yet. Generate your first invoice above."
                       : "No invoices match your search."}
@@ -404,11 +452,15 @@ export function InvoicesPage() {
                     <td className="p-3 font-medium">{inv.invoice_number}</td>
                     <td className="p-3">{inv.client_name}</td>
                     <td className="p-3 text-muted-foreground">{inv.period_label}</td>
+                    <td className="p-3 whitespace-nowrap text-muted-foreground">{formatDate(inv.due_date)}{isOverdue(inv) && <span className="block text-[10px] font-bold text-red-600">{daysOverdue(inv)}d overdue</span>}</td>
                     <td className="p-3">{inv.total_hours}</td>
                     {showPricing && <td className="p-3 font-medium">{formatCurrency(inv.amount)}</td>}
-                    <td className="p-3"><StatusBadge status={inv.status} /></td>
+                    <td className="p-3">{isOverdue(inv) ? <span className="whitespace-nowrap rounded-full border border-red-200 bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">Overdue</span> : <StatusBadge status={inv.status} />}</td>
                     <td className="p-3">
                       <div className="flex justify-end gap-1">
+                        <Button size="sm" variant="ghost" title="View details" onClick={() => setDetail(inv)}>
+                          <Eye className="h-3.5 w-3.5" />
+                        </Button>
                         <Button size="sm" variant="ghost" title="Download PDF" onClick={() => exportPdf(inv)}>
                           <FileDown className="h-3.5 w-3.5" />
                         </Button>
@@ -434,6 +486,40 @@ export function InvoicesPage() {
           </table>
         </div>
       </div>
+
+      {detail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setDetail(null)}>
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-2xl bg-card p-6" onClick={e => e.stopPropagation()}>
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold">{detail.invoice_number}</h2>
+                <p className="text-xs text-muted-foreground">{detail.client_name} · {detail.period_label}</p>
+              </div>
+              <button onClick={() => setDetail(null)} className="rounded-full p-1.5 hover:bg-muted"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+              <div className="rounded-xl border p-3"><p className="text-muted-foreground">Status</p><p className="mt-1 font-bold">{isOverdue(detail) ? `Overdue by ${daysOverdue(detail)}d` : detail.status}</p></div>
+              <div className="rounded-xl border p-3"><p className="text-muted-foreground">Issued → Due</p><p className="mt-1 font-bold">{formatDate(detail.issue_date)} → {formatDate(detail.due_date)}</p></div>
+              <div className="rounded-xl border p-3"><p className="text-muted-foreground">Hours</p><p className="mt-1 font-bold">{detail.total_hours} hrs</p></div>
+              <div className="rounded-xl border p-3"><p className="text-muted-foreground">{showPricing ? "Amount" : "Payment"}</p><p className="mt-1 font-bold">{showPricing ? formatCurrency(detail.amount) : detail.payment_method}</p></div>
+            </div>
+            <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarClock className="h-3.5 w-3.5" /> Net {detail.payment_terms_days} days via {detail.payment_method}{detail.paid_at ? ` · Paid ${formatDate(detail.paid_at.slice(0, 10))}` : ""}</p>
+            <div className="mt-4 overflow-x-auto rounded-xl border">
+              <table className="w-full text-xs">
+                <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-2.5">Date</th><th className="p-2.5">Description</th><th className="p-2.5">Hours</th>{showPricing && <th className="p-2.5">Amount</th>}</tr></thead>
+                <tbody>{(detail.line_items ?? []).map(li => (
+                  <tr key={li.id} className="border-b last:border-0"><td className="whitespace-nowrap p-2.5">{formatDate(li.line_date)}</td><td className="p-2.5">{li.description}</td><td className="p-2.5 font-semibold">{li.hours}</td>{showPricing && <td className="p-2.5">{formatCurrency(li.amount)}</td>}</tr>
+                ))}{(detail.line_items ?? []).length === 0 && <tr><td colSpan={showPricing ? 4 : 3} className="p-4 text-center text-muted-foreground">No line items stored for this invoice.</td></tr>}</tbody>
+              </table>
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={() => exportPdf(detail)}><FileDown className="h-4 w-4" /> PDF</Button>
+              {detail.status === "unpaid" && <Button variant="success" onClick={() => markPaid.mutate(detail.id)}>Mark paid</Button>}
+              {detail.status === "paid" && <Button variant="outline" onClick={() => markUnpaid.mutate(detail.id)}><Undo2 className="h-4 w-4" /> Mark unpaid</Button>}
+            </div>
+          </div>
+        </div>
+      )}
 
       <PdfPreviewModal blob={pdfBlob} filename="invoice.pdf" onClose={() => setPdfBlob(null)} />
     </div>

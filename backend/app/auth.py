@@ -38,8 +38,10 @@ def decode_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
 
 
-def create_token_payload(user_id: UUID, role: str, va_id: UUID | None = None) -> dict[str, Any]:
+def create_token_payload(user_id: UUID, role: str, va_id: UUID | None = None, impersonated_by: UUID | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {"sub": str(user_id), "role": role}
     if va_id:
         payload["va_id"] = str(va_id)
+    if impersonated_by:
+        payload["impersonated_by"] = str(impersonated_by)
     return payload

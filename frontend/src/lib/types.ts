@@ -318,7 +318,54 @@ export interface TimeClockEntry {
   created_at?: string | null
 }
 
+export interface ClientFinancials {
+  since?: string | null
+  total_hours: string
+  total_earned: string
+  total_collected: string
+  total_outstanding: string
+  va_earned: string
+  net: string
+  net_collected: string
+  profit_margin_pct?: number | null
+  invoices_count: number
+  invoices_paid: number
+  invoices_unpaid_count: number
+  by_va: { va_id: string; va_name: string; currency: string; hours: string; va_pay: string; logs: number }[]
+}
+export interface ClientFinancialRow {
+  client_id: string; client_name: string; is_active: boolean; created_at?: string | null
+  total_hours: string; total_earned: string; total_collected: string; total_outstanding: string
+  va_earned: string; net: string; net_collected: string; invoices_count: number
+}
+
+export interface UserDetail {
+  profile: {
+    user_id: string; va_id?: string | null; name: string; email: string; role: string; is_active: boolean
+    currency?: string | null; created_at?: string | null; display_name?: string | null; phone?: string | null
+    address?: string | null; job_title?: string | null; bio?: string | null; timezone?: string | null
+    skills?: string[]; hire_date?: string | null; status_message?: string | null
+    linkedin_url?: string | null; portfolio_url?: string | null; wise_email?: string | null
+    has_profile_photo: boolean; reviewer_name?: string | null
+    reviewing: { va_id: string; name: string }[]
+  }
+  stats: {
+    total_hours: string; total_va_pay: string; hours_this_week: string; pending_hours: string
+    logs_count: number; pending_count: number; tasks_total: number; tasks_open: number; tasks_done: number
+    tasks_overdue: number; clients_count: number; projects_count: number; clock_sessions: number
+    clock_hours: string; last_activity?: string | null
+  }
+  assigned_clients: { client_id: string; name: string; is_active: boolean; open_tasks: number; done_tasks: number; total_tasks: number; hours: string; va_pay: string; logs: number; last_log_date?: string | null }[]
+  assigned_projects: { id: string; name: string; color: string; status: string; cadence: string; client_id: string; client_name?: string | null; sub_client_name?: string | null; task_total: number; task_done: number; hours: string; due_date?: string | null }[]
+  tasks: TaskItem[]
+  time_logs: WorkLog[]
+  clock_history: TimeClockEntry[]
+  timeline: { kind: string; at: string; date_label: string; title: string; detail: string; status: string }[]
+  history: { id: string; action: string; description: string; path?: string | null; method?: string | null; created_at?: string | null }[]
+}
+
 export interface ClientDetail {
+  financials?: ClientFinancials
   client: { id: string; name: string; billing_type: string; default_rate?: string | null; is_active: boolean; created_at?: string | null }
   stats: {
     total_hours: string; hours_this_month: string; pending_hours: string; pending_count: number

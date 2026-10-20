@@ -134,7 +134,7 @@ export function DashboardPage() {
           <p className="mt-1 flex items-start gap-2.5 text-lg font-medium leading-snug"><Sparkles className="mt-1 h-4.5 w-4.5 shrink-0 text-primary" /><span>“{quote.text}” <span className="whitespace-nowrap text-sm text-muted-foreground">— {quote.author}</span></span></p>
         </div>
         <div className="mt-5 flex flex-wrap gap-2">
-          <Link to={`${base}/tasks`}><Button variant="gold" size="lg"><ListTodo className="h-4 w-4" /> Open Board</Button></Link>
+          <Link to={`${base}/tasks`}><Button variant="gold" size="lg"><ListTodo className="h-4 w-4" /> Open Task Board</Button></Link>
           {!isAdmin && <Link to="/va/time-clock"><Button variant="outline" size="lg"><Play className="h-4 w-4" /> Clock In</Button></Link>}
           <Link to={`${base}/projects`}><Button variant="outline" size="lg">Projects <ArrowRight className="h-3.5 w-3.5" /></Button></Link>
         </div>
@@ -166,7 +166,7 @@ export function DashboardPage() {
           <CardContent className="space-y-2">
             {overview.today_tasks.map(t => <MiniTask key={t.id} t={t} base={base} />)}
             {overview.today_tasks.length === 0 && <p className="text-xs text-muted-foreground">Nothing due today. Pull something from the backlog below.</p>}
-            <Link className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline" to={`${base}/tasks`}>View full board <ArrowRight className="h-3 w-3" /></Link>
+            <Link className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline" to={`${base}/tasks`}>View full Task Board <ArrowRight className="h-3 w-3" /></Link>
           </CardContent></Card>
 
         {/* Needs attention */}

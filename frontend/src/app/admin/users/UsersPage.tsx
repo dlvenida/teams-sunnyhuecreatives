@@ -9,11 +9,15 @@ import { cn } from "@/lib/utils"
 import {
   Archive,
   ArchiveRestore,
+  Eye,
   Plus,
   Search,
+  SwitchCamera,
   Trash2,
   UserCircle,
 } from "lucide-react"
+import { UserDetailDrawer } from "./UserDetailDrawer"
+import { homeForRole, startImpersonation } from "@/lib/api"
 
 type StatusFilter = "all" | "active" | "archived"
 
@@ -36,6 +40,15 @@ export function UsersPage() {
   const [form, setForm] = useState<UserForm>(emptyForm)
   const [newPassword, setNewPassword] = useState("")
   const [error, setError] = useState("")
+  const [viewingUserId, setViewingUserId] = useState("")
+  const switchToUser = async (userId?: string | null, role?: string) => {
+    if (!userId) { alert("This user has no login account to switch into."); return }
+    if (role === "admin") { alert("Cannot switch into another administrator account."); return }
+    try {
+      const user = await startImpersonation(userId)
+      window.location.href = homeForRole(user.role)
+    } catch (e) { alert(e instanceof Error ? e.message : "Could not switch user") }
+  }
 
   const { data: users = [] } = useQuery({
     queryKey: ["vas"],
@@ -241,6 +254,8 @@ export function UsersPage() {
                 <td className="p-3 text-muted-foreground">{u.role === "auditor" ? `${u.auditing_count} VA(s) assigned in Analytics` : "Full access"}</td>
                 <td className="p-3"><Badge variant={u.is_active ? "success" : "default"}>{u.is_active ? "Active" : "Archived"}</Badge></td>
                 <td className="p-3"><div className="flex justify-end gap-1">
+                  <Button variant="ghost" size="sm" title="View profile, clients, tasks, projects, timeline, logs & history" onClick={() => setViewingUserId(u.id)}><Eye className="h-3.5 w-3.5" /></Button>
+                  {u.role !== "admin" && u.is_active && <Button variant="ghost" size="sm" title="Switch to their view (see what they see)" onClick={() => void switchToUser(u.id, u.role)}><SwitchCamera className="h-3.5 w-3.5 text-primary" /></Button>}
                   {u.is_active ? (
                     <Button variant="ghost" size="sm" title="Archive" onClick={() => toggleAppUser.mutate({ id: u.id, is_active: false })}><Archive className="h-3.5 w-3.5" /></Button>
                   ) : (
@@ -287,6 +302,12 @@ export function UsersPage() {
                   </td>
                   <td className="p-3">
                     <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="sm" title="View profile, clients, tasks, projects, timeline, logs & history" onClick={() => u.user_id && setViewingUserId(u.user_id)}>
+                        <Eye className="h-3.5 w-3.5" />
+                      </Button>
+                      {u.is_active && <Button variant="ghost" size="sm" title="Switch to their view (see what they see)" onClick={() => void switchToUser(u.user_id, "va")}>
+                        <SwitchCamera className="h-3.5 w-3.5 text-primary" />
+                      </Button>}
                       <Button variant="ghost" size="sm" title="Edit profile" onClick={() => openEdit(u)}>
                         <UserCircle className="h-3.5 w-3.5" />
                       </Button>
@@ -359,6 +380,8 @@ export function UsersPage() {
           </div>
         </div>
       )}
+
+      {viewingUserId && <UserDetailDrawer userId={viewingUserId} onClose={() => setViewingUserId("")} />}
 
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">

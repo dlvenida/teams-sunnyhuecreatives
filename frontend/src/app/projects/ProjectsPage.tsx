@@ -68,7 +68,7 @@ export function ProjectsPage() {
                   <div className="flex items-center justify-between pt-1">
                     <span className="text-[11px] text-muted-foreground">{p.total_hours}h logged</span>
                     <span className="flex gap-2">
-                      <Link className="text-xs text-primary underline" to={`${isAdmin ? "/admin" : "/va"}/tasks?project=${p.id}`}>Open board →</Link>
+                      <Link className="text-xs text-primary underline" to={`${isAdmin ? "/admin" : "/va"}/tasks?project=${p.id}`}>Open Task Board →</Link>
                       {isAdmin && <button onClick={() => { if (confirm("Delete project? Tasks will be kept unlinked.")) remove.mutate(p.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></button>}
                     </span>
                   </div>

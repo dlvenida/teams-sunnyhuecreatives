@@ -14,7 +14,7 @@ from app.auth import (
 )
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin
-from app.models import User, UserRole, VA
+from app.models import ActivityLog, Project, Task, TaskStatus, TimeClockEntry, User, UserRole, VA, WorkLog, WorkLogStatus
 from app.schemas import (
     AppUserResponse,
     ChangePasswordRequest,
@@ -56,6 +56,7 @@ def login(body: LoginRequest, db: Annotated[Session, Depends(get_db)]):
         must_change_password=user.must_change_password,
         va_id=va_id,
         name=name,
+        user_id=user.id,
     )
 
 
@@ -79,7 +80,12 @@ def refresh(body: RefreshRequest, db: Annotated[Session, Depends(get_db)]):
         va = db.query(VA).filter(VA.id == va_id).first()
         name = va.name if va else name
 
-    token_payload = create_token_payload(user.id, user.role.value, va_id)
+    impersonated_by = UUID(payload["impersonated_by"]) if payload.get("impersonated_by") else None
+    impersonator_name = None
+    if impersonated_by:
+        imp = db.query(User).filter(User.id == impersonated_by).first()
+        impersonator_name = (imp.display_name or imp.email) if imp else None
+    token_payload = create_token_payload(user.id, user.role.value, va_id, impersonated_by=impersonated_by)
     return TokenResponse(
         access_token=create_access_token(token_payload),
         refresh_token=create_refresh_token(token_payload),
@@ -87,6 +93,55 @@ def refresh(body: RefreshRequest, db: Annotated[Session, Depends(get_db)]):
         must_change_password=user.must_change_password,
         va_id=va_id,
         name=name,
+        user_id=user.id,
+        is_impersonating=impersonated_by is not None,
+        impersonated_by=impersonated_by,
+        impersonated_by_name=impersonator_name,
+    )
+
+
+@router.post("/impersonate/{user_id}", response_model=TokenResponse)
+def impersonate_user(
+    user_id: UUID,
+    current: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Admin-only: issue a token AS another user so the admin sees exactly their view.
+
+    Read/write acts as the target (their VA board, clock, logs) — the token
+    carries `impersonated_by` so it is auditable and the UI can offer Exit.
+    Admins cannot impersonate themselves or another administrator.
+    """
+    if current.impersonated_by is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Already viewing as another user — exit that view first")
+    if user_id == current.user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You are already signed in as yourself")
+    target = db.query(User).filter(User.id == user_id, User.is_active == True).first()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found or archived")
+    if target.role == UserRole.admin:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot switch into another administrator account")
+    va_id = None
+    name = target.display_name or target.email.split("@")[0]
+    if target.role == UserRole.va:
+        va = db.query(VA).filter(VA.user_id == target.id).first()
+        if not va:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VA profile not found for this user")
+        va_id = va.id
+        name = va.name
+    admin_name = current.user.display_name or current.user.email
+    payload = create_token_payload(target.id, target.role.value, va_id, impersonated_by=current.user.id)
+    return TokenResponse(
+        access_token=create_access_token(payload),
+        refresh_token=create_refresh_token(payload),
+        role=target.role,
+        must_change_password=False,
+        va_id=va_id,
+        name=name,
+        user_id=target.id,
+        is_impersonating=True,
+        impersonated_by=current.user.id,
+        impersonated_by_name=admin_name,
     )
 
 
@@ -119,6 +174,141 @@ def list_app_users(
     """All app users across roles: Administrator, Auditor, Virtual Assistant."""
     users = db.query(User).order_by(User.role, User.email).all()
     return [_app_user(db, u) for u in users]
+
+
+@router.get("/users/{user_id}/detail")
+def user_detail(
+    user_id: UUID,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Admin-only 360° view of one user: profile, assigned clients/tasks/projects,
+    timeline, time logs and activity history. Works for VA, auditor and admin."""
+    from decimal import Decimal
+
+    from app.routers.tasks import _serialize as serialize_task
+    from app.routers.timeclock import _serialize as serialize_clock
+    from app.routers.work_logs import _serialize_log
+
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    va = db.query(VA).filter(VA.user_id == u.id).first()
+    name = u.display_name or (va.name if va else None) or u.email.split("@")[0]
+
+    tasks: list[Task] = []
+    logs: list[WorkLog] = []
+    clocks: list[TimeClockEntry] = []
+    if va:
+        tasks = db.query(Task).filter(Task.assignee_va_id == va.id).order_by(Task.due_date.asc().nullslast(), Task.updated_at.desc()).all()
+        logs = db.query(WorkLog).filter(WorkLog.va_id == va.id).order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc()).all()
+        clocks = db.query(TimeClockEntry).filter(TimeClockEntry.va_id == va.id).order_by(TimeClockEntry.clock_in.desc()).all()
+
+    billable = [l for l in logs if l.status in (WorkLogStatus.approved, WorkLogStatus.invoiced)]
+    def _hours(items):
+        return sum((l.hours for l in items), Decimal("0"))
+    def _pay(items):
+        return sum((l.va_pay for l in items), Decimal("0"))
+
+    # Assigned clients: union of clients from tasks + work logs
+    client_ids: list = []
+    for src in ([t.client_id for t in tasks] + [l.client_id for l in logs]):
+        if src and src not in client_ids:
+            client_ids.append(src)
+    assigned_clients = []
+    for cid in client_ids:
+        c_tasks = [t for t in tasks if t.client_id == cid]
+        c_logs = [l for l in billable if l.client_id == cid]
+        all_c_logs = [l for l in logs if l.client_id == cid]
+        client_obj = c_tasks[0].client if c_tasks and c_tasks[0].client else (all_c_logs[0].client if all_c_logs else None)
+        assigned_clients.append({
+            "client_id": str(cid), "name": client_obj.name if client_obj else "Unknown",
+            "is_active": bool(client_obj.is_active) if client_obj else True,
+            "open_tasks": len([t for t in c_tasks if t.status != TaskStatus.done]),
+            "done_tasks": len([t for t in c_tasks if t.status == TaskStatus.done]),
+            "total_tasks": len(c_tasks), "hours": str(_hours(c_logs)), "va_pay": str(_pay(c_logs)),
+            "logs": len(all_c_logs),
+            "last_log_date": str(max((l.work_date for l in all_c_logs), default=None)) if all_c_logs else None,
+        })
+    assigned_clients.sort(key=lambda x: x["name"].lower())
+
+    # Assigned projects: union from tasks + logs
+    project_ids: list = []
+    for src in ([t.project_id for t in tasks] + [l.project_id for l in logs]):
+        if src and src not in project_ids:
+            project_ids.append(src)
+    assigned_projects = []
+    for pid in project_ids:
+        p = db.query(Project).filter(Project.id == pid).first()
+        if not p:
+            continue
+        p_tasks = [t for t in tasks if t.project_id == pid]
+        p_logs = [l for l in billable if l.project_id == pid]
+        assigned_projects.append({
+            "id": str(p.id), "name": p.name, "color": p.color,
+            "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+            "cadence": p.cadence.value if hasattr(p.cadence, "value") else str(p.cadence),
+            "client_id": str(p.client_id), "client_name": p.client.name if p.client else None,
+            "sub_client_name": p.sub_client.name if p.sub_client else None,
+            "task_total": len(p_tasks), "task_done": len([t for t in p_tasks if t.status == TaskStatus.done]),
+            "hours": str(_hours(p_logs)), "due_date": str(p.due_date) if p.due_date else None,
+        })
+
+    history = db.query(ActivityLog).filter(ActivityLog.user_id == u.id).order_by(ActivityLog.created_at.desc()).limit(80).all()
+    # Auditors/admins: also surface VAs they review
+    reviewing = []
+    if u.role in (UserRole.auditor, UserRole.admin):
+        for v in db.query(VA).filter(VA.reviewer_user_id == u.id).all():
+            reviewing.append({"va_id": str(v.id), "name": v.name})
+
+    # Unified timeline (newest first): logs, clock sessions, completed tasks, activity
+    timeline: list[dict] = []
+    for l in logs[:40]:
+        timeline.append({"kind": "log", "at": f"{l.work_date}T00:00:00", "date_label": str(l.work_date), "title": f"{l.hours} hrs · {l.client.name if l.client else ''}", "detail": l.description_plain[:160], "status": l.status.value if hasattr(l.status, "value") else str(l.status)})
+    for c in clocks[:40]:
+        timeline.append({"kind": "clock", "at": c.clock_in.isoformat() if c.clock_in else "", "date_label": str(c.clock_in.date()) if c.clock_in else "", "title": f"Clock · {c.client.name if c.client else c.task.title if c.task else 'General'}", "detail": f"{c.status.value if hasattr(c.status, 'value') else c.status}" + (f" · {round((c.duration_seconds or 0)/3600, 2)} hrs" if c.duration_seconds else ""), "status": c.status.value if hasattr(c.status, "value") else str(c.status)})
+    for t in [t for t in tasks if t.completed_at][:40]:
+        timeline.append({"kind": "task_done", "at": t.completed_at.isoformat() if t.completed_at else "", "date_label": str(t.completed_at.date()) if t.completed_at else "", "title": f"Completed: {t.title}", "detail": t.client.name if t.client else "", "status": "done"})
+    timeline.sort(key=lambda x: x["at"] or "", reverse=True)
+
+    from datetime import date as _date
+    today = _date.today()
+    week_start = today.fromordinal(today.toordinal() - today.weekday())
+    return {
+        "profile": {
+            "user_id": str(u.id), "va_id": str(va.id) if va else None,
+            "name": name, "email": u.email, "role": u.role.value, "is_active": bool(u.is_active),
+            "currency": va.currency.value if va and hasattr(va.currency, "value") else (str(va.currency) if va else None),
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+            "display_name": u.display_name, "phone": u.phone, "address": u.address,
+            "job_title": u.job_title, "bio": u.bio, "timezone": u.timezone, "skills": u.skills or [],
+            "hire_date": str(u.hire_date) if u.hire_date else None,
+            "status_message": u.status_message, "linkedin_url": u.linkedin_url, "portfolio_url": u.portfolio_url,
+            "wise_email": u.wise_email, "has_profile_photo": bool(u.profile_photo_path),
+            "reviewer_name": (va.reviewer.display_name or va.reviewer.email) if va and getattr(va, "reviewer", None) else None,
+            "reviewing": reviewing,
+        },
+        "stats": {
+            "total_hours": str(_hours(billable)), "total_va_pay": str(_pay(billable)),
+            "hours_this_week": str(_hours([l for l in billable if l.work_date >= week_start])),
+            "pending_hours": str(_hours([l for l in logs if l.status == WorkLogStatus.submitted])),
+            "logs_count": len(logs), "pending_count": len([l for l in logs if l.status == WorkLogStatus.submitted]),
+            "tasks_total": len(tasks), "tasks_open": len([t for t in tasks if t.status != TaskStatus.done]),
+            "tasks_done": len([t for t in tasks if t.status == TaskStatus.done]),
+            "tasks_overdue": len([t for t in tasks if t.status != TaskStatus.done and t.due_date and t.due_date < today]),
+            "clients_count": len(assigned_clients), "projects_count": len(assigned_projects),
+            "clock_sessions": len(clocks),
+            "clock_hours": str(Decimal(str(round(sum((c.duration_seconds or 0) for c in clocks) / 3600, 2)))),
+            "last_activity": timeline[0]["at"] if timeline else None,
+        },
+        "assigned_clients": assigned_clients,
+        "assigned_projects": assigned_projects,
+        "tasks": [serialize_task(db, t).model_dump(mode="json") for t in tasks],
+        "time_logs": [_serialize_log(l).model_dump(mode="json") for l in logs[:100]],
+        "clock_history": [serialize_clock(c).model_dump(mode="json") for c in clocks[:100]],
+        "timeline": timeline[:80],
+        "history": [{"id": str(h.id), "action": h.action, "description": h.description, "path": h.path, "method": h.method, "created_at": h.created_at.isoformat() if h.created_at else None} for h in history],
+    }
 
 
 @router.post("/users", response_model=AppUserResponse, status_code=status.HTTP_201_CREATED)

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
-import type { Client, ClientDetail, SubClient } from "@/lib/types"
+import type { Client, ClientDetail, ClientFinancialRow, SubClient } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -40,7 +40,9 @@ const emptyClient: ClientForm = { name: "", billing_type: "hourly", default_rate
 const emptySub: SubClientForm = { client_id: "", name: "" }
 
 export function ClientsPage() {
-  const readOnly = getAuthUser()?.role === "auditor"
+  const authUser = getAuthUser()
+  const readOnly = authUser?.role === "auditor"
+  const isAdmin = authUser?.role === "admin"
   const qc = useQueryClient()
   const { showPricing } = useDisplaySettings()
   const [tab, setTab] = useState<Tab>("clients")
@@ -68,6 +70,13 @@ export function ClientsPage() {
     queryFn: () => apiFetch<ClientDetail>(`/clients/${viewingId}/detail`),
     enabled: !!viewingId,
   })
+  // Admin-only lifetime financials per client (since each client was created)
+  const { data: financials = [] } = useQuery({
+    queryKey: ["client-financials"],
+    queryFn: () => apiFetch<ClientFinancialRow[]>("/clients/financials"),
+    enabled: isAdmin,
+  })
+  const financialMap = useMemo(() => Object.fromEntries(financials.map((f) => [f.client_id, f])), [financials])
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["clients"] })
@@ -290,6 +299,7 @@ export function ClientsPage() {
                 <th className="p-3 font-medium">Name</th>
                 <th className="p-3 font-medium">Billing</th>
                 {showPricing && <th className="p-3 font-medium">Default Rate</th>}
+                {isAdmin && <><th className="p-3 font-medium">Total Hours</th><th className="p-3 font-medium">Total Earned</th><th className="p-3 font-medium">VA Earned</th><th className="p-3 font-medium">Net</th></>}
                 <th className="p-3 font-medium">Status</th>
                 <th className="p-3 font-medium text-right">Actions</th>
               </tr>
@@ -297,7 +307,7 @@ export function ClientsPage() {
             <tbody>
               {filteredClients.length === 0 ? (
                 <tr>
-                  <td colSpan={showPricing ? 5 : 4} className="p-6 text-center text-muted-foreground">
+                  <td colSpan={(showPricing ? 5 : 4) + (isAdmin ? 4 : 0)} className="p-6 text-center text-muted-foreground">
                     No clients found
                   </td>
                 </tr>
@@ -307,6 +317,12 @@ export function ClientsPage() {
                     <td className="p-3 font-semibold text-primary">{c.name}</td>
                     <td className="p-3 capitalize">{c.billing_type}</td>
                     {showPricing && <td className="p-3">{c.default_rate || "—"}</td>}
+                    {isAdmin && (() => { const f = financialMap[c.id]; return (<>
+                      <td className="p-3 font-semibold">{f ? `${Number(f.total_hours).toFixed(1)} hrs` : "—"}</td>
+                      <td className="p-3">{f ? formatCurrency(f.total_earned) : "—"}</td>
+                      <td className="p-3">{f ? formatCurrency(f.va_earned) : "—"}</td>
+                      <td className={cn("p-3 font-bold", f && parseFloat(f.net) < 0 ? "text-red-600" : "text-green-700")}>{f ? formatCurrency(f.net) : "—"}</td>
+                    </>) })()}
                     <td className="p-3">
                       <Badge variant={c.is_active ? "success" : "default"}>
                         {c.is_active ? "Active" : "Archived"}
@@ -444,6 +460,30 @@ export function ClientsPage() {
                       <div key={t} className="rounded-2xl border p-3"><p className="text-[11px] font-semibold text-muted-foreground">{t}</p><p className="mt-1 text-lg font-extrabold leading-none">{v}</p><p className="mt-1 text-[11px] text-muted-foreground">{s}</p></div>
                     ))}
                   </div>
+                  {isAdmin && detail.financials && (<>
+                    <div className="rounded-2xl border border-primary/25 bg-primary/[0.04] p-4">
+                      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Lifetime financials · Admin only</p>
+                        <p className="text-[11px] text-muted-foreground">Since client created{detail.financials.since ? ` · ${formatDate(detail.financials.since.slice(0, 10))}` : ""}</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                        {[["Total Hours Spent", `${Number(detail.financials.total_hours).toFixed(1)} hrs`, "Approved + invoiced work"], ["Total Earned", formatCurrency(detail.financials.total_earned), `${detail.financials.invoices_count} invoice(s) billed`], ["Collected", formatCurrency(detail.financials.total_collected), `${formatCurrency(detail.financials.total_outstanding)} outstanding`], ["Virtual Assistant Earned", formatCurrency(detail.financials.va_earned), "VA pay on billable logs"], ["Net (Earned − VA)", formatCurrency(detail.financials.net), detail.financials.profit_margin_pct != null ? `${detail.financials.profit_margin_pct}% margin` : "—"], ["Net Collected", formatCurrency(detail.financials.net_collected), "Collected − VA earned"]].map(([t, v, s]) => (
+                          <div key={t} className="rounded-xl border bg-card p-3"><p className="text-[11px] font-semibold text-muted-foreground">{t}</p><p className={cn("mt-1 text-base font-extrabold leading-none", t.startsWith("Net") && parseFloat(t.startsWith("Net (") ? detail.financials!.net : detail.financials!.net_collected) < 0 ? "text-red-600" : "")}>{v}</p><p className="mt-1 text-[11px] text-muted-foreground">{s}</p></div>
+                        ))}
+                      </div>
+                      {detail.financials.by_va.length > 0 && (
+                        <div className="mt-3 overflow-x-auto rounded-xl border bg-card">
+                          <table className="w-full text-xs">
+                            <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-2.5">Virtual Assistant</th><th className="p-2.5">Hours</th><th className="p-2.5">VA Earned</th><th className="p-2.5">Logs</th></tr></thead>
+                            <tbody>{detail.financials.by_va.map((v) => (
+                              <tr key={v.va_id} className="border-b last:border-0"><td className="p-2.5 font-semibold">{v.va_name}</td><td className="p-2.5">{Number(v.hours).toFixed(1)} hrs</td><td className="p-2.5">{formatCurrency(v.va_pay, v.currency === "PHP" ? "PHP" : "USD")}{v.currency ? ` (${v.currency})` : ""}</td><td className="p-2.5">{v.logs}</td></tr>
+                            ))}</tbody>
+                          </table>
+                        </div>
+                      )}
+                      <p className="mt-2 text-[10px] text-muted-foreground">Total Earned = all invoices billed for this client · VA Earned = pay stored on approved/invoiced time logs (in each VA's currency above) · Net = Total Earned − VA Earned.</p>
+                    </div>
+                  </>)}
                   {detail.stats.va_names.length > 0 && <p className="text-xs text-muted-foreground">Worked on by: <span className="font-semibold text-foreground">{detail.stats.va_names.join(", ")}</span></p>}
                   <div>
                     <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Sub-clients</p>
@@ -456,7 +496,7 @@ export function ClientsPage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Link to={`/admin/reports`}><Button size="sm" variant="gold">Open Report</Button></Link>
-                    <Link to={`/admin/tasks?client=${detail.client.id}`}><Button size="sm" variant="outline">View on Board</Button></Link>
+                    <Link to={`/admin/tasks?client=${detail.client.id}`}><Button size="sm" variant="outline">View in Task Board</Button></Link>
                     <Link to={`/admin/invoices?client=${detail.client.id}`}><Button size="sm" variant="outline">Create Invoice</Button></Link>
                   </div>
                 </>)}

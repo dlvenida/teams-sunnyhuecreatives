@@ -49,6 +49,43 @@ def create_client(
     return client
 
 
+@router.get("/financials")
+def clients_financials(
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """ADMIN ONLY — lifetime financials per client since the client was created.
+
+    total_earned = sum of all invoice amounts (billed); collected = paid invoices;
+    va_earned = VA pay on approved+invoiced logs; net = earned − VA earned.
+    Amounts are invoice currency (USD) vs VA pay in the VA's own currency —
+    see per-VA breakdown for currency. Net is the billed-minus-VA-cost figure
+    the admin uses in payroll currency terms as stored on the logs.
+    """
+    from decimal import Decimal
+    from app.models import WorkLogStatus
+
+    rows = []
+    for client in db.query(Client).order_by(Client.name).all():
+        logs = db.query(WorkLog).filter(WorkLog.client_id == client.id).all()
+        billable = [l for l in logs if l.status in (WorkLogStatus.approved, WorkLogStatus.invoiced)]
+        invoices = db.query(Invoice).filter(Invoice.client_id == client.id).all()
+        total_hours = sum((l.hours for l in billable), Decimal("0"))
+        va_earned = sum((l.va_pay for l in billable), Decimal("0"))
+        total_earned = sum((i.amount for i in invoices), Decimal("0"))
+        collected = sum((i.amount for i in invoices if str(getattr(i.status, "value", i.status)) == "paid"), Decimal("0"))
+        rows.append({
+            "client_id": str(client.id), "client_name": client.name, "is_active": bool(client.is_active),
+            "created_at": client.created_at.isoformat() if client.created_at else None,
+            "total_hours": str(total_hours), "total_earned": str(total_earned),
+            "total_collected": str(collected), "total_outstanding": str(total_earned - collected),
+            "va_earned": str(va_earned), "net": str(total_earned - va_earned),
+            "net_collected": str(collected - va_earned),
+            "invoices_count": len(invoices),
+        })
+    return rows
+
+
 @router.get("/{client_id}/detail")
 def client_detail(
     client_id: UUID,
@@ -105,6 +142,30 @@ def client_detail(
     recent_tasks = sorted(tasks, key=lambda t: t.updated_at or t.created_at, reverse=True)[:20]
     recent_logs = sorted(logs, key=lambda l: (l.work_date, l.created_at), reverse=True)[:20]
 
+    # ── Lifetime financials (admin view in the UI; since client created) ──
+    total_earned = sum((i.amount for i in invoices), Decimal("0"))
+    total_collected = sum((i.amount for i in invoices if str(getattr(i.status, "value", i.status)) == "paid"), Decimal("0"))
+    va_earned = sum((l.va_pay for l in billable), Decimal("0"))
+    net = total_earned - va_earned
+    by_va_map: dict[str, dict] = {}
+    for l in billable:
+        key = str(l.va_id)
+        row = by_va_map.setdefault(key, {"va_id": key, "va_name": l.va.name if l.va else "VA", "currency": (l.va.currency.value if l.va and hasattr(l.va.currency, "value") else str(l.va.currency) if l.va else ""), "hours": Decimal("0"), "va_pay": Decimal("0"), "logs": 0})
+        row["hours"] += l.hours; row["va_pay"] += l.va_pay; row["logs"] += 1
+    by_va = [{**r, "hours": str(r["hours"]), "va_pay": str(r["va_pay"])} for r in sorted(by_va_map.values(), key=lambda x: x["va_name"].lower())]
+    financials = {
+        "since": client.created_at.isoformat() if client.created_at else None,
+        "total_hours": str(hours(billable)),
+        "total_earned": str(total_earned), "total_collected": str(total_collected),
+        "total_outstanding": str(total_earned - total_collected),
+        "va_earned": str(va_earned), "net": str(net), "net_collected": str(total_collected - va_earned),
+        "profit_margin_pct": round(float(net / total_earned * 100), 1) if total_earned else None,
+        "invoices_count": len(invoices),
+        "invoices_paid": len([i for i in invoices if str(getattr(i.status, "value", i.status)) == "paid"]),
+        "invoices_unpaid_count": len([i for i in invoices if str(getattr(i.status, "value", i.status)) == "unpaid"]),
+        "by_va": by_va,
+    }
+
     return {
         "client": {
             "id": str(client.id), "name": client.name,
@@ -126,6 +187,7 @@ def client_detail(
             "va_names": sorted({l.va.name for l in logs if l.va}),
             "last_activity": str(max((l.work_date for l in logs), default=None)) if logs else None,
         },
+        "financials": financials,
         "sub_clients": sub_rows,
         "projects": project_rows,
         "tasks": [serialize_task(db, t).model_dump(mode="json") for t in recent_tasks],

@@ -12,7 +12,7 @@ const FEATURES = [
   { icon: KanbanSquare, text: "Monday-style boards, projects & client work in one place" },
   { icon: Timer, text: "One-tap time clock with live team presence" },
   { icon: BellRing, text: "Instant notifications for comments, approvals & updates" },
-  { icon: ShieldCheck, text: "Auditor oversight keeps every VA's week on track" },
+  { icon: ShieldCheck, text: "Auditor oversight keeps every user's week on track" },
 ]
 
 function greeting() {
@@ -193,7 +193,7 @@ export function LoginPage() {
 
         <p className="mt-5 border-t border-border pt-4 text-center text-[11px] leading-relaxed text-muted-foreground">
           Forgot your password? Ask your admin to reset it for you.
-          <span className="block">New VA? Your account is created by the admin — check your email for your first login.</span>
+          <span className="block">New user? Your account is created by the admin — check your email for your first login.</span>
         </p>
       </div>
     </div>

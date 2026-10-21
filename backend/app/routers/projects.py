@@ -146,7 +146,14 @@ def react_project_comment(project_id: UUID, comment_id: UUID, body: ReactionTogg
                                                 CommentReaction.user_id == current.user.id, CommentReaction.emoji == body.emoji).first()
     if existing: db.delete(existing)
     else: db.add(CommentReaction(scope="project", comment_id=comment_id, user_id=current.user.id, user_name=comment_svc.display_name(db, current), emoji=body.emoji))
-    db.commit(); db.refresh(c)
+    db.commit()
+    if not existing:
+        project = db.query(Project).filter(Project.id == project_id).first()
+        comment_svc.notify_reaction(db, scope="project", comment=c, emoji=body.emoji,
+                                    reactor_name=comment_svc.display_name(db, current),
+                                    scope_title=project.name if project else "Project", link="/va/projects",
+                                    exclude_user_id=current.user.id)
+    db.refresh(c)
     return comment_svc.serialize_comment(db, c, "project", current.user.id)
 
 

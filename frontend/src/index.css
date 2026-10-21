@@ -16,28 +16,28 @@
 
 @import "tailwindcss";
 
-/* ── Pink (default) ── */
+/* ── Pastel Pink (default) — blush pastels, soft pink CTA, lavender hints ── */
 :root,
 [data-theme="pink"] {
-  --background: #fff1f5;
-  --foreground: #500724;
+  --background: #fff7f9;
+  --foreground: #43303a;
   --card: #ffffff;
-  --card-foreground: #500724;
-  --primary: #ec4899;
+  --card-foreground: #43303a;
+  --primary: #f87ca6;
   --primary-foreground: #ffffff;
-  --secondary: #fce7f3;
-  --secondary-foreground: #9d174d;
-  --muted: #fce7f3;
-  --muted-foreground: #be185d;
-  --accent: #fbcfe8;
-  --accent-foreground: #831843;
-  --border: #f9a8d4;
-  --ring: #ec4899;
-  --surface: #9d174d;
-  --surface-foreground: #fff1f5;
-  --chart: #ec4899;
+  --secondary: #fce4ee;
+  --secondary-foreground: #c24b78;
+  --muted: #fce4ee;
+  --muted-foreground: #c05b82;
+  --accent: #fbd3e0;
+  --accent-foreground: #a8436c;
+  --border: #f6c6d6;
+  --ring: #f87ca6;
+  --surface: #a8436c;
+  --surface-foreground: #fff5f8;
+  --chart: #f87ca6;
   --input-bg: #ffffff;
-  --shadow: 0 1px 3px rgb(236 72 153 / 0.15);
+  --shadow: 0 2px 10px rgb(248 124 166 / 0.12);
 }
 
 /* ── Light ── */
@@ -208,16 +208,24 @@ h1, h2, h3, h4 {
   animation: fade-in 0.4s ease-out;
 }
 
-/* Login animated background */
+/* Login animated background — soft rose/pastel, always gently moving */
 .login-bg {
-  background: var(--background);
+  background:
+    linear-gradient(125deg, #fff7f9 0%, #fde8ef 26%, #f3f0ff 50%, #fff3d6 76%, #fff7f9 100%);
+  background-size: 280% 280%;
+  animation: login-bg-pan 26s ease-in-out infinite;
+}
+
+@keyframes login-bg-pan {
+  0%, 100% { background-position: 0% 40%; }
+  50% { background-position: 100% 60%; }
 }
 
 .login-bg-orb {
   position: absolute;
   border-radius: 50%;
   filter: blur(60px);
-  opacity: 0.55;
+  opacity: 0.45;
   will-change: transform;
 }
 
@@ -272,22 +280,26 @@ h1, h2, h3, h4 {
 
 @keyframes login-drift-1 {
   0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(60px, 40px) scale(1.08); }
+  33% { transform: translate(70px, 30px) scale(1.06); }
+  66% { transform: translate(20px, 70px) scale(1.1); }
 }
 
 @keyframes login-drift-2 {
   0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(-50px, -30px) scale(1.12); }
+  33% { transform: translate(-60px, -20px) scale(1.1); }
+  66% { transform: translate(-25px, -60px) scale(0.95); }
 }
 
 @keyframes login-drift-3 {
   0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(40px, -50px) scale(0.92); }
+  33% { transform: translate(50px, -40px) scale(0.94); }
+  66% { transform: translate(-30px, -60px) scale(1.05); }
 }
 
 @keyframes login-drift-4 {
   0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(-30px, 35px) scale(1.05); }
+  33% { transform: translate(-40px, 30px) scale(1.07); }
+  66% { transform: translate(25px, 55px) scale(0.96); }
 }
 
 @keyframes login-shimmer {
@@ -296,6 +308,7 @@ h1, h2, h3, h4 {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .login-bg,
   .login-bg-orb,
   .login-bg-shimmer {
     animation: none;

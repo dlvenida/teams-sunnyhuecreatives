@@ -120,6 +120,60 @@ def create_link_attachment(db: Session, *, scope: str, scope_id, current, url: s
     return a
 
 
+def _audience_ids(user_ids) -> list:
+    ids: list = []
+    for uid in user_ids:
+        if uid and uid not in ids:
+            ids.append(uid)
+    return ids
+
+
+def notify_reaction(db: Session, *, scope: str, comment, emoji: str, reactor_name: str,
+                    scope_title: str, link: str, exclude_user_id) -> None:
+    """When someone adds an emoji reaction, notify everyone involved:
+    the comment author, the parent-comment author (for replies), everyone who
+    commented on the task/project, the task assignee and creator — i.e. all
+    users involved in the project, its comments and the task."""
+    from app.models import Project, ProjectComment, Task, TaskComment
+    from app.services.notifications import push, va_user_id
+
+    recipient_ids: list = [comment.author_user_id]
+
+    if scope == "task":
+        rows = db.query(TaskComment).filter(TaskComment.task_id == comment.task_id).all()
+        recipient_ids += [r.author_user_id for r in rows]
+        if comment.parent_id:
+            parent = next((r for r in rows if r.id == comment.parent_id), None)
+            if parent:
+                recipient_ids.append(parent.author_user_id)
+        task = db.query(Task).filter(Task.id == comment.task_id).first()
+        if task:
+            recipient_ids.append(va_user_id(db, task.assignee_va_id))
+            recipient_ids.append(task.created_by)
+    else:  # project
+        rows = db.query(ProjectComment).filter(ProjectComment.project_id == comment.project_id).all()
+        recipient_ids += [r.author_user_id for r in rows]
+        if comment.parent_id:
+            parent = next((r for r in rows if r.id == comment.parent_id), None)
+            if parent:
+                recipient_ids.append(parent.author_user_id)
+        # Users involved in the project = everyone assigned to its tasks
+        project_tasks = db.query(Task).filter(Task.project_id == comment.project_id).all()
+        for t in project_tasks:
+            recipient_ids.append(va_user_id(db, t.assignee_va_id))
+            recipient_ids.append(t.created_by)
+
+    excerpt = (comment.body or "").strip().replace("\n", " ")
+    if len(excerpt) > 140:
+        excerpt = excerpt[:140] + "…"
+    push(
+        db, _audience_ids(recipient_ids), "comment",
+        f"{emoji} {reactor_name} reacted on: {scope_title}",
+        f"Reacted {emoji} to: “{excerpt}”" if excerpt else f"Reacted {emoji} to a comment",
+        link, exclude_user_id=exclude_user_id,
+    )
+
+
 def sort_comments(items: list[dict], sort: str) -> list[dict]:
     pinned = [i for i in items if i["is_pinned"]]
     rest = [i for i in items if not i["is_pinned"]]

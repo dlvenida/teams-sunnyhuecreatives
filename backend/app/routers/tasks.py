@@ -240,7 +240,14 @@ def toggle_reaction(task_id: UUID, comment_id: UUID, body: ReactionToggle, curre
                                                 CommentReaction.user_id == current.user.id, CommentReaction.emoji == body.emoji).first()
     if existing: db.delete(existing)
     else: db.add(CommentReaction(scope="task", comment_id=comment_id, user_id=current.user.id, user_name=comment_svc.display_name(db, current), emoji=body.emoji))
-    db.commit(); db.refresh(c)
+    db.commit()
+    if not existing:
+        task = db.query(Task).filter(Task.id == task_id).first()
+        comment_svc.notify_reaction(db, scope="task", comment=c, emoji=body.emoji,
+                                    reactor_name=comment_svc.display_name(db, current),
+                                    scope_title=task.title if task else "Task", link="/va/tasks",
+                                    exclude_user_id=current.user.id)
+    db.refresh(c)
     return comment_svc.serialize_comment(db, c, "task", current.user.id)
 
 

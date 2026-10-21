@@ -67,13 +67,13 @@ export function LoginPage() {
   return (
     <div className="w-full overflow-hidden rounded-3xl border border-border/70 bg-card shadow-2xl animate-fade-in sm:grid sm:grid-cols-[1.05fr_1fr]">
       {/* Brand panel */}
-      <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-rose-400 via-pink-300 to-amber-200 p-7 text-white sm:flex">
+      <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-[#f9a3c2] via-[#f78fb0] to-[#f7c1cf] p-7 text-white sm:flex">
         <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/15 blur-2xl" />
         <div className="pointer-events-none absolute -bottom-20 -left-10 h-64 w-64 rounded-full bg-amber-200/25 blur-3xl" />
         <div className="relative">
           <div className="flex items-center gap-2.5">
             <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/95 shadow-lg">
-              <Sun className="h-6 w-6 text-rose-500" />
+              <Sun className="h-6 w-6 text-[#e7548c]" />
             </span>
             <div>
               <p className="font-display text-lg font-extrabold leading-tight">Teams.SHC</p>
@@ -105,7 +105,7 @@ export function LoginPage() {
       {/* Form panel */}
       <div className="p-6 sm:p-8">
         <div className="mb-5 flex items-center gap-2.5 sm:hidden">
-          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-rose-400 to-amber-300 shadow">
+          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-[#f9a3c2] to-[#f78fb0] shadow">
             <Sun className="h-5 w-5 text-white" />
           </span>
           <div>

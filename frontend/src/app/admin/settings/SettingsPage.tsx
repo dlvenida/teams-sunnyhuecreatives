@@ -123,7 +123,7 @@ export function SettingsPage() {
                   <div><Label>From Email</Label><Input placeholder="onboarding@resend.dev" value={form.resend_from_email ?? ""} onChange={(e) => setForm({ ...form, resend_from_email: e.target.value })} /></div>
                   <div><Label>Admin Notification Email</Label><Input placeholder="you@company.com" value={form.admin_notify_email ?? ""} onChange={(e) => setForm({ ...form, admin_notify_email: e.target.value })} /></div>
                 </div>
-                <p className="text-[11px] text-muted-foreground">Task assignments, comments, submissions, approvals, and payroll notices are emailed from this setup. Without a key, emails are skipped (and logged as “skipped” in Email Activity) — in-app notifications still work. Domain for production: <b>team.sunnyhuecreatives.com</b> — verify your sending domain in Resend before going live.</p>
+                <p className="text-[11px] text-muted-foreground">Task assignments, comments, submissions, approvals, and payroll notices are emailed from this setup. Without a key, emails are skipped (and logged as “skipped” in Email Activity) — in-app notifications still work. Domain for production: <b>teams.sunnyhuecreatives.com</b> — verify your sending domain in Resend before going live.</p>
                 <Button variant="gold" onClick={saveResend} disabled={save.isPending}>Save Email Settings</Button>
               </CardContent>
             </Card>

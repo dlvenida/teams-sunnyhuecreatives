@@ -25,7 +25,7 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
   const [tab, setTab] = useState<Tab>("tasks")
   const pct = project.task_total ? Math.round((project.task_done / project.task_total) * 100) : 0
 
-  const { data: tasks = [] } = useQuery({ queryKey: ["tasks", "project", project.id], queryFn: () => apiFetch<TaskItem[]>(`/tasks?project_id=${project.id}`), enabled: tab === "tasks" })
+  const { data: tasks = [], isLoading: tasksLoading } = useQuery({ queryKey: ["tasks", "project", project.id], queryFn: () => apiFetch<TaskItem[]>(`/tasks?project_id=${project.id}`), enabled: tab === "tasks" })
   const { data: meetups = [] } = useQuery({ queryKey: ["meetups", project.id], queryFn: () => apiFetch<ProjectMeetup[]>(`/projects/${project.id}/meetups`), enabled: tab === "meetups" })
   const { data: team = [] } = useQuery({ queryKey: ["team"], queryFn: () => apiFetch<TeamMember[]>("/team"), enabled: tab === "meetups" })
 
@@ -78,7 +78,7 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
                     <span className="text-[10px] text-muted-foreground">{t.due_date ? formatDate(t.due_date) : ""}</span>
                   </div>
                 ))}
-                {tasks.length === 0 && <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">No tasks yet in this project.</p>}
+                {tasksLoading ? <p className="text-xs text-muted-foreground">Loading tasks…</p> : tasks.length === 0 && <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">No tasks yet in this project.</p>}
               </div>
             )}
 

@@ -105,7 +105,7 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
     setAnnotateLocal(null)
   }
 
-  const annotateUrl = useAuthImageUrl(annotate?.att.url)
+  const { url: annotateUrl } = useAuthImageUrl(annotate?.att.url)
   const saveAnnotation = useMutation({
     mutationFn: async (blob: Blob) => {
       const target = annotate!

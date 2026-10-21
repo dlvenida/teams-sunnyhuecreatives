@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, getAuthUser } from "@/lib/api"
 
 export interface DisplaySettings {
   hide_pricing: boolean
@@ -22,9 +22,13 @@ export function useDisplaySettings() {
     staleTime: 60_000,
   })
   const settings = data ?? DEFAULTS
+  const role = getAuthUser()?.role
+  // Auditor never sees money; VAs always see their own earnings; admin follows company toggle
+  const showPricing =
+    role === "auditor" ? false : role === "va" ? true : !settings.hide_pricing
   return {
     ...settings,
-    showPricing: !settings.hide_pricing,
+    showPricing,
     isLoading,
   }
 }

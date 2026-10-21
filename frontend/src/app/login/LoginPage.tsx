@@ -58,7 +58,7 @@ export function LoginPage() {
       navigate(user.role === "va" ? "/va/profile" : "/admin/profile")
       return
     }
-    navigate(user.role === "admin" ? "/admin/dashboard" : user.role === "auditor" ? "/admin/analytics" : "/va/time-log")
+    navigate(user.role === "admin" || user.role === "auditor" ? "/admin/dashboard" : "/va/time-log")
   }
 
   const fail = (err: unknown, fallback: string) => {

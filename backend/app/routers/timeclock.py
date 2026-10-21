@@ -162,7 +162,8 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
         hours = (Decimal(duration) / Decimal(3600)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if hours == 0:
             hours = Decimal("0.01")
-        rate = _default_rate(db)
+        from app.services.va_rates import resolve_log_pay
+        rate, pay, _ = resolve_log_pay(db, current.va_id, entry.client_id, hours)
         tz = _va_timezone(db, current.va_id)
         clock_in_utc = _as_utc(entry.clock_in)
         local_in = clock_in_utc.astimezone(tz)
@@ -173,7 +174,7 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
             sub_client_id=entry.task.sub_client_id if entry.task else None,
             project_id=entry.project_id, task_id=entry.task_id,
             description_plain=desc, start_time=local_in.time().replace(microsecond=0), end_time=local_out.time().replace(microsecond=0),
-            hours=hours, va_rate=rate, va_pay=calculate_pay(hours, rate),
+            hours=hours, va_rate=rate, va_pay=pay,
             notes=entry.notes, status=WorkLogStatus.submitted, clock_in_at=entry.clock_in, clock_out_at=now, source="clock",
         )
         db.add(log)

@@ -7,8 +7,9 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
 import { cn, formatCurrency, formatDate } from "@/lib/utils"
-import { Check, X, Pencil, Trash2, Download, Search, Clock3, Hand } from "lucide-react"
+import { Check, X, Pencil, Trash2, Download, Search, Clock3, Hand, Paperclip } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
+import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
 
 const STATUS_META: Record<string, { label: string; dot: string; pill: string }> = {
   submitted: { label: "Submitted", dot: "bg-amber-500", pill: "bg-amber-100 text-amber-800 border-amber-200" },
@@ -42,7 +43,8 @@ function dayLabel(dateStr: string) {
 }
 
 export function LogsPage() {
-  const readOnly = getAuthUser()?.role === "auditor"
+  const isAuditor = getAuthUser()?.role === "auditor"
+  const readOnly = false // auditors can approve/edit logs (non-money); money columns still hidden via showPricing
   const qc = useQueryClient()
   const { showPricing } = useDisplaySettings()
   const [filters, setFilters] = useState({ client_id: "", va_id: "", status: "", date_from: "", date_to: "" })
@@ -53,6 +55,7 @@ export function LogsPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<WorkLog | null>(null)
   const [editForm, setEditForm] = useState({ description_plain: "", hours: "", va_rate: "", status: "" })
+  const [viewingAtts, setViewingAtts] = useState<string | null>(null)
 
   const params = new URLSearchParams()
   if (filters.client_id) params.set("client_id", filters.client_id)
@@ -172,7 +175,7 @@ export function LogsPage() {
           <span className="font-bold">{selected.size} selected · {selectedHours.toFixed(2)} hrs</span>
           <Button size="sm" variant="success" onClick={() => bulk("approve")}><Check className="h-3 w-3" /> Approve all</Button>
           <Button size="sm" variant="danger" onClick={() => bulk("reject")}><X className="h-3 w-3" /> Reject all</Button>
-          <Button size="sm" variant="outline" onClick={() => bulk("delete")}><Trash2 className="h-3 w-3" /> Delete</Button>
+          {!isAuditor && <Button size="sm" variant="outline" onClick={() => bulk("delete")}><Trash2 className="h-3 w-3" /> Delete</Button>}
           <button className="ml-auto font-semibold text-muted-foreground hover:text-foreground" onClick={() => setSelected(new Set())}>Clear selection</button>
         </div>
       )}
@@ -209,7 +212,12 @@ export function LogsPage() {
                     <td className="p-3">{!readOnly && <div className="flex justify-end gap-1">
                       {log.status === "submitted" && <><Button size="sm" variant="success" title="Approve" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" title="Reject" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></>}
                       <Button size="sm" variant="ghost" title="Edit" onClick={() => openEdit(log)}><Pencil className="h-3 w-3" /></Button>
-                      {log.status !== "invoiced" && <Button size="sm" variant="ghost" title="Delete" onClick={() => { if (confirm("Delete this log?")) remove.mutate(log.id) }}><Trash2 className="h-3 w-3" /></Button>}
+                      {!isAuditor && log.status !== "invoiced" && <Button size="sm" variant="ghost" title="Delete" onClick={() => { if (confirm("Delete this log?")) remove.mutate(log.id) }}><Trash2 className="h-3 w-3" /></Button>}
+                      {(log.attachment_count ?? 0) > 0 && (
+                        <Button size="sm" variant="ghost" title="View attachments" onClick={() => setViewingAtts(log.id)}>
+                          <Paperclip className="h-3 w-3" />{log.attachment_count}
+                        </Button>
+                      )}
                     </div>}</td>
                   </tr>
                 ))}
@@ -236,6 +244,9 @@ export function LogsPage() {
                 {showPricing && <div><Label>VA Rate</Label><Input type="number" step="0.01" value={editForm.va_rate} onChange={(e) => setEditForm({ ...editForm, va_rate: e.target.value })} /></div>}
                 <div><Label>Status</Label><Select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}><option value="submitted">Submitted</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="invoiced">Invoiced</option></Select></div>
               </div>
+              {(editing.attachment_count ?? 0) > 0 && (
+                <Button variant="outline" size="sm" onClick={() => setViewingAtts(editing.id)}>View attachments ({editing.attachment_count})</Button>
+              )}
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
                 <Button variant="gold" onClick={() => update.mutate({ id: editing.id, body: { description_plain: editForm.description_plain, ...(showPricing ? { va_rate: parseFloat(editForm.va_rate) } : {}), status: editForm.status } })}>Save</Button>
@@ -244,6 +255,7 @@ export function LogsPage() {
           </div>
         </div>
       )}
+      {viewingAtts && <LogAttachmentsViewer logId={viewingAtts} onClose={() => setViewingAtts(null)} />}
     </div>
   )
 }

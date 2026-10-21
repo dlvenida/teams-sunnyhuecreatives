@@ -83,7 +83,7 @@ export function exitImpersonation(): boolean {
 }
 
 export function homeForRole(role: UserRole): string {
-  return role === "admin" ? "/admin/dashboard" : role === "auditor" ? "/admin/analytics" : "/va/dashboard"
+  return role === "admin" ? "/admin/dashboard" : role === "auditor" ? "/admin/dashboard" : "/va/dashboard"
 }
 
 function getTokens() {

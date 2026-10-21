@@ -1,24 +1,28 @@
 import csv
 import io
+import uuid as uuid_mod
 from datetime import date
 from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import Response as FastResponse
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, require_admin, require_admin_or_auditor
-from app.models import Client, SubClient, VA, WorkLog, WorkLogStatus
-from app.schemas import WorkLogResponse, WorkLogUpdate
+from app.deps import CurrentUser, require_admin, require_admin_or_auditor, get_current_user
+from app.models import UserRole, WorkLog, WorkLogAttachment, WorkLogStatus
+from app.schemas import WorkLogAttachmentResponse, WorkLogResponse, WorkLogUpdate
+from app.services import storage
 from app.services.calculations import calculate_hours, calculate_pay
-from app.services.notifications import admin_user_ids, push, va_user_id
+from app.services.images import ALLOWED_CONTENT_TYPES, optimize_image
+from app.services.notifications import push, va_user_id
 
 router = APIRouter(prefix="/work-logs", tags=["work-logs"])
 
 
-def _serialize_log(log: WorkLog) -> WorkLogResponse:
+def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
     return WorkLogResponse(
         id=log.id,
         work_date=log.work_date,
@@ -33,8 +37,8 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
-        va_rate=log.va_rate,
-        va_pay=log.va_pay,
+        va_rate=None if redact_money else log.va_rate,
+        va_pay=None if redact_money else log.va_pay,
         notes=log.notes,
         status=log.status,
         invoice_id=log.invoice_id,
@@ -42,12 +46,13 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
         clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
         created_at=log.created_at,
+        attachment_count=len(log.attachments) if getattr(log, "attachments", None) is not None else 0,
     )
 
 
 @router.get("", response_model=list[WorkLogResponse])
 def list_work_logs(
-    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
     client_id: UUID | None = None,
     va_id: UUID | None = None,
@@ -55,7 +60,8 @@ def list_work_logs(
     date_from: date | None = None,
     date_to: date | None = None,
 ):
-    return [_serialize_log(log) for log in _query_logs(db, client_id, va_id, status_filter, date_from, date_to)]
+    redact = current.role == UserRole.auditor
+    return [_serialize_log(log, redact) for log in _query_logs(db, client_id, va_id, status_filter, date_from, date_to)]
 
 
 def _query_logs(
@@ -68,7 +74,10 @@ def _query_logs(
 ) -> list[WorkLog]:
     q = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.project), joinedload(WorkLog.task))
+        .options(
+            joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client),
+            joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments),
+        )
         .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
     )
     if client_id:
@@ -111,45 +120,58 @@ def export_csv(
     )
 
 
-@router.patch("/{log_id}", response_model=WorkLogResponse)
-def update_work_log(
-    log_id: UUID,
-    body: WorkLogUpdate,
-    _: Annotated[CurrentUser, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
-):
+def _get_log(db: Session, log_id: UUID) -> WorkLog:
     log = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.project), joinedload(WorkLog.task))
+        .options(
+            joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client),
+            joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments),
+        )
         .filter(WorkLog.id == log_id)
         .first()
     )
     if not log:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Work log not found")
+    return log
 
+
+@router.patch("/{log_id}", response_model=WorkLogResponse)
+def update_work_log(
+    log_id: UUID,
+    body: WorkLogUpdate,
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    log = _get_log(db, log_id)
     data = body.model_dump(exclude_unset=True)
+    # Auditors cannot touch money fields
+    if current.role == UserRole.auditor:
+        data.pop("va_rate", None)
+        if "status" in data and data["status"] not in (WorkLogStatus.approved, WorkLogStatus.rejected, WorkLogStatus.submitted):
+            raise HTTPException(403, "Auditor cannot set that status")
+
     for k, v in data.items():
         setattr(log, k, v)
 
-    if body.start_time or body.end_time or body.va_rate is not None:
+    if body.start_time or body.end_time or (body.va_rate is not None and current.role == UserRole.admin):
         start = body.start_time or log.start_time
         end = body.end_time or log.end_time
-        rate = body.va_rate if body.va_rate is not None else log.va_rate
+        rate = body.va_rate if (body.va_rate is not None and current.role == UserRole.admin) else log.va_rate
         log.hours = calculate_hours(start, end)
         log.va_pay = calculate_pay(log.hours, rate)
 
     db.commit()
-    db.refresh(log)
-    return _serialize_log(log)
+    log = _get_log(db, log.id)
+    return _serialize_log(log, redact_money=current.role == UserRole.auditor)
 
 
 @router.post("/{log_id}/approve", response_model=WorkLogResponse)
 def approve_log(
     log_id: UUID,
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    result = update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.approved), _, db)
+    result = update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.approved), current, db)
     push(db, [va_user_id(db, result.va_id)], "log", "✅ Your time log was approved",
          f"{result.client_name} · {result.work_date} · {result.hours} hrs is now approved.", "/va/time-log")
     return result
@@ -158,10 +180,10 @@ def approve_log(
 @router.post("/{log_id}/reject", response_model=WorkLogResponse)
 def reject_log(
     log_id: UUID,
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    result = update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.rejected), _, db)
+    result = update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.rejected), current, db)
     push(db, [va_user_id(db, result.va_id)], "log", "⚠️ Your time log needs changes",
          f"{result.client_name} · {result.work_date} · {result.hours} hrs was rejected — please review and resubmit.", "/va/time-log")
     return result
@@ -179,4 +201,105 @@ def delete_log(
     if log.status == WorkLogStatus.invoiced:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete invoiced entry")
     db.delete(log)
+    db.commit()
+
+
+@router.get("/{log_id}/attachments", response_model=list[WorkLogAttachmentResponse])
+def list_attachments(
+    log_id: UUID,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    log = db.query(WorkLog).filter(WorkLog.id == log_id).first()
+    if not log:
+        raise HTTPException(404, "Work log not found")
+    if current.role == UserRole.va and log.va_id != current.va_id:
+        raise HTTPException(403, "Not your log")
+    rows = db.query(WorkLogAttachment).filter(WorkLogAttachment.work_log_id == log_id).order_by(WorkLogAttachment.created_at).all()
+    return rows
+
+
+@router.post("/{log_id}/attachments", response_model=WorkLogAttachmentResponse, status_code=status.HTTP_201_CREATED)
+async def upload_attachment(
+    log_id: UUID,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    file: UploadFile = File(...),
+):
+    log = db.query(WorkLog).filter(WorkLog.id == log_id).first()
+    if not log:
+        raise HTTPException(404, "Work log not found")
+    if current.role == UserRole.va:
+        if log.va_id != current.va_id:
+            raise HTTPException(403, "Not your log")
+        if log.status in (WorkLogStatus.approved, WorkLogStatus.invoiced):
+            raise HTTPException(400, "Cannot attach to approved/invoiced logs")
+    elif current.role not in (UserRole.admin, UserRole.auditor):
+        raise HTTPException(403, "Forbidden")
+
+    ctype = (file.content_type or "").lower()
+    if ctype not in ALLOWED_CONTENT_TYPES and not ctype.startswith("image/"):
+        raise HTTPException(400, "Only PNG/JPEG images are allowed")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Empty file")
+    try:
+        opt = optimize_image(raw)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    att_id = uuid_mod.uuid4()
+    key = f"work-logs/{log_id}/{att_id}.{opt['format']}"
+    storage.save_bytes(key, opt["data"], opt["content_type"])
+    att = WorkLogAttachment(
+        id=att_id,
+        work_log_id=log_id,
+        storage_key=key,
+        filename=(file.filename or "image")[:255],
+        content_type=opt["content_type"],
+        size_bytes=len(opt["data"]),
+        width=opt["width"],
+        height=opt["height"],
+        uploaded_by=current.user.id,
+    )
+    db.add(att)
+    db.commit()
+    db.refresh(att)
+    return att
+
+
+@router.get("/attachments/{attachment_id}/content")
+def attachment_content(
+    attachment_id: UUID,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    att = db.query(WorkLogAttachment).options(joinedload(WorkLogAttachment.work_log)).filter(WorkLogAttachment.id == attachment_id).first()
+    if not att:
+        raise HTTPException(404, "Attachment not found")
+    if current.role == UserRole.va and att.work_log.va_id != current.va_id:
+        raise HTTPException(403, "Forbidden")
+    data = storage.read_bytes(att.storage_key)
+    if data is None:
+        raise HTTPException(404, "File missing")
+    return FastResponse(content=data, media_type=att.content_type)
+
+
+@router.delete("/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_attachment(
+    attachment_id: UUID,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    att = db.query(WorkLogAttachment).options(joinedload(WorkLogAttachment.work_log)).filter(WorkLogAttachment.id == attachment_id).first()
+    if not att:
+        raise HTTPException(404, "Attachment not found")
+    if current.role == UserRole.va:
+        if att.work_log.va_id != current.va_id or att.uploaded_by != current.user.id:
+            raise HTTPException(403, "Forbidden")
+        if att.work_log.status in (WorkLogStatus.approved, WorkLogStatus.invoiced):
+            raise HTTPException(400, "Cannot delete from approved logs")
+    elif current.role != UserRole.admin:
+        raise HTTPException(403, "Forbidden")
+    storage.delete(att.storage_key)
+    db.delete(att)
     db.commit()

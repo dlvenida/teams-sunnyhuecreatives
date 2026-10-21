@@ -27,8 +27,10 @@ type StatusFilter = "all" | "active" | "archived"
 
 interface ClientForm {
   name: string
-  billing_type: "hourly" | "fixed"
+  billing_type: "hourly" | "fixed" | "package_hours"
   default_rate: string
+  included_hours?: string
+  overage_rate?: string
 }
 
 interface SubClientForm {
@@ -117,6 +119,8 @@ export function ClientsPage() {
           name: clientForm.name,
           billing_type: clientForm.billing_type,
           default_rate: clientForm.default_rate ? parseFloat(clientForm.default_rate) : null,
+          included_hours: clientForm.included_hours ? parseFloat(clientForm.included_hours) : null,
+          overage_rate: clientForm.overage_rate ? parseFloat(clientForm.overage_rate) : null,
         }),
       }),
     onSuccess: () => {
@@ -207,6 +211,8 @@ export function ClientsPage() {
       name: clientForm.name,
       billing_type: clientForm.billing_type,
       default_rate: clientForm.default_rate ? parseFloat(clientForm.default_rate) : null,
+      included_hours: clientForm.included_hours ? parseFloat(clientForm.included_hours) : null,
+      overage_rate: clientForm.overage_rate ? parseFloat(clientForm.overage_rate) : null,
     }
     if (modal === "edit" && editingClient) {
       updateClient.mutate({ id: editingClient.id, body })
@@ -582,22 +588,35 @@ export function ClientsPage() {
                   <Select
                     value={clientForm.billing_type}
                     onChange={(e) =>
-                      setClientForm({ ...clientForm, billing_type: e.target.value as "hourly" | "fixed" })
+                      setClientForm({ ...clientForm, billing_type: e.target.value as "hourly" | "fixed" | "package_hours" })
                     }
                   >
                     <option value="hourly">Hourly</option>
-                    <option value="fixed">Fixed</option>
+                    <option value="fixed">Fixed package</option>
+                    <option value="package_hours">Package + included hours</option>
                   </Select>
                 </div>
                 {showPricing && (
                   <div>
-                    <Label>Default Rate</Label>
+                    <Label>{clientForm.billing_type === "hourly" ? "Default hourly rate" : "Package amount"}</Label>
                     <Input
                       type="number"
                       value={clientForm.default_rate}
                       onChange={(e) => setClientForm({ ...clientForm, default_rate: e.target.value })}
                     />
                   </div>
+                )}
+                {showPricing && clientForm.billing_type === "package_hours" && (
+                  <>
+                    <div>
+                      <Label>Included hours</Label>
+                      <Input type="number" value={clientForm.included_hours || ""} onChange={(e) => setClientForm({ ...clientForm, included_hours: e.target.value })} />
+                    </div>
+                    <div>
+                      <Label>Overage rate</Label>
+                      <Input type="number" value={clientForm.overage_rate || ""} onChange={(e) => setClientForm({ ...clientForm, overage_rate: e.target.value })} />
+                    </div>
+                  </>
                 )}
               </div>
             ) : (

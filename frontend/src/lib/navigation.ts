@@ -34,6 +34,7 @@ export const ADMIN_NAV: NavItem[] = [
   { to: "/admin/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock", "live", "team time"], section: "Workspace", color: "#22c55e" },
   { to: "/admin/logs", label: "All Logs", icon: FileText, keywords: ["work logs", "entries", "approve"], section: "Operations", color: "#f59e0b" },
   { to: "/admin/payroll", label: "VA Payroll", icon: DollarSign, keywords: ["pay", "salary", "php", "usd"], section: "Operations", color: "#10b981" },
+  { to: "/admin/va-rates", label: "VA Rates", icon: DollarSign, keywords: ["rate", "approve", "package", "hourly"], section: "Operations", color: "#14b8a6" },
   { to: "/admin/reports", label: "Reports", icon: BarChart3, keywords: ["client report", "hours"], section: "Operations", color: "#3b82f6" },
   { to: "/admin/user-reports", label: "Team Reports", icon: Flag, keywords: ["report", "flag", "issue", "va report", "inbox"], section: "Operations", color: "#f87ca6" },
   { to: "/admin/analytics", label: "Analytics", icon: LineChart, keywords: ["auditor", "activity", "monitor", "low activity", "team analytics"], section: "Operations", color: "#0ea5e9" },
@@ -52,6 +53,7 @@ export const VA_NAV: NavItem[] = [
   { to: "/va/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "client project"], section: "Workspace", color: "#06b6d4" },
   { to: "/va/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock in", "clock out", "timer"], section: "Workspace", color: "#22c55e" },
   { to: "/va/time-log", label: "Log Time", icon: Clock, keywords: ["submit", "hours", "work"], section: "Workspace", color: "#f59e0b" },
+  { to: "/va/rates", label: "My Rates", icon: DollarSign, keywords: ["rate", "pay", "hourly", "package"], section: "Manage", color: "#14b8a6" },
   { to: "/va/clients", label: "Clients", icon: Building2, keywords: ["assigned clients", "my clients", "client list"], section: "Manage", color: "#a855f7" },
   { to: "/va/reports", label: "My Reports", icon: Flag, keywords: ["report", "flag", "issue", "report to admin", "auditor"], section: "Manage", color: "#f87ca6" },
   // Booking hidden for now (route kept): { to: "/va/booking", label: "Booking", icon: Calendar, keywords: ["schedule", "appointment"], section: "Manage", color: "#06b6d4" },
@@ -60,9 +62,11 @@ export const VA_NAV: NavItem[] = [
 ]
 
 export const AUDITOR_NAV: NavItem[] = [
+  { to: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, keywords: ["home", "overview", "ops"], section: "Workspace", color: "#f87ca6" },
   { to: "/admin/analytics", label: "Analytics", icon: LineChart, keywords: ["auditor", "activity", "monitor", "low activity"], section: "Workspace", color: "#0ea5e9" },
   { to: "/admin/tasks", label: "Task Board", icon: KanbanSquare, keywords: ["tasks", "board", "comments", "task view"], section: "Workspace", color: "#8b5cf6" },
   { to: "/admin/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "discussion", "meet-ups", "meetups"], section: "Workspace", color: "#06b6d4" },
+  { to: "/admin/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock", "live", "team time"], section: "Workspace", color: "#22c55e" },
   { to: "/admin/logs", label: "All Logs", icon: FileText, keywords: ["work logs", "entries", "review"], section: "Operations", color: "#f59e0b" },
   { to: "/admin/user-reports", label: "Team Reports", icon: Flag, keywords: ["report", "flag", "issue", "va report", "inbox"], section: "Operations", color: "#f87ca6" },
   { to: "/admin/clients", label: "Clients", icon: Building2, keywords: ["client list", "view client"], section: "Manage", color: "#a855f7" },

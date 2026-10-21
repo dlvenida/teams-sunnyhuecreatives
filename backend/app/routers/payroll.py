@@ -22,6 +22,7 @@ from app.schemas import (
 )
 from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
+from app.services.va_rates import package_flats_for_period
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
@@ -95,6 +96,12 @@ def calculate_payroll(
     total_usd = Decimal("0")
     for va_id, data in va_map.items():
         va = data["va"]
+        # Add package flat amounts once per client that has approved package rate + hours in period
+        client_ids = {e.client_id for e in data["entries"]}
+        flats = package_flats_for_period(db, va_id, client_ids)
+        package_total = sum(flats.values(), Decimal("0"))
+        data["total_pay"] = data["total_pay"] + package_total
+
         entries = [
             PayrollEntry(
                 id=e.id, work_date=e.work_date, client_name=e.client.name, description=e.description_plain,
@@ -111,9 +118,14 @@ def calculate_payroll(
         by_client: dict[str, dict] = {}
         daily_map: dict[date, Decimal] = {}
         for l in data["entries"]:
-            b = by_client.setdefault(l.client.name, {"hours": Decimal("0"), "pay": Decimal("0")})
-            b["hours"] += l.hours; b["pay"] += l.va_pay
+            b = by_client.setdefault(l.client.name, {"hours": Decimal("0"), "pay": Decimal("0"), "client_id": l.client_id})
+            b["hours"] += l.hours
+            b["pay"] += l.va_pay
             daily_map[l.work_date] = daily_map.get(l.work_date, Decimal("0")) + l.hours
+        for cid, flat in flats.items():
+            for b in by_client.values():
+                if b.get("client_id") == cid:
+                    b["pay"] = flat
         daily = []
         d = period_start
         while d <= period_end:
@@ -127,6 +139,9 @@ def calculate_payroll(
         )
         run = runs.get(va_id)
         change = float((data["total_hours"] - prev_hours) / prev_hours * 100) if prev_hours > 0 else None
+        prev_client_ids = {l.client_id for l in va_prev}
+        prev_flats = package_flats_for_period(db, va_id, prev_client_ids)
+        prev_pay = sum((l.va_pay for l in va_prev), Decimal("0")) + sum(prev_flats.values(), Decimal("0"))
         results.append(PayrollVAResult(
             va_id=va.id, va_name=va.name, currency=va.currency,
             total_hours=data["total_hours"], total_pay=data["total_pay"], entry_count=len(entries), entries=entries,
@@ -138,7 +153,7 @@ def calculate_payroll(
             tasks_done=tasks_done,
             by_client=sorted((PayrollBreakdown(label=k, hours=v["hours"], pay=v["pay"]) for k, v in by_client.items()), key=lambda b: b.hours, reverse=True),
             daily=daily, prev_hours=prev_hours,
-            prev_pay=sum((l.va_pay for l in va_prev), Decimal("0")), change_pct=change,
+            prev_pay=prev_pay, change_pct=change,
             payment_label=_payment_label(va), is_paid=run is not None, run_id=run.id if run else None,
         ))
         if va.currency == Currency.PHP:

@@ -3,17 +3,20 @@ from calendar import monthrange
 
 
 def get_billing_period(year: int, month: int, cutoff: int) -> tuple[date, date, str]:
-    """Return period start, end, and label for billing cutoff (15 or 30)."""
+    """Return period start, end, and label for billing cutoff (15 or 30).
+
+    cutoff 15 → 1st–15th; cutoff 30 → 16th–end of month.
+    """
     month_name = date(year, month, 1).strftime("%b")
+    last_day = monthrange(year, month)[1]
     if cutoff == 15:
         start = date(year, month, 1)
         end = date(year, month, 15)
         label = f"{month_name} 1 – {month_name} 15, {year}"
     else:
-        last_day = monthrange(year, month)[1]
-        start = date(year, month, 1)
+        start = date(year, month, 16)
         end = date(year, month, last_day)
-        label = f"{month_name} 1 – {month_name} {last_day}, {year}"
+        label = f"{month_name} 16 – {month_name} {last_day}, {year}"
     return start, end, label
 
 

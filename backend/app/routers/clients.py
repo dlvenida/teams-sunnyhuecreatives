@@ -6,9 +6,12 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_admin_or_auditor
-from app.models import Client, SubClient, WorkLog, Invoice
+from app.models import Client, ClientPackage, Currency, SubClient, UserRole, WorkLog, Invoice
 from app.schemas import (
     ClientCreate,
+    ClientPackageCreate,
+    ClientPackageResponse,
+    ClientPackageUpdate,
     ClientResponse,
     ClientUpdate,
     SubClientCreate,
@@ -19,9 +22,19 @@ from app.schemas import (
 router = APIRouter(prefix="/clients", tags=["clients"])
 
 
+def _client_response(client: Client, redact_money: bool = False) -> ClientResponse:
+    return ClientResponse(
+        id=client.id,
+        name=client.name,
+        billing_type=client.billing_type,
+        default_rate=None if redact_money else client.default_rate,
+        is_active=client.is_active,
+    )
+
+
 @router.get("", response_model=list[ClientResponse])
 def list_clients(
-    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
     active_only: bool = False,
     include_archived: bool = True,
@@ -31,7 +44,8 @@ def list_clients(
         q = q.filter(Client.is_active == True)
     elif not include_archived:
         q = q.filter(Client.is_active == True)
-    return q.order_by(Client.name).all()
+    redact = current.role == UserRole.auditor
+    return [_client_response(c, redact) for c in q.order_by(Client.name).all()]
 
 
 @router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
@@ -42,8 +56,23 @@ def create_client(
 ):
     if db.query(Client).filter(Client.name == body.name).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Client already exists")
-    client = Client(**body.model_dump())
+    data = body.model_dump()
+    included = data.pop("included_hours", None)
+    overage = data.pop("overage_rate", None)
+    client = Client(**data)
     db.add(client)
+    db.flush()
+    db.add(ClientPackage(
+        client_id=client.id,
+        name=f"{client.name} — Default",
+        billing_type=client.billing_type,
+        amount=client.default_rate or 0,
+        included_hours=included,
+        overage_rate=overage,
+        currency=Currency.USD,
+        is_default=True,
+        is_active=True,
+    ))
     db.commit()
     db.refresh(client)
     return client
@@ -89,7 +118,7 @@ def clients_financials(
 @router.get("/{client_id}/detail")
 def client_detail(
     client_id: UUID,
-    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
     """Everything connected to a client: stats, sub-clients, projects, tasks, logs, invoices."""
@@ -101,6 +130,7 @@ def client_detail(
     from app.routers.tasks import _serialize as serialize_task
     from app.routers.work_logs import _serialize_log
 
+    redact = current.role == UserRole.auditor
     client = db.query(Client).options(_jl(Client.sub_clients)).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
@@ -166,11 +196,23 @@ def client_detail(
         "by_va": by_va,
     }
 
+    if redact:
+        financials = {
+            "since": client.created_at.isoformat() if client.created_at else None,
+            "total_hours": str(hours(billable)),
+            "total_earned": None, "total_collected": None, "total_outstanding": None,
+            "va_earned": None, "net": None, "net_collected": None, "profit_margin_pct": None,
+            "invoices_count": len(invoices),
+            "invoices_paid": len([i for i in invoices if str(getattr(i.status, "value", i.status)) == "paid"]),
+            "invoices_unpaid_count": len([i for i in invoices if str(getattr(i.status, "value", i.status)) == "unpaid"]),
+            "by_va": [{"va_id": r["va_id"], "va_name": r["va_name"], "currency": "", "hours": r["hours"], "va_pay": None, "logs": r["logs"]} for r in by_va],
+        }
+
     return {
         "client": {
             "id": str(client.id), "name": client.name,
             "billing_type": client.billing_type.value if hasattr(client.billing_type, "value") else str(client.billing_type),
-            "default_rate": str(client.default_rate) if client.default_rate is not None else None,
+            "default_rate": None if redact else (str(client.default_rate) if client.default_rate is not None else None),
             "is_active": bool(client.is_active), "created_at": client.created_at.isoformat() if client.created_at else None,
         },
         "stats": {
@@ -191,10 +233,10 @@ def client_detail(
         "sub_clients": sub_rows,
         "projects": project_rows,
         "tasks": [serialize_task(db, t).model_dump(mode="json") for t in recent_tasks],
-        "logs": [_serialize_log(l).model_dump(mode="json") for l in recent_logs],
+        "logs": [_serialize_log(l, redact_money=redact).model_dump(mode="json") for l in recent_logs],
         "invoices": [{
             "id": str(i.id), "invoice_number": i.invoice_number, "period_label": i.period_label,
-            "total_hours": str(i.total_hours), "amount": str(i.amount),
+            "total_hours": str(i.total_hours), "amount": None if redact else str(i.amount),
             "status": i.status.value if hasattr(i.status, "value") else str(i.status),
             "issue_date": str(i.issue_date), "due_date": str(i.due_date),
             "paid_at": i.paid_at.isoformat() if i.paid_at else None,
@@ -215,8 +257,25 @@ def update_client(
     if body.name and body.name != client.name:
         if db.query(Client).filter(Client.name == body.name, Client.id != client_id).first():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Client name already exists")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    included = data.pop("included_hours", None)
+    overage = data.pop("overage_rate", None)
+    for k, v in data.items():
         setattr(client, k, v)
+    default_pkg = (
+        db.query(ClientPackage)
+        .filter(ClientPackage.client_id == client_id, ClientPackage.is_default == True)
+        .first()
+    )
+    if default_pkg:
+        if "billing_type" in data:
+            default_pkg.billing_type = client.billing_type
+        if "default_rate" in data:
+            default_pkg.amount = client.default_rate or 0
+        if included is not None:
+            default_pkg.included_hours = included
+        if overage is not None:
+            default_pkg.overage_rate = overage
     db.commit()
     db.refresh(client)
     return client
@@ -311,4 +370,88 @@ def delete_sub_client(
             detail="Cannot delete sub-client with work logs. Archive instead.",
         )
     db.delete(sub)
+    db.commit()
+
+
+@router.get("/{client_id}/packages", response_model=list[ClientPackageResponse])
+def list_packages(
+    client_id: UUID,
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    rows = (
+        db.query(ClientPackage)
+        .filter(ClientPackage.client_id == client_id, ClientPackage.is_active == True)
+        .order_by(ClientPackage.is_default.desc(), ClientPackage.name)
+        .all()
+    )
+    if current.role == UserRole.auditor:
+        return [
+            ClientPackageResponse(
+                id=p.id, client_id=p.client_id, name=p.name, billing_type=p.billing_type,
+                amount=0, included_hours=None, overage_rate=None, currency=p.currency,
+                is_default=p.is_default, is_active=p.is_active,
+            )
+            for p in rows
+        ]
+    return rows
+
+
+@router.post("/packages", response_model=ClientPackageResponse, status_code=status.HTTP_201_CREATED)
+def create_package(
+    body: ClientPackageCreate,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if not db.query(Client).filter(Client.id == body.client_id).first():
+        raise HTTPException(404, "Client not found")
+    if body.is_default:
+        db.query(ClientPackage).filter(ClientPackage.client_id == body.client_id).update({"is_default": False})
+    pkg = ClientPackage(**body.model_dump())
+    db.add(pkg)
+    # Keep Client.billing_type / default_rate in sync with default package
+    if body.is_default:
+        client = db.query(Client).filter(Client.id == body.client_id).first()
+        client.billing_type = body.billing_type
+        client.default_rate = body.amount
+    db.commit()
+    db.refresh(pkg)
+    return pkg
+
+
+@router.patch("/packages/{package_id}", response_model=ClientPackageResponse)
+def update_package(
+    package_id: UUID,
+    body: ClientPackageUpdate,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    pkg = db.query(ClientPackage).filter(ClientPackage.id == package_id).first()
+    if not pkg:
+        raise HTTPException(404, "Package not found")
+    data = body.model_dump(exclude_unset=True)
+    if data.get("is_default"):
+        db.query(ClientPackage).filter(ClientPackage.client_id == pkg.client_id, ClientPackage.id != package_id).update({"is_default": False})
+    for k, v in data.items():
+        setattr(pkg, k, v)
+    if pkg.is_default:
+        client = db.query(Client).filter(Client.id == pkg.client_id).first()
+        if client:
+            client.billing_type = pkg.billing_type
+            client.default_rate = pkg.amount
+    db.commit()
+    db.refresh(pkg)
+    return pkg
+
+
+@router.delete("/packages/{package_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_package(
+    package_id: UUID,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    pkg = db.query(ClientPackage).filter(ClientPackage.id == package_id).first()
+    if not pkg:
+        raise HTTPException(404, "Package not found")
+    pkg.is_active = False
     db.commit()

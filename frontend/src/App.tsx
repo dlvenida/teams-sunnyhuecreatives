@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { getAuthUser } from "@/lib/api"
+import { getAuthUser, homeForRole } from "@/lib/api"
 import { ThemeProvider } from "@/components/theme/ThemeProvider"
 import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { ProtectedRoute } from "@/components/ProtectedRoute"
@@ -16,6 +16,8 @@ import { SettingsPage } from "@/app/admin/settings/SettingsPage"
 import { ClientsPage } from "@/app/admin/clients/ClientsPage"
 import { UsersPage } from "@/app/admin/users/UsersPage"
 import { VATimeLogPage } from "@/app/va/time-log/VATimeLogPage"
+import { VARatesPage } from "@/app/va/rates/VARatesPage"
+import { VARatesAdminPage } from "@/app/admin/va-rates/VARatesAdminPage"
 import { ProfilePage } from "@/app/profile/ProfilePage"
 import { BookingPage } from "@/app/booking/BookingPage"
 import { TasksPage } from "@/app/tasks/TasksPage"
@@ -34,7 +36,7 @@ const queryClient = new QueryClient({
 function RootRedirect() {
   const user = getAuthUser()
   if (!user) return <Navigate to="/login" replace />
-  return <Navigate to={user.role === "admin" ? "/admin/dashboard" : "/va/dashboard"} replace />
+  return <Navigate to={homeForRole(user.role as "admin" | "auditor" | "va")} replace />
 }
 
 export default function App() {
@@ -58,6 +60,7 @@ export default function App() {
 
             <Route element={<ProtectedRoute role={["admin", "auditor"]} />}>
               <Route element={<AppShell />}>
+                <Route path="/admin/dashboard" element={<DashboardPage />} />
                 <Route path="/admin/analytics" element={<AnalyticsPage />} />
                 <Route path="/admin/logs" element={<LogsPage />} />
                 <Route path="/admin/clients" element={<ClientsPage />} />
@@ -71,11 +74,8 @@ export default function App() {
 
             <Route element={<ProtectedRoute role="admin" />}>
               <Route element={<AppShell />}>
-                <Route path="/admin/dashboard" element={<DashboardPage />} />
-                <Route path="/admin/tasks" element={<TasksPage />} />
-                <Route path="/admin/projects" element={<ProjectsPage />} />
-                <Route path="/admin/time-clock" element={<TimeClockPage />} />
                 <Route path="/admin/payroll" element={<PayrollPage />} />
+                <Route path="/admin/va-rates" element={<VARatesAdminPage />} />
                 <Route path="/admin/reports" element={<ReportsPage />} />
                 <Route path="/admin/invoices" element={<InvoicesPage />} />
                 <Route path="/admin/users" element={<UsersPage />} />
@@ -91,6 +91,7 @@ export default function App() {
                 <Route path="/va/projects" element={<ProjectsPage />} />
                 <Route path="/va/time-clock" element={<TimeClockPage />} />
                 <Route path="/va/time-log" element={<VATimeLogPage />} />
+                <Route path="/va/rates" element={<VARatesPage />} />
                 <Route path="/va/clients" element={<VAClientsPage />} />
                 <Route path="/va/reports" element={<UserReportsPage />} />
                 <Route path="/va/profile" element={<ProfilePage />} />

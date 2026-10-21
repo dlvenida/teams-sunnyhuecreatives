@@ -58,8 +58,15 @@ def attachment_content(attachment_id: UUID, current: Annotated[CurrentUser, Depe
     data = storage.read_bytes(a.storage_key)
     if data is None:
         raise HTTPException(404, "File missing from storage")
+    # Filenames can contain characters outside latin-1 (e.g. macOS screenshots
+    # use U+202F before AM/PM) which crash header encoding — send an ASCII
+    # fallback plus an RFC 5987 UTF-8 filename.
+    from urllib.parse import quote
+    raw_name = a.original_name or "image"
+    ascii_name = raw_name.encode("ascii", "ignore").decode().replace('"', "'").strip() or "image"
+    disposition = f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(raw_name)}'
     return Response(content=data, media_type=MEDIA.get(a.format, "image/avif"),
-                    headers={"Cache-Control": "private, max-age=3600", "Content-Disposition": f'inline; filename="{a.original_name}"'})
+                    headers={"Cache-Control": "private, max-age=3600", "Content-Disposition": disposition})
 
 
 @router.delete("/comments/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)

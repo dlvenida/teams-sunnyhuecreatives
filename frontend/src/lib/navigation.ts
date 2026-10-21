@@ -29,7 +29,7 @@ export interface NavItem {
 }
 
 export const ADMIN_NAV: NavItem[] = [
-  { to: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, keywords: ["home", "overview", "stats"], section: "Workspace", color: "#ec4899" },
+  { to: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, keywords: ["home", "overview", "stats"], section: "Workspace", color: "#f43f5e" },
   { to: "/admin/tasks", label: "Task Board", icon: KanbanSquare, keywords: ["kanban", "monday", "tasks", "board", "task board"], section: "Workspace", color: "#8b5cf6" },
   { to: "/admin/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "client project"], section: "Workspace", color: "#06b6d4" },
   { to: "/admin/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock", "live", "team time"], section: "Workspace", color: "#22c55e" },
@@ -40,7 +40,7 @@ export const ADMIN_NAV: NavItem[] = [
   { to: "/admin/analytics", label: "Analytics", icon: LineChart, keywords: ["auditor", "activity", "monitor", "low activity", "team analytics"], section: "Operations", color: "#0ea5e9" },
   { to: "/admin/invoices", label: "Invoices", icon: Receipt, keywords: ["billing", "invoice", "payment"], section: "Operations", color: "#f97316" },
   { to: "/admin/clients", label: "Clients", icon: Building2, keywords: ["sub-clients", "client list", "archive"], section: "Manage", color: "#a855f7" },
-  { to: "/admin/users", label: "Users", icon: Users, keywords: ["va", "roster", "team", "archive"], section: "Manage", color: "#ec4899" },
+  { to: "/admin/users", label: "Users", icon: Users, keywords: ["va", "roster", "team", "archive"], section: "Manage", color: "#f43f5e" },
   { to: "/admin/booking", label: "Booking", icon: Calendar, keywords: ["schedule", "calendly", "appointment"], section: "Manage", color: "#06b6d4" },
   { to: "/admin/settings", label: "Settings", icon: Settings, keywords: ["company", "payment", "pricing", "hide"], section: "System", color: "#64748b" },
   { to: "/notifications", label: "Notifications", icon: Bell, keywords: ["alerts", "comments", "updates", "unread"], section: "System", color: "#f43f5e" },
@@ -48,7 +48,7 @@ export const ADMIN_NAV: NavItem[] = [
 ]
 
 export const VA_NAV: NavItem[] = [
-  { to: "/va/dashboard", label: "Dashboard", icon: LayoutDashboard, keywords: ["home", "today", "overview", "morning"], section: "Workspace", color: "#ec4899" },
+  { to: "/va/dashboard", label: "Dashboard", icon: LayoutDashboard, keywords: ["home", "today", "overview", "morning"], section: "Workspace", color: "#f43f5e" },
   { to: "/va/tasks", label: "Task Board", icon: KanbanSquare, keywords: ["kanban", "tasks", "my tasks", "board", "task board"], section: "Workspace", color: "#8b5cf6" },
   { to: "/va/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "client project"], section: "Workspace", color: "#06b6d4" },
   { to: "/va/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock in", "clock out", "timer"], section: "Workspace", color: "#22c55e" },

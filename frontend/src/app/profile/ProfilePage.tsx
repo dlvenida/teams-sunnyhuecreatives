@@ -153,7 +153,7 @@ export function ProfilePage() {
   )
 
   return (
-    <div className="mx-auto max-w-2xl space-y-5 animate-fade-in pb-8">
+    <div className="w-full space-y-5 animate-fade-in pb-8">
       <div className="px-1 pt-1">
         <h1 className="font-display text-xl font-bold">Profile</h1>
         <p className="mt-0.5 text-xs text-muted-foreground">Manage your account, contact info, and payment details</p>
@@ -181,7 +181,7 @@ export function ProfilePage() {
         </CardContent>
       </Card>
 
-      <div className="flex gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="Profile sections">
+      <div className="flex flex-wrap gap-1.5 pb-1" role="tablist" aria-label="Profile sections">
         {[
           { id: "contact", label: "Contact & Details", icon: Phone },
           { id: "work", label: "Work Profile", icon: Briefcase },
@@ -197,7 +197,7 @@ export function ProfilePage() {
             role="tab"
             aria-selected={tab === t.id}
             onClick={() => setTab(t.id)}
-            className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+            className={`flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-2 text-xs font-semibold transition ${
               tab === t.id
                 ? "border-primary bg-primary text-primary-foreground shadow-sm"
                 : "border-border bg-card hover:bg-muted/60"
@@ -216,17 +216,19 @@ export function ProfilePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div>
-            <Label htmlFor="display-name">Display name</Label>
-            <Input id="display-name" value={form.display_name} onChange={(e) => update("display_name", e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="phone">Phone</Label>
-            <Input id="phone" type="tel" placeholder="+63 912 345 6789" value={form.phone} onChange={(e) => update("phone", e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="address">Address</Label>
-            <Input id="address" placeholder="Street, city, province" value={form.address} onChange={(e) => update("address", e.target.value)} />
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div>
+              <Label htmlFor="display-name">Display name</Label>
+              <Input id="display-name" value={form.display_name} onChange={(e) => update("display_name", e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="phone">Phone</Label>
+              <Input id="phone" type="tel" placeholder="+63 912 345 6789" value={form.phone} onChange={(e) => update("phone", e.target.value)} />
+            </div>
+            <div className="sm:col-span-2 xl:col-span-1">
+              <Label htmlFor="address">Address</Label>
+              <Input id="address" placeholder="Street, city, province" value={form.address} onChange={(e) => update("address", e.target.value)} />
+            </div>
           </div>
           <SaveRow label="Save details" />
         </CardContent>
@@ -237,14 +239,14 @@ export function ProfilePage() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><Briefcase className="h-4 w-4 text-primary" /> Work Profile</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <div><Label htmlFor="job-title">Job title / Role</Label><Input id="job-title" placeholder="Virtual Assistant, Designer…" value={form.job_title} onChange={(e) => update("job_title", e.target.value)} /></div>
             <div><Label htmlFor="status-msg">Status message</Label><Input id="status-msg" placeholder="Available, On leave, Focus mode…" value={form.status_message} onChange={(e) => update("status_message", e.target.value)} /></div>
             <div><Label htmlFor="tz">Timezone</Label><Select id="tz" value={form.timezone} onChange={(e) => update("timezone", e.target.value)}>{TIMEZONES.map(t => <option key={t} value={t}>{t}</option>)}</Select></div>
             <div><Label htmlFor="hire">Hire / Start date</Label><Input id="hire" type="date" value={form.hire_date} onChange={(e) => update("hire_date", e.target.value)} /></div>
             <div><Label htmlFor="dob">Date of birth</Label><Input id="dob" type="date" value={form.date_of_birth} onChange={(e) => update("date_of_birth", e.target.value)} /></div>
+            <div><Label htmlFor="skills">Skills (comma separated)</Label><Input id="skills" placeholder="Inbox management, Canva, Bookkeeping" value={form.skills} onChange={(e) => update("skills", e.target.value)} /></div>
           </div>
-          <div><Label htmlFor="skills">Skills (comma separated)</Label><Input id="skills" placeholder="Inbox management, Canva, Bookkeeping" value={form.skills} onChange={(e) => update("skills", e.target.value)} /></div>
           <div><Label htmlFor="bio">Bio</Label><Textarea id="bio" placeholder="Short intro about your work…" value={form.bio} onChange={(e) => update("bio", e.target.value)} /></div>
           {skillList.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
@@ -260,7 +262,7 @@ export function ProfilePage() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><HeartHandshake className="h-4 w-4 text-primary" /> Emergency Contact</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             <div><Label htmlFor="ec-name">Full name</Label><Input id="ec-name" value={form.emergency_contact_name} onChange={(e) => update("emergency_contact_name", e.target.value)} /></div>
             <div><Label htmlFor="ec-phone">Phone</Label><Input id="ec-phone" value={form.emergency_contact_phone} onChange={(e) => update("emergency_contact_phone", e.target.value)} /></div>
             <div><Label htmlFor="ec-rel">Relationship</Label><Input id="ec-rel" placeholder="Spouse, Parent…" value={form.emergency_contact_relationship} onChange={(e) => update("emergency_contact_relationship", e.target.value)} /></div>
@@ -274,8 +276,10 @@ export function ProfilePage() {
       <Card>
         <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><Link2 className="h-4 w-4 text-primary" /> Links</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          <div><Label htmlFor="linkedin">LinkedIn</Label><Input id="linkedin" type="url" placeholder="https://linkedin.com/in/…" value={form.linkedin_url} onChange={(e) => update("linkedin_url", e.target.value)} /></div>
-          <div><Label htmlFor="portfolio">Portfolio / Website</Label><Input id="portfolio" type="url" placeholder="https://" value={form.portfolio_url} onChange={(e) => update("portfolio_url", e.target.value)} /></div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div><Label htmlFor="linkedin">LinkedIn</Label><Input id="linkedin" type="url" placeholder="https://linkedin.com/in/…" value={form.linkedin_url} onChange={(e) => update("linkedin_url", e.target.value)} /></div>
+            <div><Label htmlFor="portfolio">Portfolio / Website</Label><Input id="portfolio" type="url" placeholder="https://" value={form.portfolio_url} onChange={(e) => update("portfolio_url", e.target.value)} /></div>
+          </div>
           <SaveRow label="Save links" />
         </CardContent>
       </Card>
@@ -299,7 +303,7 @@ export function ProfilePage() {
             </p>
           )}
           {emailStep === "idle" ? (
-            <>
+            <div className="grid items-end gap-3 sm:grid-cols-[1fr_auto]">
               <div>
                 <Label htmlFor="new-email">New email</Label>
                 <Input id="new-email" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="new@example.com" />
@@ -312,7 +316,7 @@ export function ProfilePage() {
               >
                 Send verification code
               </Button>
-            </>
+            </div>
           ) : (
             <>
               <p className="text-[11px] text-muted-foreground">{emailMessage}</p>
@@ -355,26 +359,28 @@ export function ProfilePage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div>
-            <Label htmlFor="wise">Wise email</Label>
-            <Input id="wise" type="email" placeholder="you@wise.com" value={form.wise_email} onChange={(e) => update("wise_email", e.target.value)} />
-          </div>
-          <div className="border-t border-border pt-3">
-            <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <Landmark className="h-3.5 w-3.5" /> Philippines bank account
-            </p>
-            <div className="space-y-3">
-              <div>
-                <Label htmlFor="ph-bank-name">Name of bank</Label>
-                <Input id="ph-bank-name" placeholder="e.g. BDO, BPI, Metrobank" value={form.ph_bank_name} onChange={(e) => update("ph_bank_name", e.target.value)} />
-              </div>
-              <div>
-                <Label htmlFor="ph-account-name">Account name</Label>
-                <Input id="ph-account-name" placeholder="Name on account" value={form.ph_bank_account_name} onChange={(e) => update("ph_bank_account_name", e.target.value)} />
-              </div>
-              <div>
-                <Label htmlFor="ph-account">Account number</Label>
-                <Input id="ph-account" placeholder="Account number" value={form.ph_bank_account} onChange={(e) => update("ph_bank_account", e.target.value)} />
+          <div className="grid gap-4 lg:grid-cols-[1fr_2fr]">
+            <div>
+              <Label htmlFor="wise">Wise email</Label>
+              <Input id="wise" type="email" placeholder="you@wise.com" value={form.wise_email} onChange={(e) => update("wise_email", e.target.value)} />
+            </div>
+            <div className="border-border lg:border-l lg:pl-4">
+              <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Landmark className="h-3.5 w-3.5" /> Philippines bank account
+              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div>
+                  <Label htmlFor="ph-bank-name">Name of bank</Label>
+                  <Input id="ph-bank-name" placeholder="e.g. BDO, BPI, Metrobank" value={form.ph_bank_name} onChange={(e) => update("ph_bank_name", e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="ph-account-name">Account name</Label>
+                  <Input id="ph-account-name" placeholder="Name on account" value={form.ph_bank_account_name} onChange={(e) => update("ph_bank_account_name", e.target.value)} />
+                </div>
+                <div>
+                  <Label htmlFor="ph-account">Account number</Label>
+                  <Input id="ph-account" placeholder="Account number" value={form.ph_bank_account} onChange={(e) => update("ph_bank_account", e.target.value)} />
+                </div>
               </div>
             </div>
           </div>
@@ -402,14 +408,16 @@ export function ProfilePage() {
           <CardTitle className="text-sm">Change Password</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div>
-            <Label htmlFor="current-password">Current password</Label>
-            <Input id="current-password" type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="new-password">New password</Label>
-            <Input id="new-password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} />
-            <p className="mt-1 text-[10px] text-muted-foreground">At least 8 characters.</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="current-password">Current password</Label>
+              <Input id="current-password" type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="new-password">New password</Label>
+              <Input id="new-password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} />
+              <p className="mt-1 text-[10px] text-muted-foreground">At least 8 characters.</p>
+            </div>
           </div>
           {passwordMessage && <p className="text-[11px] text-muted-foreground">{passwordMessage}</p>}
           <Button variant="gold" size="sm" disabled={!currentPassword || newPassword.length < 8 || changePassword.isPending} onClick={() => changePassword.mutate()}>

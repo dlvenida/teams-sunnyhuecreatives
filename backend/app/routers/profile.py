@@ -11,11 +11,14 @@ from app.config import settings
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user
 from app.models import User, UserRole, VA
+from app.auth import hash_password, verify_password
 from app.schemas import (
     EmailChangeConfirm,
     EmailChangeRequest,
     ProfileResponse,
     ProfileUpdate,
+    RemovePinRequest,
+    SetPinRequest,
 )
 from app.services import storage
 from app.services.email import send_email_verification
@@ -70,6 +73,7 @@ def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
         ph_bank_name=user.ph_bank_name,
         currency=va.currency if va else None,
         must_change_password=user.must_change_password,
+        has_pin=user.pin_hash is not None,
         job_title=user.job_title, bio=user.bio, timezone=user.timezone, skills=user.skills or [],
         emergency_contact_name=user.emergency_contact_name, emergency_contact_phone=user.emergency_contact_phone,
         emergency_contact_relationship=user.emergency_contact_relationship, hire_date=user.hire_date,
@@ -155,6 +159,39 @@ def get_profile_photo(current: Annotated[CurrentUser, Depends(get_current_user)]
     if data is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No profile photo")
     return Response(content=data, media_type="image/avif")
+
+
+@router.post("/set-pin")
+def set_pin(
+    body: SetPinRequest,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Set or change the 6-digit quick-login PIN (requires the account password)."""
+    if not verify_password(body.current_password, current.user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+    if len(set(body.pin)) == 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="PIN is too weak — avoid repeating the same digit")
+    current.user.pin_hash = hash_password(body.pin)
+    current.user.pin_failed_attempts = 0
+    current.user.pin_locked_until = None
+    db.commit()
+    return {"message": "PIN saved. You can now quick-login with your PIN.", "has_pin": True}
+
+
+@router.post("/remove-pin")
+def remove_pin(
+    body: RemovePinRequest,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if not verify_password(body.current_password, current.user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
+    current.user.pin_hash = None
+    current.user.pin_failed_attempts = 0
+    current.user.pin_locked_until = None
+    db.commit()
+    return {"message": "PIN removed.", "has_pin": False}
 
 
 @router.post("/request-email-change")

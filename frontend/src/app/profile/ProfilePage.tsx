@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Briefcase, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
+import { Briefcase, Hash, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
+import { PinInput } from "@/components/auth/PinInput"
 
 export function ProfilePage() {
   const qc = useQueryClient()
@@ -24,6 +25,11 @@ export function ProfilePage() {
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [passwordMessage, setPasswordMessage] = useState("")
+  const [pinPassword, setPinPassword] = useState("")
+  const [pin, setPinValue] = useState("")
+  const [pinConfirm, setPinConfirm] = useState("")
+  const [pinMessage, setPinMessage] = useState("")
+  const [pinOk, setPinOk] = useState(true)
   const [tab, setTab] = useState("contact")
 
   const { data: profile, isLoading, isError, error } = useQuery({
@@ -106,6 +112,38 @@ export function ProfilePage() {
       setEmailMessage("Email updated successfully.")
     },
     onError: (err: Error) => setEmailMessage(err.message),
+  })
+
+  const setPin = useMutation({
+    mutationFn: () =>
+      apiFetch<{ message: string }>("/profile/set-pin", {
+        method: "POST",
+        body: JSON.stringify({ current_password: pinPassword, pin }),
+      }),
+    onSuccess: (data) => {
+      setPinOk(true)
+      setPinMessage(`✓ ${data.message}`)
+      setPinPassword("")
+      setPinValue("")
+      setPinConfirm("")
+      qc.invalidateQueries({ queryKey: ["profile"] })
+    },
+    onError: (err: Error) => { setPinOk(false); setPinMessage(err.message) },
+  })
+
+  const removePin = useMutation({
+    mutationFn: () =>
+      apiFetch<{ message: string }>("/profile/remove-pin", {
+        method: "POST",
+        body: JSON.stringify({ current_password: pinPassword }),
+      }),
+    onSuccess: (data) => {
+      setPinOk(true)
+      setPinMessage(`✓ ${data.message}`)
+      setPinPassword("")
+      qc.invalidateQueries({ queryKey: ["profile"] })
+    },
+    onError: (err: Error) => { setPinOk(false); setPinMessage(err.message) },
   })
 
   const changePassword = useMutation({
@@ -403,6 +441,7 @@ export function ProfilePage() {
       )}
 
       {tab === "security" && (
+      <>
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">Change Password</CardTitle>
@@ -425,6 +464,57 @@ export function ProfilePage() {
           </Button>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <Hash className="h-4 w-4 text-primary" /> Quick-Login PIN
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {profile.has_pin
+              ? "A PIN is set for this account. On the sign-in screen choose Quick PIN, enter your email and PIN, and you're in right away — no password typing. 5 wrong PINs locks PIN login for 15 minutes; your password always works."
+              : "Set a 6-digit PIN for faster sign-in on devices you trust. On the sign-in screen choose Quick PIN, enter your email and PIN, and you're in right away. Your full password always remains valid."}
+          </p>
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div>
+              <Label htmlFor="pin-password">Current password</Label>
+              <Input id="pin-password" type="password" value={pinPassword} onChange={(e) => setPinPassword(e.target.value)} placeholder="Required to set or remove a PIN" />
+            </div>
+            <div>
+              <Label>{profile.has_pin ? "New PIN" : "Choose a 6-digit PIN"}</Label>
+              <PinInput value={pin} onChange={setPinValue} disabled={setPin.isPending} />
+            </div>
+            <div>
+              <Label>Confirm PIN</Label>
+              <PinInput value={pinConfirm} onChange={setPinConfirm} disabled={setPin.isPending} />
+            </div>
+          </div>
+          {pin.length === 6 && pinConfirm.length === 6 && pin !== pinConfirm && (
+            <p className="text-[11px] font-semibold text-red-600">PINs don't match.</p>
+          )}
+          {pinMessage && (
+            <p className={`text-[11px] font-semibold ${pinOk ? "text-green-600" : "text-red-600"}`} role="status">{pinMessage}</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="gold"
+              size="sm"
+              disabled={!pinPassword || pin.length !== 6 || pin !== pinConfirm || setPin.isPending}
+              onClick={() => setPin.mutate()}
+            >
+              {setPin.isPending ? "Saving…" : profile.has_pin ? "Change PIN" : "Set PIN"}
+            </Button>
+            {profile.has_pin && (
+              <Button variant="outline" size="sm" disabled={!pinPassword || removePin.isPending} onClick={() => removePin.mutate()}>
+                {removePin.isPending ? "Removing…" : "Remove PIN"}
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      </>
       )}
     </div>
   )

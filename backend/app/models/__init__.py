@@ -110,6 +110,10 @@ class User(Base):
     pending_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email_verification_code: Mapped[str | None] = mapped_column(String(10), nullable=True)
     email_verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Quick-login PIN (014) — bcrypt hash of the 6-digit PIN, with brute-force lockout
+    pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pin_failed_attempts: Mapped[int] = mapped_column(default=0)
+    pin_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Extended profile (004)
     job_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     bio: Mapped[str | None] = mapped_column(Text, nullable=True)

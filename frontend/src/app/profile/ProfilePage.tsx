@@ -8,13 +8,14 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Briefcase, HeartHandshake, Link2, Mail, MapPin, Phone, Landmark, Wallet } from "lucide-react"
+import { Briefcase, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
 
 export function ProfilePage() {
   const qc = useQueryClient()
   const authUser = getAuthUser()
   const [form, setForm] = useState<ProfileFormData | null>(null)
   const [saveMessage, setSaveMessage] = useState("")
+  const [saveOk, setSaveOk] = useState(true)
   const [newEmail, setNewEmail] = useState("")
   const [verifyCode, setVerifyCode] = useState("")
   const [devCode, setDevCode] = useState<string | null>(null)
@@ -23,6 +24,7 @@ export function ProfilePage() {
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [passwordMessage, setPasswordMessage] = useState("")
+  const [tab, setTab] = useState("contact")
 
   const { data: profile, isLoading, isError, error } = useQuery({
     queryKey: ["profile"],
@@ -30,7 +32,10 @@ export function ProfilePage() {
   })
 
   useEffect(() => {
-    if (profile) setForm(profileToForm(profile))
+    if (profile) {
+      setForm(profileToForm(profile))
+      if (profile.must_change_password) setTab("security")
+    }
   }, [profile])
 
   const saveProfile = useMutation({
@@ -61,13 +66,14 @@ export function ProfilePage() {
       }),
     onSuccess: (data) => {
       qc.setQueryData(["profile"], data)
-      setSaveMessage("Profile saved.")
+      setSaveOk(true)
+      setSaveMessage("✓ Profile saved.")
       if (authUser) {
         setAuthUser({ ...authUser, name: data.display_name, mustChangePassword: data.must_change_password })
       }
       setTimeout(() => setSaveMessage(""), 3000)
     },
-    onError: (err: Error) => setSaveMessage(err.message),
+    onError: (err: Error) => { setSaveOk(false); setSaveMessage(err.message) },
   })
 
   const requestEmailChange = useMutation({
@@ -131,10 +137,25 @@ export function ProfilePage() {
 
   const update = (key: keyof ProfileFormData, value: string) => setForm({ ...form, [key]: value })
 
+  const skillList = form.skills
+    ? form.skills.split(",").map(s => s.trim()).filter(Boolean)
+    : (profile.skills ?? [])
+
+  const SaveRow = ({ label }: { label: string }) => (
+    <div className="flex flex-wrap items-center gap-3">
+      <Button variant="gold" size="sm" disabled={saveProfile.isPending || !form.display_name} onClick={() => saveProfile.mutate(form)}>
+        {saveProfile.isPending ? "Saving…" : label}
+      </Button>
+      {saveMessage && (
+        <p className={`text-[11px] font-semibold ${saveOk ? "text-green-600" : "text-red-600"}`} role="status">{saveMessage}</p>
+      )}
+    </div>
+  )
+
   return (
     <div className="mx-auto max-w-2xl space-y-5 animate-fade-in pb-8">
-      <div>
-        <h1 className="text-base font-semibold tracking-tight">Profile</h1>
+      <div className="px-1 pt-1">
+        <h1 className="font-display text-xl font-bold">Profile</h1>
         <p className="mt-0.5 text-xs text-muted-foreground">Manage your account, contact info, and payment details</p>
       </div>
 
@@ -160,6 +181,34 @@ export function ProfilePage() {
         </CardContent>
       </Card>
 
+      <div className="flex gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="Profile sections">
+        {[
+          { id: "contact", label: "Contact & Details", icon: Phone },
+          { id: "work", label: "Work Profile", icon: Briefcase },
+          { id: "emergency", label: "Emergency", icon: HeartHandshake },
+          { id: "links", label: "Links", icon: Link2 },
+          { id: "email", label: "Email", icon: Mail },
+          { id: "payment", label: "Payment", icon: Wallet },
+          { id: "appearance", label: "Appearance", icon: Palette },
+          { id: "security", label: "Security", icon: Lock },
+        ].map(t => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
+            className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+              tab === t.id
+                ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                : "border-border bg-card hover:bg-muted/60"
+            }`}
+          >
+            <t.icon className="h-3.5 w-3.5" /> {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "contact" && (
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
@@ -179,13 +228,12 @@ export function ProfilePage() {
             <Label htmlFor="address">Address</Label>
             <Input id="address" placeholder="Street, city, province" value={form.address} onChange={(e) => update("address", e.target.value)} />
           </div>
-          {saveMessage && <p className="text-[11px] text-muted-foreground">{saveMessage}</p>}
-          <Button variant="gold" size="sm" disabled={saveProfile.isPending || !form.display_name} onClick={() => saveProfile.mutate(form)}>
-            {saveProfile.isPending ? "Saving..." : "Save details"}
-          </Button>
+          <SaveRow label="Save details" />
         </CardContent>
       </Card>
+      )}
 
+      {tab === "work" && (
       <Card>
         <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><Briefcase className="h-4 w-4 text-primary" /> Work Profile</CardTitle></CardHeader>
         <CardContent className="space-y-3">
@@ -198,11 +246,17 @@ export function ProfilePage() {
           </div>
           <div><Label htmlFor="skills">Skills (comma separated)</Label><Input id="skills" placeholder="Inbox management, Canva, Bookkeeping" value={form.skills} onChange={(e) => update("skills", e.target.value)} /></div>
           <div><Label htmlFor="bio">Bio</Label><Textarea id="bio" placeholder="Short intro about your work…" value={form.bio} onChange={(e) => update("bio", e.target.value)} /></div>
-          {(form.skills || profile.skills?.length) && <div className="flex flex-wrap gap-1.5">{(form.skills ? form.skills.split(",").map(s => s.trim()).filter(Boolean) : profile.skills || []).map(s => <Badge key={s}>{s}</Badge>)}</div>}
-          <Button variant="gold" size="sm" disabled={saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>Save work profile</Button>
+          {skillList.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {skillList.map(s => <Badge key={s}>{s}</Badge>)}
+            </div>
+          )}
+          <SaveRow label="Save work profile" />
         </CardContent>
       </Card>
+      )}
 
+      {tab === "emergency" && (
       <Card>
         <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><HeartHandshake className="h-4 w-4 text-primary" /> Emergency Contact</CardTitle></CardHeader>
         <CardContent className="space-y-3">
@@ -211,19 +265,23 @@ export function ProfilePage() {
             <div><Label htmlFor="ec-phone">Phone</Label><Input id="ec-phone" value={form.emergency_contact_phone} onChange={(e) => update("emergency_contact_phone", e.target.value)} /></div>
             <div><Label htmlFor="ec-rel">Relationship</Label><Input id="ec-rel" placeholder="Spouse, Parent…" value={form.emergency_contact_relationship} onChange={(e) => update("emergency_contact_relationship", e.target.value)} /></div>
           </div>
-          <Button variant="gold" size="sm" disabled={saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>Save emergency contact</Button>
+          <SaveRow label="Save emergency contact" />
         </CardContent>
       </Card>
+      )}
 
+      {tab === "links" && (
       <Card>
         <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-sm"><Link2 className="h-4 w-4 text-primary" /> Links</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <div><Label htmlFor="linkedin">LinkedIn</Label><Input id="linkedin" type="url" placeholder="https://linkedin.com/in/…" value={form.linkedin_url} onChange={(e) => update("linkedin_url", e.target.value)} /></div>
           <div><Label htmlFor="portfolio">Portfolio / Website</Label><Input id="portfolio" type="url" placeholder="https://" value={form.portfolio_url} onChange={(e) => update("portfolio_url", e.target.value)} /></div>
-          <Button variant="gold" size="sm" disabled={saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>Save links</Button>
+          <SaveRow label="Save links" />
         </CardContent>
       </Card>
+      )}
 
+      {tab === "email" && (
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
@@ -287,7 +345,9 @@ export function ProfilePage() {
           {emailStep === "idle" && emailMessage && <p className="text-[11px] text-red-600">{emailMessage}</p>}
         </CardContent>
       </Card>
+      )}
 
+      {tab === "payment" && (
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
@@ -318,23 +378,25 @@ export function ProfilePage() {
               </div>
             </div>
           </div>
-          <Button variant="gold" size="sm" disabled={saveProfile.isPending} onClick={() => saveProfile.mutate(form)}>
-            Save payment info
-          </Button>
+          <SaveRow label="Save payment info" />
         </CardContent>
       </Card>
+      )}
 
+      {tab === "appearance" && (
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
-            <MapPin className="h-4 w-4 text-primary" /> Appearance
+            <Palette className="h-4 w-4 text-primary" /> Appearance
           </CardTitle>
         </CardHeader>
         <CardContent>
           <ThemeSwitcher />
         </CardContent>
       </Card>
+      )}
 
+      {tab === "security" && (
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">Change Password</CardTitle>
@@ -347,6 +409,7 @@ export function ProfilePage() {
           <div>
             <Label htmlFor="new-password">New password</Label>
             <Input id="new-password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} />
+            <p className="mt-1 text-[10px] text-muted-foreground">At least 8 characters.</p>
           </div>
           {passwordMessage && <p className="text-[11px] text-muted-foreground">{passwordMessage}</p>}
           <Button variant="gold" size="sm" disabled={!currentPassword || newPassword.length < 8 || changePassword.isPending} onClick={() => changePassword.mutate()}>
@@ -354,6 +417,7 @@ export function ProfilePage() {
           </Button>
         </CardContent>
       </Card>
+      )}
     </div>
   )
 }

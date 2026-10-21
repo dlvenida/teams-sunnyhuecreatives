@@ -183,9 +183,10 @@ export function TopBar({ onMenu }: { onMenu?: () => void }) {
   const { data: current } = useQuery({ queryKey: ["topbar-clock-status"], queryFn: () => apiFetch<TimeClockEntry | null>("/time-clock/current"), enabled: !!user && user.role === "va", refetchInterval: 20_000 })
 
   return (
-    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-border/70 bg-card/85 px-4 backdrop-blur-xl">
-      <button className="rounded-lg p-1.5 hover:bg-muted lg:hidden" onClick={onMenu} aria-label="Open menu"><Menu className="h-5 w-5" /></button>
-      <div className="min-w-0 flex-1">
+    <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b border-border/70 bg-card/85 px-2.5 backdrop-blur-xl sm:gap-3 sm:px-4">
+      <button className="shrink-0 rounded-lg p-1.5 hover:bg-muted lg:hidden" onClick={onMenu} aria-label="Open menu"><Menu className="h-5 w-5" /></button>
+      <div className="flex-1 min-[420px]:hidden" />
+      <div className="hidden min-w-0 flex-1 min-[420px]:block">
         <p className="truncate text-[13px] font-semibold">Sunny Hue Creatives <span className="font-normal text-muted-foreground">/ {isAdmin ? "Admin" : user?.role === "auditor" ? "Auditor" : "My workspace"}</span></p>
         <p className="hidden text-[10px] text-muted-foreground sm:block">{!isAdmin && current ? "You're on the clock — keep going!" : "Let's make today productive"}</p>
       </div>

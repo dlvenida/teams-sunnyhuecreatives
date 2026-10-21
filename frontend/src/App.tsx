@@ -23,6 +23,8 @@ import { TimeClockPage } from "@/app/timeclock/TimeClockPage"
 import { AnalyticsPage } from "@/app/admin/analytics/AnalyticsPage"
 import { NotificationsPage } from "@/app/notifications/NotificationsPage"
 import { NotFoundPage } from "@/app/not-found/NotFoundPage"
+import { VAClientsPage } from "@/app/va/clients/VAClientsPage"
+import { UserReportsPage } from "@/app/reports/UserReportsPage"
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -57,6 +59,8 @@ export default function App() {
                 <Route path="/admin/analytics" element={<AnalyticsPage />} />
                 <Route path="/admin/logs" element={<LogsPage />} />
                 <Route path="/admin/clients" element={<ClientsPage />} />
+                <Route path="/admin/user-reports" element={<UserReportsPage />} />
+                <Route path="/admin/time-clock" element={<TimeClockPage />} />
                 <Route path="/admin/profile" element={<ProfilePage />} />
               </Route>
             </Route>
@@ -83,6 +87,8 @@ export default function App() {
                 <Route path="/va/projects" element={<ProjectsPage />} />
                 <Route path="/va/time-clock" element={<TimeClockPage />} />
                 <Route path="/va/time-log" element={<VATimeLogPage />} />
+                <Route path="/va/clients" element={<VAClientsPage />} />
+                <Route path="/va/reports" element={<UserReportsPage />} />
                 <Route path="/va/profile" element={<ProfilePage />} />
                 <Route path="/va/booking" element={<BookingPage />} />
               </Route>

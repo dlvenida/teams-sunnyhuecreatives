@@ -1,4 +1,4 @@
-import { useMemo } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
@@ -8,7 +8,7 @@ import { formatDate } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TASK_STATUSES, PRIORITY_META, formatDuration } from "@/components/tasks/task-utils"
-import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, Flame, Lightbulb, ListTodo, Play, Sparkles, Sun, Sunrise, Sunset, Timer, X } from "lucide-react"
+import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, Volume2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const QUOTES = [
@@ -94,8 +94,216 @@ function MiniTask({ t, base }: { t: TaskItem; base: string }) {
   )
 }
 
+
+type VoiceGender = "female" | "male"
+interface BriefSection { text: string; feeling: "warm" | "happy" | "serious" | "calm" | "proud" }
+const FEMALE_HINTS = ["female", "zira", "samantha", "jenny", "aria", "serena", "karen", "moira", "tessa", "fiona", "veena", "allison", "ava", "susan", "catherine", "joana", "luciana"]
+const MALE_HINTS = ["male", "david", "daniel", "alex", "fred", "tom", "george", "james", "christopher", "mark", "guy", "christopher", "eric", "roger"]
+
+
+/** Build the spoken script from whatever is on the dashboard right now. */
+function buildBriefing(o: DashboardOverview, isAdmin: boolean, firstName: string): BriefSection[] {
+  const c = o.counts
+  const h = new Date().getHours()
+  const greeting = h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 17 ? "Good afternoon" : h >= 17 && h < 21 ? "Good evening" : "Good night"
+  const dateLine = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+  const out: BriefSection[] = []
+  out.push({ feeling: "warm", text: `${greeting}, ${firstName}! It's ${dateLine}. Here's what's happening on your dashboard today.` })
+  out.push({ feeling: "happy", text: `You have ${c.due_today} task${c.due_today === 1 ? "" : "s"} due today, ${c.done_this_week} done this week, and you've logged ${o.hours_today} hours today, ${o.hours_this_week} hours this week.` })
+  if (c.overdue) out.push({ feeling: "serious", text: `A quick heads-up: ${c.overdue} task${c.overdue === 1 ? " is" : "s are"} overdue. Clearing just one will change the whole feel of the day.` })
+  else out.push({ feeling: "proud", text: "Great news — nothing is overdue. You're right on track. Keep that streak alive!" })
+  for (const a of buildAdvice(o, isAdmin)) out.push({ feeling: a.tone === "danger" ? "serious" : a.tone === "warn" ? "serious" : a.tone === "primary" ? "happy" : "calm", text: `${a.title}. ${a.text}` })
+  if (o.today_tasks.length) out.push({ feeling: "calm", text: `Today's tasks are: ${o.today_tasks.slice(0, 5).map(t => `${t.title}, for ${t.client_name}`).join(". ")}.` })
+  if (o.needs_attention.length) out.push({ feeling: "serious", text: `Needs your attention: ${o.needs_attention.slice(0, 3).map(a => `${a.title}. ${a.detail}`).join(" ")}` })
+  if (o.live_clock.length) out.push({ feeling: "happy", text: isAdmin ? `Right now, ${o.live_clock.length} ${o.live_clock.length === 1 ? "person is" : "people are"} on the clock: ${o.live_clock.slice(0, 4).map(e => e.va_name || "a teammate").join(", ")}.` : "And good news — your clock is running, so your time is being captured automatically." })
+  if (o.upcoming.length) out.push({ feeling: "calm", text: `Coming up in the next seven days: ${o.upcoming.slice(0, 4).map(t => `${t.title}, due ${t.due_date ? formatDate(t.due_date) : "soon"}`).join(". ")}.` })
+  if (o.projects.length) out.push({ feeling: "calm", text: `Your projects: ${o.projects.slice(0, 4).map(pr => `${pr.name}, ${pr.task_total ? Math.round((pr.task_done / pr.task_total) * 100) : 0} percent complete`).join(". ")}.` })
+  if (isAdmin && o.team_load?.length) { const top = o.team_load[0]; out.push({ feeling: "calm", text: `Team load check: ${top.name} is the busiest with ${top.open} open tasks${top.overdue ? `, ${top.overdue} of them overdue` : ""}.` }) }
+  if (!isAdmin && o.tomorrow_tasks?.length) out.push({ feeling: "calm", text: `Tomorrow starts with: ${o.tomorrow_tasks.slice(0, 3).map(t => t.title).join(", ")}. A two-minute look tonight means a fast start in the morning.` })
+  const q = quoteOfDay()
+  out.push({ feeling: "warm", text: `And here's your quote of the day, from ${q.author}: "${q.text}" You've got this, ${firstName}. Let's make today shine!` })
+  return out
+}
+
+// Gentle prosody — close to natural speech (strong pitch/rate shifts are what sound robotic)
+const FEELING_PROSODY: Record<BriefSection["feeling"], { pitch: number; rate: number }> = {
+  warm: { pitch: 1.01, rate: 0.9 },
+  happy: { pitch: 1.03, rate: 0.92 },
+  proud: { pitch: 1.03, rate: 0.91 },
+  calm: { pitch: 1.0, rate: 0.88 },
+  serious: { pitch: 0.97, rate: 0.85 },
+}
+
+/** Score voices by how human they sound: Natural/Neural/Google/Premium first, novelty voices last. */
+function naturalScore(v: SpeechSynthesisVoice): number {
+  const n = v.name.toLowerCase()
+  let s = 0
+  if (n.includes("natural")) s += 120
+  if (n.includes("neural")) s += 115
+  if (n.includes("google us english")) s += 100
+  if (n.includes("google")) s += 60
+  if (n.includes("premium") || n.includes("enhanced")) s += 90
+  if (n.includes("samantha") || n.includes("jenny") || n.includes("aria") || n.includes("zira") || n.includes("david") || n.includes("daniel") || n.includes("alex")) s += 55
+  if (v.lang === "en-US") s += 25
+  if (v.lang?.toLowerCase().startsWith("en")) s += 10
+  if (["fred", "albert", "bad news", "bells", "boing", "bubbles", "cellos", "deranged", "hysterical", "pipe organ", "trinoids", "whisper", "zarvox", "junior", "ralph", "kathy", "compact"].some(x => n.includes(x))) s -= 200
+  return s
+}
+function sortedVoices(): SpeechSynthesisVoice[] {
+  if (!("speechSynthesis" in window)) return []
+  return window.speechSynthesis.getVoices()
+    .filter(v => v.lang?.toLowerCase().startsWith("en"))
+    .sort((a, b) => naturalScore(b) - naturalScore(a))
+}
+// The single smoothest voices, in preference order — no list shown to the user, we just pick the best available
+const FEMALE_BEST = ["jenny natural", "aria natural", "jenny", "aria", "google us english", "samantha enhanced", "samantha premium", "samantha", "zira", "serena", "karen", "allison", "ava", "fiona", "moira", "tessa"]
+const MALE_BEST = ["guy natural", "christopher natural", "ryan natural", "guy", "christopher", "google us english", "daniel", "alex", "david", "george", "james", "tom", "fred"]
+
+function bestVoiceFor(gender: VoiceGender): SpeechSynthesisVoice | null {
+  const voices = sortedVoices()
+  if (!voices.length) return null
+  const preferred = gender === "female" ? FEMALE_BEST : MALE_BEST
+  for (const name of preferred) {
+    const hit = voices.find(v => v.name.toLowerCase().includes(name))
+    if (hit) return hit
+  }
+  const hints = gender === "female" ? FEMALE_HINTS : MALE_HINTS
+  return voices.find(v => hints.some(h => v.name.toLowerCase().includes(h))) || voices[0]
+}
+function voiceMatchesGender(v: SpeechSynthesisVoice, gender: VoiceGender): boolean {
+  const hints = gender === "female" ? FEMALE_HINTS : MALE_HINTS
+  return hints.some(h => v.name.toLowerCase().includes(h))
+}
+/** Split a section into short sentence chunks — long utterances are the main cause of the robotic drone. */
+function toSentences(text: string): string[] {
+  return (text.match(/[^.!?…]+[.!?…]+["']?|[^.!?…]+$/g) || [text]).map(s => s.trim()).filter(Boolean)
+}
+
+/** Talking-person dashboard reader: press play, it greets you and reads the dashboard aloud. */
+function DashboardReader({ overview, isAdmin, firstName, autoPlay = false, onClose }: { overview: DashboardOverview; isAdmin: boolean; firstName: string; autoPlay?: boolean; onClose?: () => void }) {
+  const autoPlayedRef = useRef(false)
+  const [gender, setGender] = useState<VoiceGender>("female")
+  const [speaking, setSpeaking] = useState(false)
+  const [paused, setPaused] = useState(false)
+  const [current, setCurrent] = useState(-1)
+  const [showScript, setShowScript] = useState(false)
+  const [, setAllVoices] = useState<SpeechSynthesisVoice[]>([])
+  const sectionsRef = useRef<BriefSection[]>([])
+  const supported = typeof window !== "undefined" && "speechSynthesis" in window
+  const sections = useMemo(() => buildBriefing(overview, isAdmin, firstName), [overview, isAdmin, firstName])
+  sectionsRef.current = sections
+  const persona = gender === "female" ? { emoji: "👩🏽", name: "Sunny", label: "Female voice" } : { emoji: "👨🏽", name: "Hue", label: "Male voice" }
+
+  useEffect(() => {
+    if (!supported) return
+    const load = () => setAllVoices(sortedVoices())
+    load()
+    window.speechSynthesis.addEventListener?.("voiceschanged", load)
+    return () => { window.speechSynthesis.removeEventListener?.("voiceschanged", load); window.speechSynthesis.cancel() }
+  }, [supported])
+
+  const stop = () => { if (supported) window.speechSynthesis.cancel(); setSpeaking(false); setPaused(false); setCurrent(-1) }
+  const hide = () => { stop(); onClose?.() }
+
+  useEffect(() => {
+    if (!autoPlay || autoPlayedRef.current) return
+    autoPlayedRef.current = true
+    const id = setTimeout(() => speakFrom(0), 350) // let voices load, then start reading right away
+    return () => clearTimeout(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const speakFrom = (startIndex: number) => {
+    if (!supported) return
+    window.speechSynthesis.cancel()
+    const voice = bestVoiceFor(gender)
+    const matched = voice ? voiceMatchesGender(voice, gender) : false
+    const list = sectionsRef.current
+    // Flatten to sentence chunks for a natural, conversational cadence
+    const chunks: { idx: number; text: string; feeling: BriefSection["feeling"]; last: boolean }[] = []
+    list.slice(startIndex).forEach((section, offset) => {
+      const parts = toSentences(section.text)
+      parts.forEach((part, pi) => chunks.push({ idx: startIndex + offset, text: part, feeling: section.feeling, last: offset === list.slice(startIndex).length - 1 && pi === parts.length - 1 }))
+    })
+    chunks.forEach((chunk) => {
+      const u = new SpeechSynthesisUtterance(chunk.text)
+      if (voice) { u.voice = voice; u.lang = voice.lang }
+      const prosody = FEELING_PROSODY[chunk.feeling]
+      // Only nudge pitch if the available voice doesn't match the chosen gender — and only gently
+      u.pitch = matched ? prosody.pitch : Math.min(1.12, Math.max(0.85, prosody.pitch * (gender === "female" ? 1.04 : 0.94)))
+      u.rate = prosody.rate
+      u.volume = 0.9 // soft and smooth, not shouty
+      u.onstart = () => { setCurrent(chunk.idx); setSpeaking(true); setPaused(false) }
+      u.onend = () => { if (chunk.last) { setSpeaking(false); setCurrent(-1) } }
+      u.onerror = () => { if (chunk.last) { setSpeaking(false); setCurrent(-1) } }
+      window.speechSynthesis.speak(u)
+    })
+    setSpeaking(true); setPaused(false)
+  }
+
+  const togglePause = () => {
+    if (!supported) return
+    if (paused) { window.speechSynthesis.resume(); setPaused(false) }
+    else { window.speechSynthesis.pause(); setPaused(true) }
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-primary/25 bg-gradient-to-r from-primary/[0.07] via-card to-amber-50/60 shadow-sm dark:to-amber-950/20">
+      <div className="flex flex-wrap items-center gap-3 p-3.5 sm:gap-4 sm:p-4">
+        {/* Talking person */}
+        <div className="relative shrink-0">
+          <div className={cn("flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-4xl ring-2 ring-primary/30", speaking && !paused && "animate-bounce")}>{persona.emoji}</div>
+          <span className={cn("absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full border-2 border-card text-white", speaking && !paused ? "bg-green-500" : "bg-slate-400")}>
+            {speaking && !paused ? <span className="flex items-end gap-[2px]">{[0, 1, 2].map(i => <span key={i} className="w-[3px] animate-pulse rounded-full bg-white" style={{ height: `${7 + i * 3}px`, animationDelay: `${i * 120}ms` }} />)}</span> : <Volume2 className="h-3 w-3" />}
+          </span>
+          {/* mouth */}
+          <span className={cn("absolute bottom-[13px] left-1/2 h-1.5 -translate-x-1/2 rounded-full bg-slate-700/70 transition-all", speaking && !paused ? "w-4 animate-ping" : "w-2.5")} />
+        </div>
+        <div className="min-w-[180px] flex-1">
+          <p className="text-sm font-extrabold">Meet {persona.name} — your dashboard reader</p>
+          <p className="text-[15px] leading-snug text-muted-foreground">
+            {speaking ? (paused ? "Paused — tap resume and I'll keep reading." : current >= 0 && sections[current] ? sections[current].text : "Reading your updates…")
+              : `Press play and I'll say ${new Date().getHours() < 12 ? "good morning" : new Date().getHours() < 17 ? "good afternoon" : "good evening"} and read your latest updates out loud — with feeling!`}
+          </p>
+          {!supported && <p className="mt-1 text-xs font-semibold text-red-600">Sorry — your browser doesn't support speech. You can still read the script below.</p>}
+        </div>
+        {/* Controls */}
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+          <div className="flex overflow-hidden rounded-full border text-xs font-bold">
+            {(["female", "male"] as VoiceGender[]).map(g => (
+              <button key={g} onClick={() => { setGender(g); if (speaking) stop() }} className={cn("px-3 py-2 capitalize transition", gender === g ? "bg-primary text-primary-foreground" : "bg-card hover:bg-muted")}>{g === "female" ? "👩🏽 Female" : "👨🏽 Male"}</button>
+            ))}
+          </div>
+          {!speaking ? (
+            <Button variant="gold" size="lg" disabled={!supported} onClick={() => speakFrom(0)}><Play className="h-4 w-4 fill-current" /> Play briefing</Button>
+          ) : (<>
+            <Button variant="gold" size="lg" onClick={togglePause}>{paused ? <><Play className="h-4 w-4 fill-current" /> Resume</> : <><Pause className="h-4 w-4 fill-current" /> Pause</>}</Button>
+            <Button variant="outline" size="lg" onClick={stop}><Square className="h-4 w-4 fill-current" /> Stop</Button>
+          </>)}
+          <Button variant="ghost" size="sm" onClick={() => setShowScript(s => !s)}>{showScript ? "Hide script" : "Read script"}</Button>
+          {onClose && <Button variant="ghost" size="sm" onClick={hide} title="Hide reader"><X className="h-4 w-4" /> Hide</Button>}
+        </div>
+      </div>
+      {/* Speaking progress */}
+      {sections.length > 0 && (speaking || current >= 0) && (
+        <div className="flex gap-1 px-4 pb-3">{sections.map((_, i) => <span key={i} className={cn("h-1.5 flex-1 rounded-full transition-colors", i < current ? "bg-primary" : i === current ? "animate-pulse bg-primary" : "bg-primary/15")} />)}</div>
+      )}
+      {showScript && (
+        <div className="space-y-2 border-t bg-card/70 px-4 py-3">
+          {sections.map((s, i) => (
+            <p key={i} className={cn("text-[15px] leading-relaxed", i === current ? "font-bold text-primary" : "text-muted-foreground")}>
+              <button className="mr-2 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary hover:bg-primary/20" title="Read from here" onClick={() => speakFrom(i)}>▶ {s.feeling}</button>{s.text}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function DashboardPage() {
   const qc = useQueryClient()
+  const [readerOpen, setReaderOpen] = useState(false)
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
   const base = isAdmin ? "/admin" : "/va"
@@ -118,12 +326,12 @@ export function DashboardPage() {
       <div className="px-1 pt-2 sm:px-2">
         <p className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.14em] text-primary"><GreetIcon className="h-4 w-4" /> {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
-          <h1 className="whitespace-nowrap font-extrabold leading-[1.05] tracking-tight" style={{ fontSize: "clamp(1.9rem, 4vw, 2.9rem)" }}>{greetLabel}, <span className="gradient-text">{firstName}</span> <span className={cn("inline-block", emojiClass)} aria-hidden="true">{emoji}</span><span className="emoji-wave inline-block" aria-hidden="true">👋</span></h1>
-          <div className="flex gap-6 pb-1 text-center sm:gap-8">
+          <h1 className="break-words font-extrabold leading-[1.05] tracking-tight" style={{ fontSize: "clamp(1.65rem, 7vw, 2.9rem)" }}>{greetLabel}, <span className="gradient-text">{firstName}</span> <span className={cn("inline-block", emojiClass)} aria-hidden="true">{emoji}</span><span className="emoji-wave inline-block" aria-hidden="true">👋</span></h1>
+          <div className="flex flex-wrap gap-4 pb-1 text-center sm:gap-8">
             {[{ label: "Due today", v: c.due_today, icon: CalendarDays }, { label: "Overdue", v: c.overdue, icon: AlertTriangle }, { label: "Done this week", v: c.done_this_week, icon: CheckCircle2 }].map(s => (
               <div key={s.label}>
                 <s.icon className={cn("mx-auto h-5 w-5", s.label === "Overdue" && c.overdue > 0 ? "text-red-500" : "text-primary")} />
-                <div className={cn("mt-1 text-3xl font-extrabold leading-none", s.label === "Overdue" && c.overdue > 0 && "text-red-600")}>{s.v}</div>
+                <div className={cn("mt-1 text-2xl font-extrabold leading-none sm:text-3xl", s.label === "Overdue" && c.overdue > 0 && "text-red-600")}>{s.v}</div>
                 <div className="mt-1 text-[11px] font-medium text-muted-foreground">{s.label}</div>
               </div>
             ))}
@@ -131,14 +339,17 @@ export function DashboardPage() {
         </div>
         <div className="mt-4 max-w-3xl">
           <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Quote of the day</p>
-          <p className="mt-1 flex items-start gap-2.5 text-lg font-medium leading-snug"><Sparkles className="mt-1 h-4.5 w-4.5 shrink-0 text-primary" /><span>“{quote.text}” <span className="whitespace-nowrap text-sm text-muted-foreground">— {quote.author}</span></span></p>
+          <p className="mt-1 flex items-start gap-2.5 text-lg font-medium leading-snug"><Sparkles className="mt-1 h-4.5 w-4.5 shrink-0 text-primary" /><span>“{quote.text}” <span className="text-sm text-muted-foreground">— {quote.author}</span></span></p>
         </div>
-        <div className="mt-5 flex flex-wrap gap-2">
+        <div className="mt-5 flex flex-wrap gap-2 [&>a]:min-w-0 [&_button]:w-full min-[480px]:[&_button]:w-auto">
           <Link to={`${base}/tasks`}><Button variant="gold" size="lg"><ListTodo className="h-4 w-4" /> Open Task Board</Button></Link>
           {!isAdmin && <Link to="/va/time-clock"><Button variant="outline" size="lg"><Play className="h-4 w-4" /> Clock In</Button></Link>}
           <Link to={`${base}/projects`}><Button variant="outline" size="lg">Projects <ArrowRight className="h-3.5 w-3.5" /></Button></Link>
+          <Button variant="outline" size="lg" onClick={() => setReaderOpen(true)}><Volume2 className="h-4 w-4 text-primary" /> Listen to updates</Button>
         </div>
       </div>
+
+      {readerOpen && <div id="dashboard-reader" className="scroll-mt-20"><DashboardReader overview={overview} isAdmin={isAdmin} firstName={firstName} autoPlay onClose={() => setReaderOpen(false)} /></div>}
 
       {/* Smart advice — time & workload aware */}
       <div>
@@ -146,8 +357,8 @@ export function DashboardPage() {
         <div className="grid gap-3 lg:grid-cols-3">
           {buildAdvice(overview, isAdmin).map((a, i) => (
             <div key={i} className={cn("monday-card rounded-2xl border p-4", a.tone === "danger" && "border-red-200 bg-red-50/70", a.tone === "warn" && "border-amber-200 bg-amber-50/70", a.tone === "calm" && "border-primary/25 bg-primary/[0.04]", a.tone === "primary" && "bg-card")}>
-              <p className="flex items-center gap-2 text-[13px] font-bold"><span className="text-base">{a.emoji}</span>{a.title}</p>
-              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{a.text}</p>
+              <p className="flex items-center gap-2 text-sm font-bold"><span className="text-lg">{a.emoji}</span>{a.title}</p>
+              <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">{a.text}</p>
             </div>
           ))}
         </div>
@@ -196,7 +407,7 @@ export function DashboardPage() {
               <div key={v.name} className="flex items-center gap-3 text-xs">
                 <span className="w-20 truncate font-semibold">{v.name}</span>
                 <span className="h-2 flex-1 rounded-full bg-slate-100"><span className={cn("block h-2 rounded-full", v.overdue ? "bg-red-400" : v.open >= 5 ? "bg-amber-400" : "bg-green-400")} style={{ width: `${Math.min(100, v.open * 14)}%` }} /></span>
-                <span className="whitespace-nowrap text-muted-foreground">{v.open} open{v.overdue ? ` · ${v.overdue} overdue` : ""}{v.due_today ? ` · ${v.due_today} today` : ""}</span>
+                <span className="text-muted-foreground">{v.open} open{v.overdue ? ` · ${v.overdue} overdue` : ""}{v.due_today ? ` · ${v.due_today} today` : ""}</span>
               </div>
             ))}
             {(overview.team_load ?? []).length === 0 && <p className="text-xs text-muted-foreground">No open tasks assigned yet.</p>}

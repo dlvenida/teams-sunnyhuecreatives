@@ -165,6 +165,12 @@ html {
   font-size: 14px;
 }
 
+html, body {
+  overflow-x: clip;
+  max-width: 100%;
+}
+img, svg, canvas, video { max-width: 100%; }
+
 body {
   font-family: var(--font-sans);
   font-size: 0.875rem;
@@ -360,3 +366,10 @@ h1, h2, h3, h4 {
   outline: 2px solid var(--ring);
   border-color: transparent;
 }
+
+/* ── Mobile hardening: no horizontal page scroll, no iOS input zoom, safe modals ── */
+@media (max-width: 640px) {
+  input, select, textarea { font-size: 16px !important; }
+  table { -webkit-overflow-scrolling: touch; }
+}
+.fixed.inset-0 { overscroll-behavior: contain; }

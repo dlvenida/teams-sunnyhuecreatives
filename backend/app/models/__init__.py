@@ -252,6 +252,10 @@ class TimeClockEntry(Base):
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[ClockStatus] = mapped_column(Enum(ClockStatus, name="clock_status"), default=ClockStatus.running)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_adjusted: Mapped[bool] = mapped_column(Boolean, default=False)
+    adjustment_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_adjusted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_adjustment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     va: Mapped["VA"] = relationship()
@@ -430,3 +434,50 @@ class SystemSetting(Base):
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class UserReport(Base):
+    """A report created by a user (usually a VA) addressed to Administrators and Auditors."""
+    __tablename__ = "user_reports"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    reporter_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    reporter_va_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="SET NULL"), nullable=True)
+    reporter_name: Mapped[str] = mapped_column(String(255), default="")
+    reporter_role: Mapped[str] = mapped_column(String(30), default="va")
+    category: Mapped[str] = mapped_column(String(50), default="general")  # client | task | time_clock | payroll | technical | general
+    title: Mapped[str] = mapped_column(String(500))
+    body: Mapped[str] = mapped_column(Text)
+    client_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="SET NULL"), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="open", index=True)  # open | acknowledged | resolved
+    admin_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    handled_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    reporter: Mapped["User"] = relationship(foreign_keys=[reporter_user_id])
+    client: Mapped["Client | None"] = relationship()
+    project: Mapped["Project | None"] = relationship()
+    task: Mapped["Task | None"] = relationship()
+
+
+class TimeClockAdjustment(Base):
+    """Audit trail for a VA (or admin) adjusting a time-clock entry after the fact."""
+    __tablename__ = "time_clock_adjustments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entry_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("time_clock_entries.id", ondelete="CASCADE"), index=True)
+    va_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"), index=True)
+    adjusted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    adjusted_by_name: Mapped[str] = mapped_column(String(255), default="")
+    adjusted_by_role: Mapped[str] = mapped_column(String(30), default="va")
+    reason: Mapped[str] = mapped_column(Text)
+    before: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    after: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    work_log_synced: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    entry: Mapped["TimeClockEntry"] = relationship()
+    va: Mapped["VA"] = relationship()

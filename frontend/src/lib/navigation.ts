@@ -16,6 +16,7 @@ import {
   FolderKanban,
   Timer,
   Bell,
+  Flag,
 } from "lucide-react"
 
 export interface NavItem {
@@ -35,6 +36,7 @@ export const ADMIN_NAV: NavItem[] = [
   { to: "/admin/logs", label: "All Logs", icon: FileText, keywords: ["work logs", "entries", "approve"], section: "Operations", color: "#f59e0b" },
   { to: "/admin/payroll", label: "VA Payroll", icon: DollarSign, keywords: ["pay", "salary", "php", "usd"], section: "Operations", color: "#10b981" },
   { to: "/admin/reports", label: "Reports", icon: BarChart3, keywords: ["client report", "hours"], section: "Operations", color: "#3b82f6" },
+  { to: "/admin/user-reports", label: "Team Reports", icon: Flag, keywords: ["report", "flag", "issue", "va report", "inbox"], section: "Operations", color: "#f43f5e" },
   { to: "/admin/analytics", label: "Analytics", icon: LineChart, keywords: ["auditor", "activity", "monitor", "low activity", "team analytics"], section: "Operations", color: "#0ea5e9" },
   { to: "/admin/invoices", label: "Invoices", icon: Receipt, keywords: ["billing", "invoice", "payment"], section: "Operations", color: "#f97316" },
   { to: "/admin/clients", label: "Clients", icon: Building2, keywords: ["sub-clients", "client list", "archive"], section: "Manage", color: "#a855f7" },
@@ -51,6 +53,8 @@ export const VA_NAV: NavItem[] = [
   { to: "/va/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "client project"], section: "Workspace", color: "#06b6d4" },
   { to: "/va/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock in", "clock out", "timer"], section: "Workspace", color: "#22c55e" },
   { to: "/va/time-log", label: "Log Time", icon: Clock, keywords: ["submit", "hours", "work"], section: "Workspace", color: "#f59e0b" },
+  { to: "/va/clients", label: "Clients", icon: Building2, keywords: ["assigned clients", "my clients", "client list"], section: "Manage", color: "#a855f7" },
+  { to: "/va/reports", label: "My Reports", icon: Flag, keywords: ["report", "flag", "issue", "report to admin", "auditor"], section: "Manage", color: "#f43f5e" },
   { to: "/va/booking", label: "Booking", icon: Calendar, keywords: ["schedule", "appointment"], section: "Manage", color: "#06b6d4" },
   { to: "/notifications", label: "Notifications", icon: Bell, keywords: ["alerts", "comments", "updates", "unread"], section: "System", color: "#f43f5e" },
   { to: "/va/profile", label: "Profile", icon: User, keywords: ["account", "theme", "password"], section: "System", color: "#64748b" },
@@ -59,6 +63,7 @@ export const VA_NAV: NavItem[] = [
 export const AUDITOR_NAV: NavItem[] = [
   { to: "/admin/analytics", label: "Analytics", icon: LineChart, keywords: ["auditor", "activity", "monitor", "low activity"], section: "Workspace", color: "#0ea5e9" },
   { to: "/admin/logs", label: "All Logs", icon: FileText, keywords: ["work logs", "entries", "review"], section: "Operations", color: "#f59e0b" },
+  { to: "/admin/user-reports", label: "Team Reports", icon: Flag, keywords: ["report", "flag", "issue", "va report", "inbox"], section: "Operations", color: "#f43f5e" },
   { to: "/admin/clients", label: "Clients", icon: Building2, keywords: ["client list", "view client"], section: "Manage", color: "#a855f7" },
   { to: "/notifications", label: "Notifications", icon: Bell, keywords: ["alerts", "comments", "updates", "unread"], section: "System", color: "#f43f5e" },
   { to: "/admin/profile", label: "Profile", icon: User, keywords: ["account", "theme", "password"], section: "System", color: "#64748b" },

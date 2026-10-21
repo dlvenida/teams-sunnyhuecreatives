@@ -315,7 +315,65 @@ export interface TimeClockEntry {
   elapsed_seconds: number
   status: ClockStatus
   notes?: string | null
+  is_adjusted?: boolean
+  adjustment_count?: number
+  last_adjusted_at?: string | null
+  last_adjustment_reason?: string | null
   created_at?: string | null
+}
+
+export interface TimeClockAdjustment {
+  id: string
+  entry_id: string
+  va_id: string
+  va_name?: string | null
+  adjusted_by_name: string
+  adjusted_by_role: string
+  reason: string
+  before?: Record<string, unknown> | null
+  after?: Record<string, unknown> | null
+  work_log_synced: boolean
+  created_at?: string | null
+}
+
+export interface VAAssignedClient {
+  client_id: string
+  name: string
+  billing_type: string
+  is_active: boolean
+  total_tasks: number
+  open_tasks: number
+  done_tasks: number
+  overdue_tasks: number
+  hours: string
+  pending_hours: string
+  logs: number
+  last_log_date?: string | null
+  next_due?: string | null
+  sub_clients: string[]
+  projects: { id: string; name: string; color: string; status: string; task_total: number; task_done: number }[]
+  tasks: { id: string; title: string; status: string; priority: string; due_date?: string | null; project_name?: string | null }[]
+}
+
+export interface UserReport {
+  id: string
+  reporter_user_id: string
+  reporter_va_id?: string | null
+  reporter_name: string
+  reporter_role: string
+  category: "client" | "task" | "time_clock" | "payroll" | "technical" | "general" | string
+  title: string
+  body: string
+  client_id?: string | null
+  client_name?: string | null
+  project_id?: string | null
+  project_name?: string | null
+  task_id?: string | null
+  task_title?: string | null
+  status: "open" | "acknowledged" | "resolved" | string
+  admin_note?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface ClientFinancials {

@@ -230,10 +230,94 @@ class TaskComment(Base):
     task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"))
     author_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     author_name: Mapped[str] = mapped_column(String(255), default="")
+    author_role: Mapped[str] = mapped_column(String(30), default="va")
     body: Mapped[str] = mapped_column(Text)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("task_comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    mentions: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # [{"user_id": "...", "name": "..."}]
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     task: Mapped["Task"] = relationship(back_populates="comments")
+
+
+class ProjectComment(Base):
+    """Discussion thread on a project (same collaboration shape as TaskComment)."""
+    __tablename__ = "project_comments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    author_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    author_name: Mapped[str] = mapped_column(String(255), default="")
+    author_role: Mapped[str] = mapped_column(String(30), default="va")
+    body: Mapped[str] = mapped_column(Text)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("project_comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    mentions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped["Project"] = relationship()
+
+
+class CommentReaction(Base):
+    """One emoji reaction per user per comment. scope = task | project."""
+    __tablename__ = "comment_reactions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scope: Mapped[str] = mapped_column(String(20), index=True)  # task | project
+    comment_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_name: Mapped[str] = mapped_column(String(255), default="")
+    emoji: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CommentAttachment(Base):
+    """Image attached to a comment. Always stored via services.storage (Railway bucket
+    in production, local disk in dev) as an AVIF-optimized copy under
+    {scope}-comments/{scope_id}/{id}.avif — the original upload is never kept."""
+    __tablename__ = "comment_attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scope: Mapped[str] = mapped_column(String(20), index=True)  # task | project
+    scope_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)  # task_id | project_id
+    comment_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    uploaded_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    uploader_name: Mapped[str] = mapped_column(String(255), default="")
+    storage_key: Mapped[str] = mapped_column(String(512), default="")
+    storage_backend: Mapped[str] = mapped_column(String(20), default="local")  # bucket | local | link
+    link_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(30), nullable=True)  # google_drive | dropbox
+    original_name: Mapped[str] = mapped_column(String(255), default="image")
+    original_size: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    original_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    original_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    format: Mapped[str] = mapped_column(String(10), default="avif")
+    is_annotation: Mapped[bool] = mapped_column(Boolean, default=False)
+    annotated_from_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProjectMeetup(Base):
+    __tablename__ = "project_meetups"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(500))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(500), nullable=True)  # room or meeting URL
+    attendees: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # [{"user_id": "...", "name": "..."}]
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_by_name: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped["Project"] = relationship()
 
 
 class TimeClockEntry(Base):

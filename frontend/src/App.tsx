@@ -60,6 +60,8 @@ export default function App() {
                 <Route path="/admin/logs" element={<LogsPage />} />
                 <Route path="/admin/clients" element={<ClientsPage />} />
                 <Route path="/admin/user-reports" element={<UserReportsPage />} />
+                <Route path="/admin/tasks" element={<TasksPage />} />
+                <Route path="/admin/projects" element={<ProjectsPage />} />
                 <Route path="/admin/time-clock" element={<TimeClockPage />} />
                 <Route path="/admin/profile" element={<ProfilePage />} />
               </Route>

@@ -334,19 +334,124 @@ class TaskResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MentionIn(BaseModel):
+    user_id: UUID
+    name: str
+
+
 class TaskCommentCreate(BaseModel):
     body: str = Field(min_length=1)
+    parent_id: UUID | None = None
+    mentions: list[MentionIn] = []
+    attachment_ids: list[UUID] = []
+
+
+class TaskCommentUpdate(BaseModel):
+    body: str = Field(min_length=1)
+    mentions: list[MentionIn] = []
+
+
+class ReactionToggle(BaseModel):
+    emoji: str = Field(min_length=1, max_length=16)
+
+
+class LinkAttachmentCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+
+
+class AttachmentResponse(BaseModel):
+    id: UUID
+    comment_id: UUID | None = None
+    original_name: str
+    link_url: str | None = None
+    provider: str | None = None
+    kind: str = "image"
+    size_bytes: int
+    original_size: int
+    width: int | None = None
+    height: int | None = None
+    original_width: int | None = None
+    original_height: int | None = None
+    format: str = "avif"
+    storage_backend: str = "local"
+    is_annotation: bool = False
+    annotated_from_id: UUID | None = None
+    created_at: datetime | None = None
+    url: str
+
+
+class ReactionSummary(BaseModel):
+    emoji: str
+    count: int
+    users: list[str] = []
+    reacted_by_me: bool = False
 
 
 class TaskCommentResponse(BaseModel):
     id: UUID
-    task_id: UUID
+    task_id: UUID | None = None
+    project_id: UUID | None = None
     author_user_id: UUID
     author_name: str
+    author_role: str = "va"
     body: str
+    parent_id: UUID | None = None
+    mentions: list[MentionIn] = []
+    is_pinned: bool = False
+    edited_at: datetime | None = None
     created_at: datetime
+    reactions: list[ReactionSummary] = []
+    attachments: list[AttachmentResponse] = []
 
     model_config = {"from_attributes": True}
+
+
+class ProjectCommentCreate(TaskCommentCreate):
+    pass
+
+
+class ProjectCommentResponse(TaskCommentResponse):
+    pass
+
+
+class MeetupCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    notes: str | None = None
+    starts_at: datetime
+    ends_at: datetime | None = None
+    location: str | None = None
+    attendees: list[MentionIn] = []
+
+
+class MeetupUpdate(BaseModel):
+    title: str | None = None
+    notes: str | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    location: str | None = None
+    attendees: list[MentionIn] | None = None
+
+
+class MeetupResponse(BaseModel):
+    id: UUID
+    project_id: UUID
+    title: str
+    notes: str | None = None
+    starts_at: datetime
+    ends_at: datetime | None = None
+    location: str | None = None
+    attendees: list[MentionIn] = []
+    created_by_name: str = ""
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class TeamMemberResponse(BaseModel):
+    user_id: UUID
+    name: str
+    role: str
+    va_id: UUID | None = None
 
 
 class ClockInRequest(BaseModel):

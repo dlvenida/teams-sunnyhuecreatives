@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { formatDate } from "@/lib/utils"
-import { FolderKanban, Plus, Search, Trash2, X } from "lucide-react"
-import { Link } from "react-router-dom"
+import { ProjectDetail } from "@/components/projects/ProjectDetail"
+import { FolderKanban, Pencil, Plus, Search, Trash2, X } from "lucide-react"
 
 const empty = { name: "", client_id: "", description: "", color: "#ec4899", status: "active" as ProjectStatus, cadence: "weekly" as Cadence, start_date: "", due_date: "" }
 const CADENCE_LABEL: Record<Cadence, string> = { weekly: "Weekly", biweekly: "Bi-weekly", monthly: "Monthly" }
@@ -19,6 +19,7 @@ export function ProjectsPage() {
   const [clientId, setClientId] = useState("")
   const [statusF, setStatusF] = useState("")
   const [modal, setModal] = useState<null | { mode: "create" | "edit"; project?: Project }>(null)
+  const [detail, setDetail] = useState<Project | null>(null)
   const [form, setForm] = useState(empty)
   const [error, setError] = useState("")
 
@@ -59,7 +60,7 @@ export function ProjectsPage() {
                 <div className="h-1.5" style={{ background: p.color }} />
                 <CardContent className="p-4 space-y-2">
                   <div className="flex items-start justify-between gap-2">
-                    <button className="text-left" onClick={() => isAdmin && openEdit(p)}><span className="flex items-center gap-1.5 text-sm font-semibold"><FolderKanban className="h-4 w-4" style={{ color: p.color }} />{p.name}</span></button>
+                    <button className="text-left" onClick={() => setDetail(p)} title="Open project — Tasks, Details, Discussion, Meet-ups"><span className="flex items-center gap-1.5 text-sm font-semibold hover:underline"><FolderKanban className="h-4 w-4" style={{ color: p.color }} />{p.name}</span></button>
                     <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] capitalize">{p.status.replace("_", " ")}</span>
                   </div>
                   {p.description && <p className="text-xs text-muted-foreground line-clamp-2">{p.description}</p>}
@@ -67,8 +68,9 @@ export function ProjectsPage() {
                   <div><div className="flex justify-between text-[11px]"><span>{p.task_done}/{p.task_total} done · {p.task_in_progress} in progress</span><span>{pct}%</span></div><div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full" style={{ width: `${pct}%`, background: p.color }} /></div></div>
                   <div className="flex items-center justify-between pt-1">
                     <span className="text-[11px] text-muted-foreground">{p.total_hours}h logged</span>
-                    <span className="flex gap-2">
-                      <Link className="text-xs text-primary underline" to={`${isAdmin ? "/admin" : "/va"}/tasks?project=${p.id}`}>Open Task Board →</Link>
+                    <span className="flex items-center gap-2">
+                      <button className="text-xs text-primary underline" onClick={() => setDetail(p)}>Tasks · Discussion · Meet-ups →</button>
+                      {isAdmin && <button title="Edit project" onClick={() => openEdit(p)}><Pencil className="h-3.5 w-3.5 text-muted-foreground" /></button>}
                       {isAdmin && <button onClick={() => { if (confirm("Delete project? Tasks will be kept unlinked.")) remove.mutate(p.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></button>}
                     </span>
                   </div>
@@ -79,6 +81,7 @@ export function ProjectsPage() {
           {filtered.length === 0 && <p className="text-sm text-muted-foreground">No projects yet.{isAdmin ? " Create one to group tasks per client." : ""}</p>}
         </div>
       )}
+      {detail && <ProjectDetail project={detail} onClose={() => setDetail(null)} />}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setModal(null)}>
           <div className="w-full max-w-md rounded-xl bg-card p-5 shadow-xl" onClick={e => e.stopPropagation()}>

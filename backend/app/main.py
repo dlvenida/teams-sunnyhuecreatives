@@ -10,6 +10,7 @@ from app.routers import (
     agent_control,
     auth,
     clients,
+    collaboration,
     dashboard,
     invoices,
     notifications,
@@ -149,6 +150,7 @@ app.include_router(tasks.router)
 app.include_router(timeclock.router)
 app.include_router(user_reports.router)
 app.include_router(notifications.router)
+app.include_router(collaboration.router)
 app.include_router(agent.router)
 app.include_router(agent_control.router)
 

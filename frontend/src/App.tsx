@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { getAuthUser } from "@/lib/api"
 import { ThemeProvider } from "@/components/theme/ThemeProvider"
+import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { ProtectedRoute } from "@/components/ProtectedRoute"
 import { AppShell } from "@/components/layout/AppShell"
 import { AuthShell } from "@/components/layout/AuthShell"
@@ -39,6 +40,7 @@ function RootRedirect() {
 export default function App() {
   return (
     <ThemeProvider>
+      <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <Routes>
@@ -100,6 +102,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
       </QueryClientProvider>
+      </ErrorBoundary>
     </ThemeProvider>
   )
 }

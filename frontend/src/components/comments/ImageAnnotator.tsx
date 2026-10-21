@@ -28,6 +28,7 @@ export function ImageAnnotator({ imageUrl, title, saving, onSave, onClose }: {
   const [marks, setMarks] = useState<Mark[]>([])
   const [redoStack, setRedoStack] = useState<Mark[]>([])
   const active = useRef<Mark | null>(null)
+  const [imgError, setImgError] = useState(false)
 
   const redraw = (all: Mark[]) => {
     const canvas = canvasRef.current, img = imgRef.current; if (!canvas || !img) return
@@ -62,6 +63,7 @@ export function ImageAnnotator({ imageUrl, title, saving, onSave, onClose }: {
       canvas.width = Math.round(img.naturalWidth * scale); canvas.height = Math.round(img.naturalHeight * scale)
       redraw([])
     }
+    img.onerror = () => setImgError(true)
     img.src = imageUrl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageUrl])
@@ -121,6 +123,7 @@ export function ImageAnnotator({ imageUrl, title, saving, onSave, onClose }: {
           </div>
         )}
 
+        {imgError && <p className="mb-2 rounded-lg border border-red-200 bg-red-50 p-2 text-[11px] text-red-600">Could not load this image for drawing. Close and try attaching it again.</p>}
         <canvas ref={canvasRef} className={`w-full rounded-lg border bg-white ${tool === "text" ? "cursor-text" : "cursor-crosshair"}`}
           onPointerDown={e => {
             const p = pos(e); (e.target as HTMLElement).setPointerCapture(e.pointerId)

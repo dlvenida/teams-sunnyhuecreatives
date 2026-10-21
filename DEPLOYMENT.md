@@ -9,12 +9,12 @@ Region: **Singapore** for everything (services: `southeast-asia` / `asia-southea
 | Service | Source | Region | Domain |
 |---------|--------|--------|--------|
 | `web` | `frontend/` (Dockerfile, nginx) | Singapore | `teams.sunnyhuecreatives.com` |
-| `api` | `backend/` (Dockerfile, FastAPI) | Singapore | `api.teams.sunnyhuecreatives.com` |
+| `api` | `backend/` (Dockerfile, FastAPI) | Singapore | `api.sunnyhuecreatives.com` |
 | `Postgres` | Railway PostgreSQL | Singapore | internal only |
 | Bucket `teams-shc-uploads` | Railway Bucket (S3-compatible) | `sin` | internal only |
 
 Connections:
-- `web` → `api`: frontend is built with `VITE_API_URL=https://api.teams.sunnyhuecreatives.com`
+- `web` → `api`: frontend is built with `VITE_API_URL=https://api.sunnyhuecreatives.com`
 - `api` → `Postgres`: `DATABASE_URL=${{Postgres.DATABASE_URL}}`
 - `api` → Bucket: `AWS_*` variables from the bucket credentials (profile images)
 
@@ -27,16 +27,16 @@ All resources created and connected; all deployments `SUCCESS` in `asia-southeas
 - `web` → `api` via `VITE_API_URL=${{api.API_URL}}` (build-time; also draws the canvas edge)
 - `api` health: `Uvicorn running`, `GET /health 200`, migrations 001→010 applied, seed complete
 
-**Only remaining step: DNS.** Add these records at the `sunnyhuecreatives.com` DNS provider:
+**DNS (live).** Records at the `sunnyhuecreatives.com` DNS provider (Cloudflare):
 
 | Type | Name | Value |
 |------|------|-------|
 | CNAME | `teams` | `0c46w7mq.up.railway.app` |
 | TXT | `_railway-verify.teams` | `railway-verify=d334e16d673aba13ee4ed1c76adb771161df2b77b4fd428bcbb6b069a0e7d021` |
-| CNAME | `api.teams` | `9fyk6za1.up.railway.app` |
-| TXT | `_railway-verify.api.teams` | `railway-verify=a313b0809dcaa31ba8797b268002165e7347c25749e7b6414e5b02b059e183d8` |
+| CNAME | `api` | `3izfkjk8.up.railway.app` |
 
-Then https://teams.sunnyhuecreatives.com goes live (certificates issue automatically).
+Both domains are verified with valid certificates: https://teams.sunnyhuecreatives.com
+(web) and https://api.sunnyhuecreatives.com (api, `GET /health` → `{"status":"ok"}`).
 Admin first login: `janelaurine@gmail.com` with the `ADMIN_PASSWORD` set in Railway
 (change it in Profile after logging in).
 
@@ -64,7 +64,7 @@ railway add --service web
 | `ADMIN_PASSWORD` | *(strong production password — not the local dev one)* |
 | `CORS_ORIGINS` | `https://teams.sunnyhuecreatives.com` |
 | `APP_URL` | `https://teams.sunnyhuecreatives.com` |
-| `API_URL` | `https://api.teams.sunnyhuecreatives.com` |
+| `API_URL` | `https://api.sunnyhuecreatives.com` |
 | `AGENT_API_KEY` | *(generate: `openssl rand -hex 32`)* |
 | `S3_ENDPOINT_URL` / `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` / `S3_BUCKET` | from `railway bucket credentials` |
 | `RESEND_API_KEY` | optional here — can also be set later in **Settings → Emails** |
@@ -78,13 +78,13 @@ railway service scale --service api southeast-asia=1
 
 Deploy: `cd backend && railway up --service api`, then
 `railway domain --service api` → generate domain, then add custom domain
-`api.teams.sunnyhuecreatives.com`.
+`api.sunnyhuecreatives.com`.
 
 ## 3. Web variables + deploy
 
 | Variable | Value |
 |----------|-------|
-| `VITE_API_URL` | `https://api.teams.sunnyhuecreatives.com` (build-time) |
+| `VITE_API_URL` | `https://api.sunnyhuecreatives.com` (build-time) |
 
 ```bash
 railway service scale --service web southeast-asia=1
@@ -105,7 +105,7 @@ Wait for the certificates to be issued (Railway shows "valid" on the domain).
 
 ## 5. Verify
 
-1. `https://api.teams.sunnyhuecreatives.com/health` → `{"status":"ok"}`
+1. `https://api.sunnyhuecreatives.com/health` → `{"status":"ok"}`
 2. `https://teams.sunnyhuecreatives.com` → login page loads
 3. Log in as admin; seeded clients/VAs appear on first API startup
 4. **Settings → Emails → Resend Setup**: paste the Resend API key, set From Email on a

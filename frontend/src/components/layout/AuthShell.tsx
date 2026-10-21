@@ -8,7 +8,6 @@ export function AuthShell() {
       <LoginBackground />
       <div className="relative z-10 w-full max-w-[880px]">
         <Outlet />
-        <p className="mt-4 text-center text-[10px] text-muted-foreground">Teams - Sunny Hue Creative - Developed by DLV IT Solutions</p>
       </div>
     </div>
   )

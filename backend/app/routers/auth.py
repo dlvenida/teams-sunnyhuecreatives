@@ -21,6 +21,7 @@ from app.schemas import (
     CreateAppUserRequest,
     CreateVAUserRequest,
     LoginRequest,
+    PinLoginRequest,
     RefreshRequest,
     TokenResponse,
     VAResponse,
@@ -29,14 +30,9 @@ from app.schemas import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Annotated[Session, Depends(get_db)]):
-    user = db.query(User).filter(User.email == body.email).first()
-    if not user or not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+def _issue_tokens(user: User, db: Session) -> TokenResponse:
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
-
     va_id = None
     name = user.display_name or None
     if user.role == UserRole.va:
@@ -47,7 +43,6 @@ def login(body: LoginRequest, db: Annotated[Session, Depends(get_db)]):
         name = va.name
     if not name:
         name = user.email.split("@")[0]
-
     payload = create_token_payload(user.id, user.role.value, va_id)
     return TokenResponse(
         access_token=create_access_token(payload),
@@ -58,6 +53,57 @@ def login(body: LoginRequest, db: Annotated[Session, Depends(get_db)]):
         name=name,
         user_id=user.id,
     )
+
+
+@router.post("/login", response_model=TokenResponse)
+def login(body: LoginRequest, db: Annotated[Session, Depends(get_db)]):
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user or not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+    return _issue_tokens(user, db)
+
+
+PIN_MAX_ATTEMPTS = 5
+PIN_LOCK_MINUTES = 15
+
+
+@router.post("/pin-login", response_model=TokenResponse)
+def pin_login(body: PinLoginRequest, db: Annotated[Session, Depends(get_db)]):
+    """Quick login with the user's 6-digit PIN (set in Profile → Security).
+
+    The PIN is only a convenience shortcut for a known account on a trusted
+    device — the full password always remains valid. Brute-force protection:
+    5 wrong attempts locks PIN login for 15 minutes.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    user = db.query(User).filter(User.email == str(body.email).strip().lower()).first()
+    if not user or not user.pin_hash:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="No PIN is set for this account. Sign in with your password, then set a PIN in Profile → Security.")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
+    now = datetime.now(timezone.utc)
+    if user.pin_locked_until and user.pin_locked_until > now:
+        minutes = max(1, int((user.pin_locked_until - now).total_seconds() // 60) + 1)
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail=f"PIN login is locked after too many wrong attempts. Try again in {minutes} min or use your password.")
+    if not verify_password(body.pin, user.pin_hash):
+        user.pin_failed_attempts = (user.pin_failed_attempts or 0) + 1
+        attempts_left = PIN_MAX_ATTEMPTS - user.pin_failed_attempts
+        if user.pin_failed_attempts >= PIN_MAX_ATTEMPTS:
+            user.pin_locked_until = now + timedelta(minutes=PIN_LOCK_MINUTES)
+            user.pin_failed_attempts = 0
+            db.commit()
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail=f"Too many wrong PINs. PIN login locked for {PIN_LOCK_MINUTES} minutes — use your password meanwhile.")
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail=f"Incorrect PIN. {attempts_left} attempt{'s' if attempts_left != 1 else ''} left before PIN login locks.")
+    user.pin_failed_attempts = 0
+    user.pin_locked_until = None
+    db.commit()
+    return _issue_tokens(user, db)
 
 
 @router.post("/refresh", response_model=TokenResponse)

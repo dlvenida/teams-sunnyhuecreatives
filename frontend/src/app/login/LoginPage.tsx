@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
-  BellRing, Eye, EyeOff, KanbanSquare, Loader2, Lock, Mail, ShieldCheck, Sun, Timer,
+  BellRing, Eye, EyeOff, Hash, KanbanSquare, KeyRound, Loader2, Lock, Mail, ShieldCheck, Sun, Timer,
 } from "lucide-react"
-import { login } from "@/lib/api"
+import { login, pinLogin, type AuthUser } from "@/lib/api"
+import { PinInput } from "@/components/auth/PinInput"
 import { Button } from "@/components/ui/button"
 import { Input, Label } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -12,7 +13,7 @@ const FEATURES = [
   { icon: KanbanSquare, text: "Monday-style boards, projects & client work in one place" },
   { icon: Timer, text: "One-tap time clock with live team presence" },
   { icon: BellRing, text: "Instant notifications for comments, approvals & updates" },
-  { icon: ShieldCheck, text: "Auditor oversight keeps every user's week on track" },
+  { icon: ShieldCheck, text: "Auditor oversight keeps every VA's week on track" },
 ]
 
 function greeting() {
@@ -28,6 +29,8 @@ export function LoginPage() {
   const navigate = useNavigate()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [mode, setMode] = useState<"password" | "pin">("password")
+  const [pin, setPin] = useState("")
   const [showPassword, setShowPassword] = useState(false)
   const [remember, setRemember] = useState(false)
   const [error, setError] = useState("")
@@ -43,25 +46,63 @@ export function LoginPage() {
     }
   }, [])
 
+  const afterLogin = (user: AuthUser, rememberEmail: boolean) => {
+    if (rememberEmail) localStorage.setItem(REMEMBER_KEY, email.trim())
+    else localStorage.removeItem(REMEMBER_KEY)
+    if (user.mustChangePassword) {
+      navigate(user.role === "va" ? "/va/profile" : "/admin/profile")
+      return
+    }
+    navigate(user.role === "admin" ? "/admin/dashboard" : user.role === "auditor" ? "/admin/analytics" : "/va/time-log")
+  }
+
+  const fail = (err: unknown, fallback: string) => {
+    setError(err instanceof Error ? err.message : fallback)
+    setErrorTick(t => t + 1)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (mode === "pin") {
+      await handlePin(pin)
+      return
+    }
     setError("")
     setLoading(true)
     try {
-      const user = await login(email.trim(), password)
-      if (remember) localStorage.setItem(REMEMBER_KEY, email.trim())
-      else localStorage.removeItem(REMEMBER_KEY)
-      if (user.mustChangePassword) {
-        navigate(user.role === "va" ? "/va/profile" : "/admin/profile")
-        return
-      }
-      navigate(user.role === "admin" ? "/admin/dashboard" : user.role === "auditor" ? "/admin/analytics" : "/va/time-log")
+      afterLogin(await login(email.trim(), password), remember)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed — please try again")
-      setErrorTick(t => t + 1)
+      fail(err, "Login failed — please try again")
     } finally {
       setLoading(false)
     }
+  }
+
+  const handlePin = async (pinValue: string) => {
+    if (loading) return
+    if (!email.trim()) {
+      setError("Enter your email first, then your 6-digit PIN.")
+      setErrorTick(t => t + 1)
+      return
+    }
+    if (pinValue.length !== 6) return
+    setError("")
+    setLoading(true)
+    try {
+      // PIN quick login keeps the email remembered so next time it's PIN-only typing.
+      afterLogin(await pinLogin(email.trim(), pinValue), true)
+    } catch (err) {
+      setPin("")
+      fail(err, "PIN login failed — please try again")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const switchMode = (next: "password" | "pin") => {
+    setMode(next)
+    setError("")
+    setPin("")
   }
 
   return (
@@ -117,6 +158,33 @@ export function LoginPage() {
         <h2 className="font-display text-xl font-extrabold">Welcome back 👋</h2>
         <p className="mt-1 text-xs text-muted-foreground">Sign in to your workspace to pick up where you left off.</p>
 
+        <div className="mt-4 grid grid-cols-2 gap-1 rounded-full border border-border bg-muted/40 p-1" role="tablist" aria-label="Sign-in method">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "password"}
+            onClick={() => switchMode("password")}
+            className={cn(
+              "flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition",
+              mode === "password" ? "bg-primary text-primary-foreground shadow" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <KeyRound className="h-3.5 w-3.5" /> Password
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === "pin"}
+            onClick={() => switchMode("pin")}
+            className={cn(
+              "flex items-center justify-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition",
+              mode === "pin" ? "bg-primary text-primary-foreground shadow" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Hash className="h-3.5 w-3.5" /> Quick PIN
+          </button>
+        </div>
+
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="email">Email</Label>
@@ -136,41 +204,57 @@ export function LoginPage() {
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="password">Password</Label>
-            <div className="relative">
-              <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                id="password"
-                type={showPassword ? "text" : "password"}
-                autoComplete="current-password"
-                placeholder="••••••••"
-                className="pl-9 pr-10"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                title={showPassword ? "Hide password" : "Show password"}
-                tabIndex={-1}
-              >
-                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
+          {mode === "password" ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="password">Password</Label>
+              <div className="relative">
+                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  className="pl-9 pr-10"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  title={showPassword ? "Hide password" : "Show password"}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-2">
+              <Label>6-digit PIN</Label>
+              <div key={errorTick} className={error ? "animate-[shake_0.3s_ease-in-out]" : undefined}>
+                <PinInput value={pin} onChange={setPin} onComplete={handlePin} autoFocus={!!email} disabled={loading} />
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {email
+                  ? <>Quick login for <span className="font-semibold text-foreground">{email}</span> — you'll be signed in as soon as the PIN is complete.</>
+                  : "Enter your email above, then your PIN — you'll be signed in right away."}
+              </p>
+            </div>
+          )}
 
-          <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-              className="h-4 w-4 accent-primary"
-            />
-            Remember my email on this device
-          </label>
+          {mode === "password" && (
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+              Remember my email on this device
+            </label>
+          )}
 
           {error && (
             <div
@@ -182,9 +266,11 @@ export function LoginPage() {
             </div>
           )}
 
-          <Button type="submit" variant="gold" className={cn("w-full", loading && "opacity-90")} disabled={loading}>
+          <Button type="submit" variant="gold" className={cn("w-full", loading && "opacity-90")} disabled={loading || (mode === "pin" && pin.length !== 6)}>
             {loading ? (
               <span className="flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Signing you in…</span>
+            ) : mode === "pin" ? (
+              "Sign In with PIN"
             ) : (
               "Sign In"
             )}
@@ -192,8 +278,14 @@ export function LoginPage() {
         </form>
 
         <p className="mt-5 border-t border-border pt-4 text-center text-[11px] leading-relaxed text-muted-foreground">
-          Forgot your password? Ask your admin to reset it for you.
-          <span className="block">New user? Your account is created by the admin — check your email for your first login.</span>
+          {mode === "pin" ? (
+            <>No PIN yet? Sign in with your password once, then set one in <span className="font-semibold">Profile → Security</span>.</>
+          ) : (
+            <>
+              Forgot your password? Ask your admin to reset it for you.
+              <span className="block">New VA? Your account is created by the admin — check your email for your first login.</span>
+            </>
+          )}
         </p>
       </div>
     </div>

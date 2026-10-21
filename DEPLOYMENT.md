@@ -18,13 +18,31 @@ Connections:
 - `api` → `Postgres`: `DATABASE_URL=${{Postgres.DATABASE_URL}}`
 - `api` → Bucket: `S3_*` variables from the bucket credentials (profile images)
 
-## ⚠️ Current blocker (Oct 21, 2026)
+## ✅ Status (Oct 21, 2026) — LIVE in Singapore
 
-`railway add` fails with **"Deploys have been paused temporarily"** and no resources
-can be created. This is account/platform-level. In the Railway dashboard check for:
-an account verification banner, a billing/payment requirement, or a platform incident
-(status.railway.com). Once cleared, run the steps below (CLI is already logged in and
-the project is linked locally).
+All resources created and connected; all deployments `SUCCESS` in `asia-southeast1`:
+
+- `Postgres` (Singapore, volume attached) → `api` via `${{Postgres.DATABASE_URL}}`
+- `api` → bucket `teams-shc-uploads` (`sin`) via `AWS_*` variables (S3 roundtrip verified)
+- `web` → `api` via `VITE_API_URL=${{api.API_URL}}` (build-time; also draws the canvas edge)
+- `api` health: `Uvicorn running`, `GET /health 200`, migrations 001→010 applied, seed complete
+
+**Only remaining step: DNS.** Add these records at the `sunnyhuecreatives.com` DNS provider:
+
+| Type | Name | Value |
+|------|------|-------|
+| CNAME | `team` | `5837pwtp.up.railway.app` |
+| TXT | `_railway-verify.team` | `railway-verify=d9c10bf1af7dddd60ad2e34b8fb115630a8887aecee83c2cdd3b432cc2d1933b` |
+| CNAME | `api.team` | `xs1njy55.up.railway.app` |
+| TXT | `_railway-verify.api.team` | `railway-verify=e8af9595c48f65a6b1d5db629a6805e9f0665865e5cd02961924200b2feb0521` |
+
+Then https://team.sunnyhuecreatives.com goes live (certificates issue automatically).
+Admin first login: `janelaurine@gmail.com` with the `ADMIN_PASSWORD` set in Railway
+(change it in Profile after logging in).
+
+Note: the first api deploy failed healthchecks because an IaC `startCommand`
+overrode the Dockerfile CMD — the fix (merged in PR #2) uses the Dockerfile CMD with
+its `${PORT:-8090}` fallback plus `PYTHONUNBUFFERED=1`.
 
 ## 1. Create the resources (CLI, from repo root)
 

@@ -28,6 +28,10 @@ def admin_user_ids(db: Session) -> list:
     return [u.id for u in db.query(User).filter(User.role == UserRole.admin, User.is_active.is_(True)).all()]
 
 
+def admin_and_auditor_user_ids(db: Session) -> list:
+    return [u.id for u in db.query(User).filter(User.role.in_([UserRole.admin, UserRole.auditor]), User.is_active.is_(True)).all()]
+
+
 def va_user_id(db: Session, va_id):
     if not va_id:
         return None

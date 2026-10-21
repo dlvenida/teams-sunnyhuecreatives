@@ -51,6 +51,59 @@ def list_clients_for_va(
     return db.query(Client).filter(Client.is_active == True).order_by(Client.name).all()
 
 
+@router.get("/my-clients")
+def my_assigned_clients(
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Clients ASSIGNED to this VA (from their tasks and time logs) — the VA Clients tab."""
+    from decimal import Decimal
+    from app.models import Project, Task, TaskStatus, WorkLogStatus
+
+    tasks = db.query(Task).filter(Task.assignee_va_id == current.va_id).all()
+    logs = db.query(WorkLog).filter(WorkLog.va_id == current.va_id).all()
+    billable = [l for l in logs if l.status in (WorkLogStatus.approved, WorkLogStatus.invoiced)]
+    client_ids: list = []
+    for src in ([t.client_id for t in tasks] + [l.client_id for l in logs]):
+        if src and src not in client_ids:
+            client_ids.append(src)
+    rows = []
+    for cid in client_ids:
+        c_tasks = [t for t in tasks if t.client_id == cid]
+        c_logs = [l for l in logs if l.client_id == cid]
+        b_logs = [l for l in billable if l.client_id == cid]
+        client_obj = (c_tasks[0].client if c_tasks else None) or (c_logs[0].client if c_logs else None)
+        if not client_obj:
+            continue
+        project_ids = {t.project_id for t in c_tasks if t.project_id} | {l.project_id for l in c_logs if l.project_id}
+        projects = []
+        for pid in project_ids:
+            p = db.query(Project).filter(Project.id == pid).first()
+            if p:
+                p_tasks = [t for t in c_tasks if t.project_id == pid]
+                projects.append({"id": str(p.id), "name": p.name, "color": p.color, "status": p.status.value if hasattr(p.status, "value") else str(p.status), "task_total": len(p_tasks), "task_done": len([t for t in p_tasks if t.status == TaskStatus.done])})
+        sub_names = sorted({l.sub_client.name for l in c_logs if l.sub_client})
+        rows.append({
+            "client_id": str(cid), "name": client_obj.name,
+            "billing_type": client_obj.billing_type.value if hasattr(client_obj.billing_type, "value") else str(client_obj.billing_type),
+            "is_active": bool(client_obj.is_active),
+            "total_tasks": len(c_tasks),
+            "open_tasks": len([t for t in c_tasks if t.status != TaskStatus.done]),
+            "done_tasks": len([t for t in c_tasks if t.status == TaskStatus.done]),
+            "overdue_tasks": len([t for t in c_tasks if t.status != TaskStatus.done and t.due_date and str(t.due_date) < str(__import__("datetime").date.today())]),
+            "hours": str(sum((l.hours for l in b_logs), Decimal("0"))),
+            "pending_hours": str(sum((l.hours for l in c_logs if l.status == WorkLogStatus.submitted), Decimal("0"))),
+            "logs": len(c_logs),
+            "last_log_date": str(max((l.work_date for l in c_logs), default=None)) if c_logs else None,
+            "next_due": str(min((t.due_date for t in c_tasks if t.status != TaskStatus.done and t.due_date), default=None)) if any(t.due_date for t in c_tasks if t.status != TaskStatus.done) else None,
+            "sub_clients": sub_names,
+            "projects": projects,
+            "tasks": [{"id": str(t.id), "title": t.title, "status": t.status.value if hasattr(t.status, "value") else str(t.status), "priority": t.priority.value if hasattr(t.priority, "value") else str(t.priority), "due_date": str(t.due_date) if t.due_date else None, "project_name": t.project.name if t.project else None} for t in sorted(c_tasks, key=lambda x: (x.due_date or __import__("datetime").date.max))[:10]],
+        })
+    rows.sort(key=lambda r: r["name"].lower())
+    return rows
+
+
 @router.get("/sub-clients", response_model=list[SubClientResponse])
 def list_sub_clients_for_va(
     _: Annotated[CurrentUser, Depends(require_va)],

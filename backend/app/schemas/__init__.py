@@ -393,7 +393,76 @@ class TimeClockResponse(BaseModel):
     elapsed_seconds: int = 0
     status: ClockStatus
     notes: str | None = None
+    is_adjusted: bool = False
+    adjustment_count: int = 0
+    last_adjusted_at: datetime | None = None
+    last_adjustment_reason: str | None = None
     created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ClockAdjustRequest(BaseModel):
+    """VA (anytime) / admin adjustment of a clock entry. Reason is required for the audit log."""
+    clock_in: datetime | None = None
+    clock_out: datetime | None = None
+    notes: str | None = None
+    client_id: UUID | None = None
+    project_id: UUID | None = None
+    task_id: UUID | None = None
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class TimeClockAdjustmentResponse(BaseModel):
+    id: UUID
+    entry_id: UUID
+    va_id: UUID
+    va_name: str | None = None
+    adjusted_by_name: str = ""
+    adjusted_by_role: str = "va"
+    reason: str
+    before: dict[str, Any] | None = None
+    after: dict[str, Any] | None = None
+    work_log_synced: bool = False
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+# User reports (to Administrator + Auditor)
+class UserReportCreate(BaseModel):
+    category: str = "general"
+    title: str = Field(min_length=3, max_length=500)
+    body: str = Field(min_length=3)
+    client_id: UUID | None = None
+    project_id: UUID | None = None
+    task_id: UUID | None = None
+
+
+class UserReportUpdate(BaseModel):
+    status: str | None = None  # open | acknowledged | resolved
+    admin_note: str | None = None
+
+
+class UserReportResponse(BaseModel):
+    id: UUID
+    reporter_user_id: UUID
+    reporter_va_id: UUID | None = None
+    reporter_name: str = ""
+    reporter_role: str = "va"
+    category: str = "general"
+    title: str
+    body: str
+    client_id: UUID | None = None
+    client_name: str | None = None
+    project_id: UUID | None = None
+    project_name: str | None = None
+    task_id: UUID | None = None
+    task_title: str | None = None
+    status: str = "open"
+    admin_note: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

@@ -20,6 +20,7 @@ from app.routers import (
     settings as settings_router,
     tasks,
     timeclock,
+    user_reports,
     va_portal,
     vas,
     work_logs,
@@ -83,6 +84,8 @@ def _describe(method: str, path: str) -> tuple[str, str]:
         ("email-templates" in p and method == "PUT", ("update", "Edited an email template")),
         ("settings" in p and method == "PUT", ("update", "Updated app settings")),
         ("notifications" in p and tail == "read-all", ("update", "Marked all notifications as read")),
+        ("user-reports" in p and method == "POST", ("create", "Created a report to Administrator & Auditor")),
+        ("user-reports" in p and method == "PATCH", ("update", "Updated a user report status")),
     ]
     for cond, out in rules:
         if cond:
@@ -98,7 +101,8 @@ class ActivityLogMiddleware(BaseHTTPMiddleware):
         try:
             method = request.method
             path = request.url.path
-            if method == "GET" or response.status_code >= 400 or any(path.startswith(s) for s in _SKIP_PREFIXES):
+            if method == "GET" or response.status_code >= 400 or any(path.startswith(s) for s in _SKIP_PREFIXES) or path.endswith("/adjust"):
+                # /adjust writes its own detailed ActivityLog (before → after + reason)
                 return response
             auth = request.headers.get("authorization", "")
             if not auth.lower().startswith("bearer "):
@@ -143,6 +147,7 @@ app.include_router(settings_router.router)
 app.include_router(projects.router)
 app.include_router(tasks.router)
 app.include_router(timeclock.router)
+app.include_router(user_reports.router)
 app.include_router(notifications.router)
 app.include_router(agent.router)
 app.include_router(agent_control.router)

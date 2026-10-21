@@ -12,16 +12,16 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   return (
-    <div className="relative flex min-h-screen bg-background">
+    <div className="relative flex min-h-screen w-full min-w-0 overflow-x-clip bg-background">
       <div className="app-orb app-orb-1" /><div className="app-orb app-orb-2" />
       <Sidebar items={navItems} mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <TopBar onMenu={() => setMobileOpen(true)} />
         <ImpersonationBanner />
-        <main className="mx-auto w-full max-w-[1600px] flex-1 overflow-auto p-4 sm:p-5">
+        <main className="mx-auto w-full min-w-0 max-w-[1600px] flex-1 overflow-x-clip p-3 sm:p-5">
           <Outlet />
         </main>
-        <footer className="px-5 pb-4 text-center text-[10px] text-muted-foreground">Teams.SHC · Sunny Hue Creatives</footer>
+        <footer className="px-5 pb-4 text-center text-[10px] text-muted-foreground">Teams - Sunny Hue Creative - Developed by DLV IT Solutions</footer>
       </div>
     </div>
   )

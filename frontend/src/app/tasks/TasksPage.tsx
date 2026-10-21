@@ -8,7 +8,9 @@ import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { formatDate } from "@/lib/utils"
 import { TASK_STATUSES, PRIORITY_META, groupByPeriod, isDueToday, isOverdue } from "@/components/tasks/task-utils"
-import { AlertTriangle, CalendarDays, Columns3, List, Plus, Search, Timer, Trash2, X } from "lucide-react"
+import { CommentThread } from "@/components/comments/CommentThread"
+import { DetailAttachments } from "@/components/comments/DetailAttachments"
+import { AlertTriangle, CalendarDays, Columns3, List, MessageSquare, Pencil, Plus, Search, Timer, Trash2, X } from "lucide-react"
 import { Link, useSearchParams } from "react-router-dom"
 
 type ViewMode = "board" | "list" | "timeline"
@@ -19,6 +21,7 @@ export function TasksPage() {
   const qc = useQueryClient()
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
+  const isAuditor = user?.role === "auditor"
   const [searchParams] = useSearchParams()
   const [view, setView] = useState<ViewMode>("board")
   const [cadence, setCadence] = useState<Cadence>("weekly")
@@ -32,7 +35,6 @@ export function TasksPage() {
   const [modal, setModal] = useState<null | { mode: "create" | "edit"; task?: TaskItem }>(null)
   const [form, setForm] = useState(emptyForm)
   const [commentTask, setCommentTask] = useState<TaskItem | null>(null)
-  const [commentBody, setCommentBody] = useState("")
   const [dragId, setDragId] = useState<string | null>(null)
   const [error, setError] = useState("")
 
@@ -53,8 +55,6 @@ export function TasksPage() {
   const { data: clients = [] } = useQuery({ queryKey: [isAdmin ? "clients" : "va-clients"], queryFn: () => apiFetch<Client[]>(isAdmin ? "/clients?active_only=true" : "/va/clients") })
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false") })
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas"), enabled: isAdmin })
-  const { data: comments = [] } = useQuery({ queryKey: ["task-comments", commentTask?.id], queryFn: () => apiFetch<{ id: string; author_name: string; body: string; created_at: string }[]>(`/tasks/${commentTask!.id}/comments`), enabled: !!commentTask })
-
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks"] }); qc.invalidateQueries({ queryKey: ["task-stats"] }); qc.invalidateQueries({ queryKey: ["projects"] }) }
 
   const save = useMutation({
@@ -67,8 +67,6 @@ export function TasksPage() {
   })
   const move = useMutation({ mutationFn: ({ id, status }: { id: string; status: TaskStatus }) => apiFetch(`/tasks/${id}/move`, { method: "POST", body: JSON.stringify({ status }) }), onSuccess: invalidate, onError: (e: Error) => setError(e.message) })
   const remove = useMutation({ mutationFn: (id: string) => apiFetch(`/tasks/${id}`, { method: "DELETE" }), onSuccess: invalidate })
-  const addComment = useMutation({ mutationFn: () => apiFetch(`/tasks/${commentTask!.id}/comments`, { method: "POST", body: JSON.stringify({ body: commentBody }) }), onSuccess: () => { setCommentBody(""); qc.invalidateQueries({ queryKey: ["task-comments"] }) } })
-
   const openCreate = (status: TaskStatus = "todo") => { setForm({ ...emptyForm, status, client_id: clientId || "", project_id: projectId || "" }); setModal({ mode: "create" }); setError("") }
   const openEdit = (t: TaskItem) => { setForm({ title: t.title, description: t.description || "", client_id: t.client_id, sub_client_id: t.sub_client_id || "", project_id: t.project_id || "", assignee_va_id: t.assignee_va_id || "", status: t.status, priority: t.priority, start_date: t.start_date || "", due_date: t.due_date || "", estimated_hours: t.estimated_hours || "", tags: (t.tags || []).join(", ") }); setModal({ mode: "edit", task: t }); setError("") }
   const filteredProjects = projects.filter(p => !form.client_id || p.client_id === form.client_id)
@@ -77,12 +75,12 @@ export function TasksPage() {
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-base font-semibold tracking-tight">{isAdmin ? "Task Board — All Tasks" : "Task Board — My Tasks"}</h1>
+          <h1 className="text-base font-semibold tracking-tight">{isAdmin ? "Task Board — All Tasks" : isAuditor ? "Task Board — Auditor View (view & comment)" : "Task Board — My Tasks"}</h1>
           <p className="text-xs text-muted-foreground">Manage work per client & project · Kanban, list, or timeline by week / bi-week / month</p>
         </div>
         <div className="flex gap-2">
-          <Link to={isAdmin ? "/admin/projects" : "/va/projects"} className="text-xs underline text-primary self-center">Projects →</Link>
-          <Button variant="gold" size="sm" onClick={() => openCreate()}><Plus className="h-3.5 w-3.5" /> New Task</Button>
+          <Link to={user?.role === "va" ? "/va/projects" : "/admin/projects"} className="text-xs underline text-primary self-center">Projects →</Link>
+          {!isAuditor && <Button variant="gold" size="sm" onClick={() => openCreate()}><Plus className="h-3.5 w-3.5" /> New Task</Button>}
         </div>
       </div>
 
@@ -127,8 +125,8 @@ export function TasksPage() {
                 <div className="h-1.5" style={{ background: col.color }} />
                 <div className="flex items-center justify-between px-3 py-2.5"><span className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide"><span className="h-2.5 w-2.5 rounded-full" style={{ background: col.color }} />{col.label}</span><span className="rounded-full px-2 py-0.5 text-[11px] font-bold text-white" style={{ background: col.color }}>{colTasks.length}</span></div>
                 <div className="space-y-2 px-2 pb-2">
-                  {colTasks.map(t => <TaskCard key={t.id} t={t} onEdit={() => openEdit(t)} onComments={() => setCommentTask(t)} draggable onDragStart={() => setDragId(t.id)} />)}
-                  <button onClick={() => openCreate(col.id)} className="w-full rounded-lg border border-dashed py-2 text-xs text-muted-foreground hover:bg-white">+ Add task</button>
+                  {colTasks.map(t => <TaskCard key={t.id} t={t} onComments={() => setCommentTask(t)} draggable onDragStart={() => setDragId(t.id)} />)}
+                  {!isAuditor && <button onClick={() => openCreate(col.id)} className="w-full rounded-lg border border-dashed py-2 text-xs text-muted-foreground hover:bg-white">+ Add task</button>}
                 </div>
               </div>
             )
@@ -155,7 +153,7 @@ export function TasksPage() {
           {groupByPeriod(tasks, cadence).map(([period, items]) => (
             <div key={period}>
               <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold"><CalendarDays className="h-4 w-4 text-primary" />{period} <span className="text-xs font-normal text-muted-foreground">({items.length})</span></h3>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{items.map(t => <TaskCard key={t.id} t={t} onEdit={() => openEdit(t)} onComments={() => setCommentTask(t)} />)}</div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{items.map(t => <TaskCard key={t.id} t={t} onComments={() => setCommentTask(t)} />)}</div>
             </div>
           ))}
           {tasks.length === 0 && <p className="text-sm text-muted-foreground">No tasks in this view.</p>}
@@ -185,18 +183,37 @@ export function TasksPage() {
                 <Button variant="gold" className="flex-1" disabled={!form.title || !form.client_id || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Saving…" : modal.mode === "edit" ? "Save changes" : "Create task"}</Button>
                 {modal.mode === "edit" && isAdmin && <Button variant="outline" onClick={() => { if (confirm("Delete this task?")) { remove.mutate(modal.task!.id); setModal(null) } }}>Delete</Button>}
               </div>
-              {!isAdmin && <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Timer className="h-3 w-3" /> Tip: clock in on this task from Time Clock to auto-log your hours.</p>}
+              {user?.role === "va" && <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Timer className="h-3 w-3" /> Tip: clock in on this task from Time Clock to auto-log your hours.</p>}
             </div>
           </div>
         </div>
       )}
 
       {commentTask && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setCommentTask(null)}>
-          <div className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-xl bg-card p-5 shadow-xl" onClick={e => e.stopPropagation()}>
-            <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold">Comments — {commentTask.title}</h2><button onClick={() => setCommentTask(null)}><X className="h-4 w-4" /></button></div>
-            <div className="space-y-2">{comments.map(c => <div key={c.id} className="rounded-lg border p-2.5"><div className="text-[11px] text-muted-foreground">{c.author_name} · {new Date(c.created_at).toLocaleString()}</div><p className="text-xs mt-0.5">{c.body}</p></div>)}{comments.length === 0 && <p className="text-xs text-muted-foreground">No comments yet.</p>}</div>
-            <div className="mt-3 flex gap-2"><Input value={commentBody} onChange={e => setCommentBody(e.target.value)} placeholder="Add an update…" onKeyDown={e => { if (e.key === "Enter" && commentBody.trim()) addComment.mutate() }} /><Button variant="gold" size="sm" disabled={!commentBody.trim()} onClick={() => addComment.mutate()}>Post</Button></div>
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={() => setCommentTask(null)}>
+          <div className="h-full w-full max-w-2xl overflow-y-auto bg-card p-5 shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="mb-1 flex items-start justify-between gap-2">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Task View</div>
+                <h2 className="text-base font-semibold leading-snug">{commentTask.title}</h2>
+              </div>
+              <span className="flex gap-1">
+                {!isAuditor && <Button size="sm" variant="outline" onClick={() => openEdit(commentTask)}><Pencil className="h-3 w-3" /> Edit Task</Button>}
+                <button onClick={() => setCommentTask(null)} className="p-1"><X className="h-4 w-4" /></button>
+              </span>
+            </div>
+            {commentTask.description && <p className="mb-2 whitespace-pre-wrap text-xs text-muted-foreground">{commentTask.description}</p>}
+            <div className="mb-4 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+              {[[ "Client / Project", `${commentTask.client_name || ""}${commentTask.project_name ? " · " + commentTask.project_name : ""}`],
+                 ["Assignee", commentTask.assignee_name || "Unassigned"],
+                 ["Status / Priority", `${commentTask.status.replace("_", " ")} · ${commentTask.priority}`],
+                 ["Due / Hours", `${commentTask.due_date ? formatDate(commentTask.due_date) : "No due date"} · ${commentTask.logged_hours}/${commentTask.estimated_hours || "—"}h`]
+              ].map(([k, v]) => <div key={k} className="rounded-lg border bg-muted/20 p-2"><div className="text-muted-foreground">{k}</div><div className="mt-0.5 font-medium capitalize">{v}</div></div>)}
+            </div>
+            <div className="mb-4"><DetailAttachments scope="task" scopeId={commentTask.id} /></div>
+            <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> Comments & Updates</h3>
+            <p className="mb-2 text-[11px] text-muted-foreground">Admin, Auditors and Users can comment here — tag teammates with @, react with emoji, attach images (auto-AVIF into the bucket) and draw on them.</p>
+            <CommentThread scope="task" scopeId={commentTask.id} scopeTitle={commentTask.title} />
           </div>
         </div>
       )}
@@ -204,10 +221,10 @@ export function TasksPage() {
   )
 }
 
-function TaskCard({ t, onEdit, onComments, draggable, onDragStart }: { t: TaskItem; onEdit: () => void; onComments: () => void; draggable?: boolean; onDragStart?: () => void }) {
+function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onComments: () => void; draggable?: boolean; onDragStart?: () => void }) {
   return (
     <div draggable={draggable} onDragStart={onDragStart} className="monday-card rounded-xl border bg-card p-3 shadow-sm cursor-grab active:cursor-grabbing" style={{ borderLeft: `4px solid ${t.project_color || "var(--primary)"}` }}>
-      <button className="text-left w-full" onClick={onEdit}><span className="text-xs font-semibold leading-snug hover:underline">{t.title}</span></button>
+      <button className="text-left w-full" onClick={onComments} title="Open Task View"><span className="text-xs font-semibold leading-snug hover:underline">{t.title}</span></button>
       <div className="mt-2 flex flex-wrap gap-1.5">
         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", PRIORITY_META[t.priority].className)}>{PRIORITY_META[t.priority].label}</span>
         {isOverdue(t) && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700">Overdue</span>}

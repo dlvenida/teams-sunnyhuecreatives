@@ -281,13 +281,42 @@ export interface TaskItem {
   updated_at?: string | null
 }
 
+export interface MentionRef { user_id: string; name: string }
+export interface CommentAttachment {
+  id: string; comment_id?: string | null; original_name: string
+  link_url?: string | null; provider?: string | null; kind?: "image" | "link" | string
+  size_bytes: number; original_size: number
+  width?: number | null; height?: number | null; original_width?: number | null; original_height?: number | null
+  format: string; storage_backend: "bucket" | "local" | string; is_annotation: boolean
+  annotated_from_id?: string | null; created_at?: string | null; url: string
+}
+export interface ReactionSummary { emoji: string; count: number; users: string[]; reacted_by_me: boolean }
 export interface TaskComment {
   id: string
-  task_id: string
+  task_id?: string | null
+  project_id?: string | null
   author_user_id: string
   author_name: string
+  author_role: string
   body: string
+  parent_id?: string | null
+  mentions: MentionRef[]
+  is_pinned: boolean
+  edited_at?: string | null
   created_at: string
+  reactions: ReactionSummary[]
+  attachments: CommentAttachment[]
+}
+export type ProjectComment = TaskComment
+export interface TeamMember { user_id: string; name: string; role: string; va_id?: string | null }
+export interface ProjectMeetup {
+  id: string; project_id: string; title: string; notes?: string | null
+  starts_at: string; ends_at?: string | null; location?: string | null
+  attendees: MentionRef[]; created_by_name: string; created_at?: string | null
+}
+export interface StorageStatus {
+  bucket_enabled: boolean; backend: string; note: string
+  image_policy: { accepted: string[]; max_original_mb: number; max_edge_px: number; stored_format: string; avif_quality: number }
 }
 
 export interface TaskStats {

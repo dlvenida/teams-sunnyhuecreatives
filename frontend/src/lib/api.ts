@@ -191,6 +191,24 @@ export async function apiFetchBlob(path: string): Promise<Blob | null> {
   return res.blob()
 }
 
+export async function pinLogin(email: string, pin: string): Promise<AuthUser> {
+  const data = await apiFetch<LoginResponse>("/auth/pin-login", {
+    method: "POST",
+    body: JSON.stringify({ email, pin }),
+  })
+  localStorage.removeItem(IMPERSONATION_KEY)
+  setTokens(data.access_token, data.refresh_token)
+  const user: AuthUser = {
+    role: data.role,
+    name: data.name,
+    vaId: data.va_id,
+    userId: data.user_id,
+    mustChangePassword: data.must_change_password,
+  }
+  setAuthUser(user)
+  return user
+}
+
 export async function login(email: string, password: string): Promise<AuthUser> {
   const data = await apiFetch<LoginResponse>("/auth/login", {
     method: "POST",

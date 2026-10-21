@@ -37,6 +37,20 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PinLoginRequest(BaseModel):
+    email: AppEmail
+    pin: str = Field(pattern=r"^\d{6}$")
+
+
+class SetPinRequest(BaseModel):
+    current_password: str
+    pin: str = Field(pattern=r"^\d{6}$")
+
+
+class RemovePinRequest(BaseModel):
+    current_password: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
@@ -210,6 +224,7 @@ class ProfileResponse(BaseModel):
     ph_bank_name: str | None = None
     currency: Currency | None = None
     must_change_password: bool = False
+    has_pin: bool = False
     job_title: str | None = None
     bio: str | None = None
     timezone: str | None = None

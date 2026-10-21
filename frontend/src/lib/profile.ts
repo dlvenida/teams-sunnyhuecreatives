@@ -13,6 +13,7 @@ export interface UserProfile {
   ph_bank_name?: string | null
   currency?: "PHP" | "USD" | null
   must_change_password: boolean
+  has_pin?: boolean
   job_title?: string | null
   bio?: string | null
   timezone?: string | null

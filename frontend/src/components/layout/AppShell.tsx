@@ -21,7 +21,7 @@ export function AppShell() {
         <main className="mx-auto w-full min-w-0 max-w-[1600px] flex-1 overflow-x-clip p-3 sm:p-5">
           <Outlet />
         </main>
-        <footer className="px-5 pb-4 text-center text-[10px] text-muted-foreground">Teams - Sunny Hue Creative - Developed by DLV IT Solutions</footer>
+        <footer className="px-5 pb-4 text-center text-[10px] text-muted-foreground">© Teams - Sunny Hue Creative - DLV IT Solutions</footer>
       </div>
     </div>
   )

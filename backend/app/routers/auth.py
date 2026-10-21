@@ -10,6 +10,7 @@ from app.auth import (
     create_token_payload,
     decode_token,
     hash_password,
+    unique_username,
     verify_password,
 )
 from app.database import get_db
@@ -47,6 +48,7 @@ def _issue_tokens(user: User, db: Session) -> TokenResponse:
     return TokenResponse(
         access_token=create_access_token(payload),
         refresh_token=create_refresh_token(payload),
+        username=user.username,
         role=user.role,
         must_change_password=user.must_change_password,
         va_id=va_id,
@@ -55,9 +57,19 @@ def _issue_tokens(user: User, db: Session) -> TokenResponse:
     )
 
 
+def _find_user(db: Session, identifier: str | None) -> User | None:
+    """Look a user up by username (case-insensitive) or by email."""
+    ident = (identifier or "").strip()
+    if not ident:
+        return None
+    if "@" in ident:
+        return db.query(User).filter(User.email == ident.lower()).first()
+    return db.query(User).filter(User.username == ident.lower()).first()
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(body: LoginRequest, db: Annotated[Session, Depends(get_db)]):
-    user = db.query(User).filter(User.email == body.email).first()
+    user = _find_user(db, str(body.email))
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     return _issue_tokens(user, db)
@@ -77,7 +89,7 @@ def pin_login(body: PinLoginRequest, db: Annotated[Session, Depends(get_db)]):
     """
     from datetime import datetime, timedelta, timezone
 
-    user = db.query(User).filter(User.email == str(body.email).strip().lower()).first()
+    user = _find_user(db, body.username or body.email)
     if not user or not user.pin_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="No PIN is set for this account. Sign in with your password, then set a PIN in Profile → Security.")
@@ -209,7 +221,7 @@ def _app_user(db: Session, u: User) -> AppUserResponse:
     va = db.query(VA).filter(VA.user_id == u.id).first()
     name = u.display_name or (va.name if va else None) or u.email.split("@")[0]
     auditing = db.query(VA).filter(VA.reviewer_user_id == u.id).count() if u.role in (UserRole.auditor, UserRole.admin) else 0
-    return AppUserResponse(id=u.id, email=u.email, name=name, role=u.role.value, is_active=bool(u.is_active), va_id=va.id if va else None, auditing_count=auditing)
+    return AppUserResponse(id=u.id, email=u.email, username=u.username, name=name, role=u.role.value, is_active=bool(u.is_active), va_id=va.id if va else None, auditing_count=auditing)
 
 
 @router.get("/users", response_model=list[AppUserResponse])
@@ -368,7 +380,7 @@ def create_app_user(
     if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
     user = User(
-        email=body.email, password_hash=hash_password(body.password),
+        email=body.email, username=unique_username(db, body.email), password_hash=hash_password(body.password),
         role=UserRole(body.role), must_change_password=True, display_name=body.name,
     )
     db.add(user)
@@ -418,6 +430,7 @@ def create_va_user(
 
     user = User(
         email=body.email,
+        username=unique_username(db, body.email),
         password_hash=hash_password(body.password),
         role=UserRole.va,
         must_change_password=True,

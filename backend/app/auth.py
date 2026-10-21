@@ -16,6 +16,33 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
+import re as _re
+
+
+def username_base(email: str) -> str:
+    """Default username from an email: local part, lowercase, [a-z0-9._-], min 3 chars."""
+    base = _re.sub(r"[^a-z0-9._-]", "", (email or "").split("@")[0].lower()).strip("._-")
+    return base or "user"
+
+
+def unique_username(db, email: str, exclude_user_id=None) -> str:
+    """A username for `email` that no other user has (appends 2, 3, … on collision)."""
+    from app.models import User
+    base = username_base(email)
+    candidate, n = base, 2
+    while True:
+        q = db.query(User).filter(User.username == candidate)
+        if exclude_user_id:
+            q = q.filter(User.id != exclude_user_id)
+        if not q.first():
+            return candidate
+        candidate = f"{base}{n}"; n += 1
+
+
+def valid_username(value: str) -> bool:
+    return bool(_re.fullmatch(r"[a-z0-9][a-z0-9._-]{2,29}", value or ""))
+
+
 def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 

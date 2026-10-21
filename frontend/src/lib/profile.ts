@@ -1,6 +1,7 @@
 export interface UserProfile {
   id: string
   email: string
+  username?: string | null
   pending_email?: string | null
   role: "admin" | "va"
   display_name: string

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.auth import hash_password
+from app.auth import hash_password, unique_username
 from app.config import settings
 from app.models import (
     BillingType,
@@ -28,6 +28,7 @@ def seed_database(db: Session) -> None:
     if not admin:
         admin = User(
             email=settings.admin_email,
+            username=unique_username(db, settings.admin_email),
             password_hash=hash_password(settings.admin_password),
             role=UserRole.admin,
             display_name="Jane Laurine Venida",
@@ -39,10 +40,15 @@ def seed_database(db: Session) -> None:
         admin.display_name = "Jane Laurine Venida"
         db.commit()
 
+    for _u in db.query(User).filter(User.username.is_(None)).all():
+        _u.username = unique_username(db, _u.email)
+    db.commit()
+
     # Demo Auditor — monitors VA activity, no destructive access (auditor@sunnyhue.local / auditor2024)
     if not db.query(User).filter(User.email == "auditor@sunnyhue.local").first():
         db.add(User(
             email="auditor@sunnyhue.local",
+            username=unique_username(db, "auditor@sunnyhue.local"),
             password_hash=hash_password("auditor2024"),
             role=UserRole.auditor,
             display_name="Audrey Auditor",
@@ -97,6 +103,7 @@ def seed_database(db: Session) -> None:
     for name, currency, email in vas_data:
         user = User(
             email=email,
+            username=unique_username(db, email),
             password_hash=hash_password("va2024"),
             role=UserRole.va,
             must_change_password=True,

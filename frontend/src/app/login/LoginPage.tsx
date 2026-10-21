@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import {
-  BellRing, Eye, EyeOff, Hash, KanbanSquare, KeyRound, Loader2, Lock, Mail, ShieldCheck, Sun, Timer,
+  AtSign, BellRing, Eye, EyeOff, Hash, KanbanSquare, KeyRound, Loader2, Lock, Mail, ShieldCheck, Sun, Timer,
 } from "lucide-react"
 import { login, pinLogin, type AuthUser } from "@/lib/api"
 import { PinInput } from "@/components/auth/PinInput"
@@ -24,10 +24,12 @@ function greeting() {
 }
 
 const REMEMBER_KEY = "shc-remember-email"
+const REMEMBER_USERNAME_KEY = "shc-remember-username"
 
 export function LoginPage() {
   const navigate = useNavigate()
   const [email, setEmail] = useState("")
+  const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [mode, setMode] = useState<"password" | "pin">("password")
   const [pin, setPin] = useState("")
@@ -44,6 +46,9 @@ export function LoginPage() {
       setEmail(saved)
       setRemember(true)
     }
+    const savedUsername = localStorage.getItem(REMEMBER_USERNAME_KEY)
+    if (savedUsername) setUsername(savedUsername)
+    else if (saved) setUsername(saved.split("@")[0].toLowerCase())
   }, [])
 
   const afterLogin = (user: AuthUser, rememberEmail: boolean) => {
@@ -80,8 +85,8 @@ export function LoginPage() {
 
   const handlePin = async (pinValue: string) => {
     if (loading) return
-    if (!email.trim()) {
-      setError("Enter your email first, then your 6-digit PIN.")
+    if (!username.trim()) {
+      setError("Enter your username first, then your 6-digit PIN.")
       setErrorTick(t => t + 1)
       return
     }
@@ -89,8 +94,9 @@ export function LoginPage() {
     setError("")
     setLoading(true)
     try {
-      // PIN quick login keeps the email remembered so next time it's PIN-only typing.
-      afterLogin(await pinLogin(email.trim(), pinValue), true)
+      // PIN quick login remembers the username so next time it's PIN-only typing.
+      localStorage.setItem(REMEMBER_USERNAME_KEY, username.trim().toLowerCase())
+      afterLogin(await pinLogin(username.trim().toLowerCase(), pinValue), remember)
     } catch (err) {
       setPin("")
       fail(err, "PIN login failed — please try again")
@@ -186,23 +192,46 @@ export function LoginPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="email">Email</Label>
-            <div className="relative">
-              <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                id="email"
-                type="email"
-                autoComplete="email"
-                autoFocus
-                placeholder="you@sunnyhuecreatives.com"
-                className="pl-9"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
+          {mode === "password" ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="email">Email</Label>
+              <div className="relative">
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  autoFocus
+                  placeholder="you@sunnyhuecreatives.com"
+                  className="pl-9"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor="username">Username</Label>
+              <div className="relative">
+                <AtSign className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="username"
+                  type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoFocus
+                  placeholder="e.g. janelaurine"
+                  className="pl-9"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+          )}
 
           {mode === "password" ? (
             <div className="space-y-1.5">
@@ -234,12 +263,12 @@ export function LoginPage() {
             <div className="space-y-2">
               <Label>6-digit PIN</Label>
               <div key={errorTick} className={error ? "animate-[shake_0.3s_ease-in-out]" : undefined}>
-                <PinInput value={pin} onChange={setPin} onComplete={handlePin} autoFocus={!!email} disabled={loading} />
+                <PinInput value={pin} onChange={setPin} onComplete={handlePin} autoFocus={!!username} disabled={loading} />
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                {email
-                  ? <>Quick login for <span className="font-semibold text-foreground">{email}</span> — you'll be signed in as soon as the PIN is complete.</>
-                  : "Enter your email above, then your PIN — you'll be signed in right away."}
+                {username
+                  ? <>Quick login for <span className="font-semibold text-foreground">@{username}</span> — you'll be signed in as soon as the PIN is complete.</>
+                  : "Enter your username above, then your PIN — you'll be signed in right away."}
               </p>
             </div>
           )}
@@ -279,7 +308,7 @@ export function LoginPage() {
 
         <p className="mt-5 border-t border-border pt-4 text-center text-[11px] leading-relaxed text-muted-foreground">
           {mode === "pin" ? (
-            <>No PIN yet? Sign in with your password once, then set one in <span className="font-semibold">Profile → Security</span>.</>
+            <>No PIN yet? Sign in with your password once, then set your username + PIN in <span className="font-semibold">Profile → Security</span>.</>
           ) : (
             <>
               Forgot your password? Ask your admin to reset it for you.

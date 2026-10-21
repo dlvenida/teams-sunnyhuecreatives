@@ -38,7 +38,9 @@ class LoginRequest(BaseModel):
 
 
 class PinLoginRequest(BaseModel):
-    email: AppEmail
+    """Quick login: username + 6-digit PIN (email still accepted for older clients)."""
+    username: str | None = None
+    email: str | None = None
     pin: str = Field(pattern=r"^\d{6}$")
 
 
@@ -55,6 +57,7 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    username: str | None = None
     role: UserRole
     must_change_password: bool = False
     va_id: UUID | None = None
@@ -92,6 +95,7 @@ class CreateAppUserRequest(BaseModel):
 class AppUserResponse(BaseModel):
     id: UUID
     email: str
+    username: str | None = None
     name: str
     role: str
     is_active: bool
@@ -180,6 +184,7 @@ class VADelegateRequest(BaseModel):
 
 # Profile
 class ProfileUpdate(BaseModel):
+    username: str | None = None
     display_name: str | None = None
     phone: str | None = None
     address: str | None = None
@@ -212,6 +217,7 @@ class EmailChangeConfirm(BaseModel):
 class ProfileResponse(BaseModel):
     id: UUID
     email: str
+    username: str | None = None
     pending_email: str | None = None
     role: UserRole
     display_name: str

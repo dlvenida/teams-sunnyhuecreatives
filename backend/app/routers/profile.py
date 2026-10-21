@@ -60,6 +60,7 @@ def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
     return ProfileResponse(
         id=user.id,
         email=user.email,
+        username=user.username,
         pending_email=user.pending_email,
         role=user.role,
         display_name=_display_name(user, va),
@@ -105,6 +106,18 @@ def update_my_profile(
         va = db.query(VA).filter(VA.id == current.va_id).first()
 
     data = body.model_dump(exclude_unset=True)
+    new_username = data.pop("username", None)
+    if new_username is not None:
+        from app.auth import unique_username, valid_username
+        candidate = new_username.strip().lower()
+        if candidate != (user.username or ""):
+            if not valid_username(candidate):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                    detail="Username must be 3–30 characters: lowercase letters, numbers, dots, dashes or underscores, starting with a letter or number.")
+            taken = db.query(User).filter(User.username == candidate, User.id != user.id).first()
+            if taken:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="That username is already taken")
+            user.username = candidate
     display_name = data.pop("display_name", None)
     if display_name is not None:
         if va:

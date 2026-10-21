@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Briefcase, Hash, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
+import { AtSign, Briefcase, Hash, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
 import { PinInput } from "@/components/auth/PinInput"
 
 export function ProfilePage() {
@@ -25,6 +25,9 @@ export function ProfilePage() {
   const [currentPassword, setCurrentPassword] = useState("")
   const [newPassword, setNewPassword] = useState("")
   const [passwordMessage, setPasswordMessage] = useState("")
+  const [usernameValue, setUsernameValue] = useState("")
+  const [usernameMessage, setUsernameMessage] = useState("")
+  const [usernameOk, setUsernameOk] = useState(true)
   const [pinPassword, setPinPassword] = useState("")
   const [pin, setPinValue] = useState("")
   const [pinConfirm, setPinConfirm] = useState("")
@@ -40,6 +43,7 @@ export function ProfilePage() {
   useEffect(() => {
     if (profile) {
       setForm(profileToForm(profile))
+      setUsernameValue(profile.username || "")
       if (profile.must_change_password) setTab("security")
     }
   }, [profile])
@@ -114,6 +118,11 @@ export function ProfilePage() {
     onError: (err: Error) => setEmailMessage(err.message),
   })
 
+  const saveUsername = useMutation({
+    mutationFn: () => apiFetch("/profile/me", { method: "PATCH", body: JSON.stringify({ username: usernameValue.trim().toLowerCase() }) }),
+    onSuccess: () => { setUsernameOk(true); setUsernameMessage("✓ Username saved — use it with your PIN on the sign-in screen."); qc.invalidateQueries({ queryKey: ["profile"] }) },
+    onError: (err: Error) => { setUsernameOk(false); setUsernameMessage(err.message) },
+  })
   const setPin = useMutation({
     mutationFn: () =>
       apiFetch<{ message: string }>("/profile/set-pin", {
@@ -468,14 +477,38 @@ export function ProfilePage() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm">
+            <AtSign className="h-4 w-4 text-primary" /> Username
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Your username is how you sign in with Quick PIN: <span className="font-semibold text-foreground">username + 6-digit PIN</span>. Keep it short and easy to type.
+          </p>
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[220px] flex-1">
+              <Label htmlFor="username">Username</Label>
+              <Input id="username" value={usernameValue} onChange={(e) => setUsernameValue(e.target.value.toLowerCase())} placeholder="e.g. janelaurine" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+              <p className="mt-1 text-[10px] text-muted-foreground">3–30 characters: lowercase letters, numbers, dots, dashes, underscores.</p>
+            </div>
+            <Button variant="gold" size="sm" disabled={!usernameValue.trim() || usernameValue.trim().toLowerCase() === (profile.username || "") || saveUsername.isPending} onClick={() => saveUsername.mutate()}>
+              {saveUsername.isPending ? "Saving…" : "Save username"}
+            </Button>
+          </div>
+          {usernameMessage && <p className={`text-[11px] font-semibold ${usernameOk ? "text-green-600" : "text-red-600"}`} role="status">{usernameMessage}</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-sm">
             <Hash className="h-4 w-4 text-primary" /> Quick-Login PIN
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {profile.has_pin
-              ? "A PIN is set for this account. On the sign-in screen choose Quick PIN, enter your email and PIN, and you're in right away — no password typing. 5 wrong PINs locks PIN login for 15 minutes; your password always works."
-              : "Set a 6-digit PIN for faster sign-in on devices you trust. On the sign-in screen choose Quick PIN, enter your email and PIN, and you're in right away. Your full password always remains valid."}
+              ? "A PIN is set for this account. On the sign-in screen choose Quick PIN, enter your username and PIN, and you're in right away — no password typing. 5 wrong PINs locks PIN login for 15 minutes; your password always works."
+              : "Set a 6-digit PIN for faster sign-in on devices you trust. On the sign-in screen choose Quick PIN, enter your username and PIN, and you're in right away. Your full password always remains valid."}
           </p>
           <div className="grid gap-4 lg:grid-cols-3">
             <div>

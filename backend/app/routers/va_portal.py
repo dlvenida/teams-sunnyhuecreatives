@@ -1,3 +1,6 @@
+from calendar import monthrange
+from datetime import date
+from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
@@ -9,11 +12,15 @@ from app.deps import CurrentUser, require_va
 from app.models import Client, SubClient, VA, WorkLog, WorkLogStatus
 from app.schemas import ClientResponse, SubClientResponse, VAWorkLogUpdate
 from app.schemas import WorkLogCreate, WorkLogResponse
-from app.services.calculations import calculate_hours, calculate_pay
+from app.services.billing import get_week_period
+from app.services.calculations import calculate_hours
 from app.services.email import send_va_submission_notification
 from app.services.notifications import admin_user_ids, push
+from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
 
 router = APIRouter(prefix="/va", tags=["va"])
+
+BILLABLE = [WorkLogStatus.approved, WorkLogStatus.invoiced]
 
 
 def _serialize_log(log: WorkLog) -> WorkLogResponse:
@@ -40,6 +47,7 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
         clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
         created_at=log.created_at,
+        attachment_count=len(log.attachments) if getattr(log, "attachments", None) is not None else 0,
     )
 
 
@@ -134,7 +142,7 @@ def list_my_work_logs(
 ):
     logs = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task))
+        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments))
         .filter(WorkLog.va_id == current.va_id)
         .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
         .all()
@@ -167,7 +175,9 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
         start = body.start_time or log.start_time
         end = body.end_time or log.end_time
         log.hours = calculate_hours(start, end)
-        log.va_pay = calculate_pay(log.hours, log.va_rate)
+        rate, pay, _ = resolve_log_pay(db, current.va_id, log.client_id, log.hours)
+        log.va_rate = rate
+        log.va_pay = pay
         if log.status == WorkLogStatus.rejected:
             log.status = WorkLogStatus.submitted  # editing a rejected log resubmits it
     db.commit()
@@ -184,6 +194,82 @@ def delete_my_work_log(log_id: UUID, current: Annotated[CurrentUser, Depends(req
     db.commit()
 
 
+@router.get("/earnings")
+def my_earnings(
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    """VA earnings: This Week / Month / All Time + optional custom range. Approved (+invoiced) only."""
+    today = date.today()
+    week_start, week_end = get_week_period("this_week")
+    month_start = date(today.year, today.month, 1)
+    month_end = date(today.year, today.month, monthrange(today.year, today.month)[1])
+
+    logs = (
+        db.query(WorkLog)
+        .options(joinedload(WorkLog.client), joinedload(WorkLog.va))
+        .filter(WorkLog.va_id == current.va_id, WorkLog.status.in_(BILLABLE))
+        .order_by(WorkLog.work_date.desc())
+        .all()
+    )
+    va = db.query(VA).filter(VA.id == current.va_id).first()
+    currency = va.currency.value if va else "USD"
+
+    def period_stats(start: date | None, end: date | None):
+        subset = [l for l in logs if (start is None or l.work_date >= start) and (end is None or l.work_date <= end)]
+        hours = sum((l.hours for l in subset), Decimal("0"))
+        # Hourly pay from logs + package flats once per client in range
+        hourly_pay = sum((l.va_pay for l in subset), Decimal("0"))
+        client_ids = {l.client_id for l in subset}
+        flats = package_flats_for_period(db, current.va_id, client_ids)
+        package_pay = sum(flats.values(), Decimal("0"))
+        return {
+            "hours": str(hours),
+            "earned": str(hourly_pay + package_pay),
+            "entries": len(subset),
+            "currency": currency,
+        }
+
+    # Breakdown by client for custom range (or all time)
+    range_start, range_end = date_from, date_to
+    range_logs = [l for l in logs if (range_start is None or l.work_date >= range_start) and (range_end is None or l.work_date <= range_end)]
+    by_client_map: dict = {}
+    for l in range_logs:
+        key = str(l.client_id)
+        row = by_client_map.setdefault(
+            key,
+            {"client_id": key, "client_name": l.client.name if l.client else "Client", "hours": Decimal("0"), "earned": Decimal("0"), "pay_type": "hourly", "currency": currency, "status": "Approved"},
+        )
+        row["hours"] += l.hours
+        row["earned"] += l.va_pay
+    for cid, flat in package_flats_for_period(db, current.va_id, {UUID(k) for k in by_client_map}).items():
+        key = str(cid)
+        if key in by_client_map:
+            by_client_map[key]["earned"] = flat
+            by_client_map[key]["pay_type"] = "package"
+            rate = get_approved_rate(db, current.va_id, cid)
+            if rate:
+                by_client_map[key]["currency"] = rate.currency.value
+
+    by_client = [
+        {**r, "hours": str(r["hours"]), "earned": str(r["earned"])}
+        for r in sorted(by_client_map.values(), key=lambda x: x["client_name"].lower())
+    ]
+
+    return {
+        "currency": currency,
+        "this_week": period_stats(week_start, week_end),
+        "this_month": period_stats(month_start, month_end),
+        "all_time": period_stats(None, None),
+        "range": period_stats(range_start, range_end) if (date_from or date_to) else None,
+        "by_client": by_client,
+        "date_from": str(date_from) if date_from else None,
+        "date_to": str(date_to) if date_to else None,
+    }
+
+
 @router.post("/work-logs", response_model=WorkLogResponse, status_code=status.HTTP_201_CREATED)
 def submit_work_log(
     body: WorkLogCreate,
@@ -191,7 +277,7 @@ def submit_work_log(
     db: Annotated[Session, Depends(get_db)],
 ):
     hours = calculate_hours(body.start_time, body.end_time)
-    pay = calculate_pay(hours, body.va_rate)
+    rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
 
     log = WorkLog(
         work_date=body.work_date,
@@ -205,7 +291,7 @@ def submit_work_log(
         start_time=body.start_time,
         end_time=body.end_time,
         hours=hours,
-        va_rate=body.va_rate,
+        va_rate=rate,
         va_pay=pay,
         notes=body.notes,
         status=WorkLogStatus.submitted,

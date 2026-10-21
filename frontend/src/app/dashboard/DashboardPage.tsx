@@ -4,12 +4,12 @@ import { Link } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import type { DashboardOverview, DashboardSummary, TaskItem } from "@/lib/types"
 import type { UserProfile } from "@/lib/profile"
-import { formatDate } from "@/lib/utils"
+import { formatCurrency, formatDate, cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { Input, Label } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TASK_STATUSES, PRIORITY_META, formatDuration } from "@/components/tasks/task-utils"
-import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, Volume2, X } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, DollarSign, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, TrendingUp, Volume2, X } from "lucide-react"
 
 const QUOTES = [
   { text: "The secret of getting ahead is getting started.", author: "Mark Twain" },
@@ -306,14 +306,35 @@ export function DashboardPage() {
   const [readerOpen, setReaderOpen] = useState(false)
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
-  const base = isAdmin ? "/admin" : "/va"
+  const isStaff = user?.role === "admin" || user?.role === "auditor"
+  const isVA = user?.role === "va"
+  const base = isStaff ? "/admin" : "/va"
   const { data: profile } = useQuery({ queryKey: ["profile"], queryFn: () => apiFetch<UserProfile>("/profile/me"), staleTime: 60_000 })
   const firstName = (profile?.display_name || user?.name || "there").split(" ")[0]
   const { label: greetLabel, Icon: GreetIcon, emoji, emojiClass } = greeting()
   const quote = useMemo(quoteOfDay, [])
 
   const { data: overview, isLoading: ovLoading } = useQuery({ queryKey: ["dashboard-overview"], queryFn: () => apiFetch<DashboardOverview>("/dashboard/overview"), refetchInterval: 30_000 })
-  const { data } = useQuery({ queryKey: ["dashboard"], queryFn: () => apiFetch<DashboardSummary>("/dashboard/summary"), enabled: isAdmin })
+  const { data } = useQuery({ queryKey: ["dashboard"], queryFn: () => apiFetch<DashboardSummary>("/dashboard/summary"), enabled: isStaff })
+  const [payFrom, setPayFrom] = useState("")
+  const [payTo, setPayTo] = useState("")
+  type Earnings = {
+    this_week: { hours: string; earned: string; currency: string }
+    this_month: { hours: string; earned: string; currency: string }
+    all_time: { hours: string; earned: string; currency: string }
+    range?: { hours: string; earned: string; currency: string } | null
+    by_client: { client_name: string; hours: string; earned: string; pay_type: string; currency: string; status: string }[]
+  }
+  const { data: earnings } = useQuery({
+    queryKey: ["va-earnings", payFrom, payTo],
+    queryFn: () => {
+      const qs = new URLSearchParams()
+      if (payFrom) qs.set("date_from", payFrom)
+      if (payTo) qs.set("date_to", payTo)
+      return apiFetch<Earnings>(`/va/earnings${qs.toString() ? `?${qs}` : ""}`)
+    },
+    enabled: isVA,
+  })
   const approve = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}/approve`, { method: "POST" }), onSuccess: () => { qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["dashboard-overview"] }) } })
   const reject = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}/reject`, { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboard"] }) })
 
@@ -349,13 +370,148 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {readerOpen && <div id="dashboard-reader" className="scroll-mt-20"><DashboardReader overview={overview} isAdmin={isAdmin} firstName={firstName} autoPlay onClose={() => setReaderOpen(false)} /></div>}
+      {readerOpen && <div id="dashboard-reader" className="scroll-mt-20"><DashboardReader overview={overview} isAdmin={isStaff} firstName={firstName} autoPlay onClose={() => setReaderOpen(false)} /></div>}
+
+      {/* VA earnings strip + pay report (Approved only) */}
+      {isVA && earnings && (
+        <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              { label: "This Week", ...earnings.this_week },
+              { label: "This Month", ...earnings.this_month },
+              { label: "All Time", ...earnings.all_time },
+            ].map((s) => (
+              <Card key={s.label} className="min-w-0">
+                <CardContent className="p-4">
+                  <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
+                  <p className="mt-1 text-2xl font-extrabold">{formatCurrency(s.earned, s.currency)}</p>
+                  <p className="text-[11px] text-muted-foreground">{s.hours}h approved</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          <Card>
+            <CardHeader className="pb-2"><CardTitle>My Pay Report</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-[11px] text-muted-foreground">Only Jane-approved entries count. Pending and rejected work is excluded.</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div><Label className="text-[11px]">From</Label><Input type="date" value={payFrom} onChange={(e) => setPayFrom(e.target.value)} /></div>
+                <div><Label className="text-[11px]">To</Label><Input type="date" value={payTo} onChange={(e) => setPayTo(e.target.value)} /></div>
+                <Button variant="outline" size="sm" onClick={() => { setPayFrom(""); setPayTo("") }}>Clear</Button>
+              </div>
+              {earnings.range && (payFrom || payTo) && (
+                <p className="text-sm font-semibold">
+                  Range total: {formatCurrency(earnings.range.earned, earnings.range.currency)} · {earnings.range.hours}h approved
+                </p>
+              )}
+              {earnings.by_client.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Client</th><th className="p-3">Type</th><th className="p-3">Hours</th><th className="p-3">Earned</th><th className="p-3">Status</th></tr></thead>
+                    <tbody>
+                      {earnings.by_client.map((r) => (
+                        <tr key={r.client_name} className="border-b">
+                          <td className="p-3 font-semibold">{r.client_name}</td>
+                          <td className="p-3 capitalize">{r.pay_type}</td>
+                          <td className="p-3">{r.hours}</td>
+                          <td className="p-3">{formatCurrency(r.earned, r.currency)}</td>
+                          <td className="p-3">{r.status}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {earnings.by_client.length === 0 && <p className="text-xs text-muted-foreground">No approved work in this range yet.</p>}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Jane profit bar + business stats (admin only — money hidden for auditor) */}
+      {isAdmin && data && (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {[
+              { label: "Total Invoiced", value: formatCurrency(data.total_invoiced), icon: DollarSign },
+              { label: "Paid by Clients", value: formatCurrency(data.paid_by_clients), icon: CheckCircle2 },
+              { label: "Total VA Payout", value: formatCurrency(data.total_va_payout), icon: DollarSign },
+              {
+                label: "Estimated Profit",
+                value: formatCurrency(data.estimated_profit),
+                icon: TrendingUp,
+                tone: Number(data.estimated_profit) >= 0 ? "text-green-600" : "text-red-600",
+              },
+              { label: "Pending Entries", value: String(data.pending_entries), icon: ClipboardList },
+              { label: "Approved Hours", value: String(data.approved_hours), icon: Timer },
+            ].map((s) => (
+              <Card key={s.label} className="min-w-0">
+                <CardContent className="flex items-center gap-3 p-4">
+                  <s.icon className={cn("h-5 w-5 shrink-0 text-primary", s.tone)} />
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
+                    <p className={cn("truncate text-lg font-extrabold", s.tone)}>{s.value}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { label: "Active Clients", value: data.active_clients },
+              { label: "Invoices Issued", value: data.invoices_issued },
+              { label: "This Week's VA Pay", value: formatCurrency(data.this_week_va_pay) },
+              { label: "Active VAs", value: data.active_vas },
+            ].map((s) => (
+              <Card key={s.label} className="min-w-0">
+                <CardContent className="p-4">
+                  <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
+                  <p className="mt-1 text-2xl font-extrabold">{s.value}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card className="min-w-0">
+              <CardHeader className="pb-2"><CardTitle>Hours by Client</CardTitle></CardHeader>
+              <CardContent className="space-y-2">
+                {data.hours_by_client.length === 0 && <p className="text-xs text-muted-foreground">No approved hours yet.</p>}
+                {data.hours_by_client.slice(0, 8).map((row) => {
+                  const max = Math.max(...data.hours_by_client.map((r) => r.hours), 1)
+                  return (
+                    <div key={row.client} className="flex items-center gap-3 text-xs">
+                      <span className="w-28 truncate font-semibold sm:w-36">{row.client}</span>
+                      <span className="h-2.5 flex-1 rounded-full bg-slate-100">
+                        <span className="block h-2.5 rounded-full bg-primary" style={{ width: `${Math.max(4, (row.hours / max) * 100)}%` }} />
+                      </span>
+                      <span className="w-12 text-right font-mono text-muted-foreground">{row.hours}h</span>
+                    </div>
+                  )
+                })}
+              </CardContent>
+            </Card>
+            <Card className="min-w-0">
+              <CardHeader className="pb-2"><CardTitle>VA Pay This Week</CardTitle></CardHeader>
+              <CardContent className="grid gap-2 sm:grid-cols-2">
+                {data.va_pay_this_week.length === 0 && <p className="text-xs text-muted-foreground">No approved VA pay this week.</p>}
+                {data.va_pay_this_week.map((v) => (
+                  <div key={v.va_id} className="rounded-xl border p-3">
+                    <p className="text-xs font-semibold">{v.name}</p>
+                    <p className="mt-1 text-lg font-extrabold">{formatCurrency(v.pay, v.currency)}</p>
+                    <p className="text-[11px] text-muted-foreground">{v.hours}h · {v.currency}</p>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      )}
 
       {/* Smart advice — time & workload aware */}
       <div>
         <p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground"><Lightbulb className="h-3.5 w-3.5 text-primary" /> Smart advice for {greetLabel.replace("Good ", "").toLowerCase()}</p>
         <div className="grid gap-3 lg:grid-cols-3">
-          {buildAdvice(overview, isAdmin).map((a, i) => (
+          {buildAdvice(overview, isStaff).map((a, i) => (
             <div key={i} className={cn("monday-card rounded-2xl border p-4", a.tone === "danger" && "border-red-200 bg-red-50/70", a.tone === "warn" && "border-amber-200 bg-amber-50/70", a.tone === "calm" && "border-primary/25 bg-primary/[0.04]", a.tone === "primary" && "bg-card")}>
               <p className="flex items-center gap-2 text-sm font-bold"><span className="text-lg">{a.emoji}</span>{a.title}</p>
               <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground">{a.text}</p>
@@ -401,7 +557,7 @@ export function DashboardPage() {
               <div className="mt-2 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, background: p.color }} /></div></Link>) })}
           {overview.projects.length === 0 && <p className="text-xs text-muted-foreground">No active projects yet.</p>}
         </CardContent></Card>
-        {isAdmin ? (
+        {isStaff ? (
           <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Team Load — Who's Busy</CardTitle></CardHeader><CardContent className="space-y-2">
             {(overview.team_load ?? []).map(v => (
               <div key={v.name} className="flex items-center gap-3 text-xs">
@@ -421,10 +577,23 @@ export function DashboardPage() {
         )}
       </div>
 
-      {isAdmin && data && data.pending_logs.length > 0 && (
+      {isStaff && data && data.pending_logs.length > 0 && (
           <Card><CardHeader className="pb-2"><CardTitle>Pending Approval ({data.pending_logs.length})</CardTitle></CardHeader><CardContent className="overflow-x-auto p-0"><table className="w-full text-xs">
             <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">VA</th><th className="p-3">Client</th><th className="p-3">Hours</th><th className="p-3">Actions</th></tr></thead>
             <tbody>{data.pending_logs.map(log => <tr key={log.id} className="border-b"><td className="p-3">{log.work_date}</td><td className="p-3">{log.va_name}</td><td className="p-3">{log.client_name}</td><td className="p-3">{log.hours}</td><td className="p-3"><div className="flex gap-1"><Button size="sm" variant="success" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></div></td></tr>)}</tbody></table></CardContent></Card>
+      )}
+
+      {isStaff && data && !isAdmin && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            { label: "Pending Entries", value: data.pending_entries },
+            { label: "Approved Hours", value: data.approved_hours },
+            { label: "Active Clients", value: data.active_clients },
+            { label: "Active VAs", value: data.active_vas },
+          ].map((s) => (
+            <Card key={s.label} className="min-w-0"><CardContent className="p-4"><p className="text-[11px] font-medium text-muted-foreground">{s.label}</p><p className="mt-1 text-2xl font-extrabold">{s.value}</p></CardContent></Card>
+          ))}
+        </div>
       )}
     </div>
   )

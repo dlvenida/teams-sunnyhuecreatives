@@ -79,7 +79,7 @@ export function ReportsPage() {
       <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-5">
         <div><Label>Month</Label><Select value={month} onChange={(e) => setMonth(Number(e.target.value))}>{MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></div>
         <div><Label>Year</Label><Select value={year} onChange={(e) => setYear(Number(e.target.value))}>{[2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}</Select></div>
-        <div><Label>Cutoff</Label><Select value={cutoff} onChange={(e) => setCutoff(Number(e.target.value))}><option value={15}>1st – 15th</option><option value={30}>Full month</option></Select></div>
+        <div><Label>Cutoff</Label><Select value={cutoff} onChange={(e) => setCutoff(Number(e.target.value))}><option value={15}>1st – 15th</option><option value={30}>16th – end</option></Select></div>
         {showPricing && <div><Label>Amounts</Label><Select value={showRate ? "yes" : "no"} onChange={(e) => setShowRate(e.target.value === "yes")}><option value="no">Hours only</option><option value="yes">Include rate & amount</option></Select></div>}
         <div><Label>Find client</Label><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8" placeholder="Search clients…" value={search} onChange={(e) => setSearch(e.target.value)} /></div></div>
       </div>

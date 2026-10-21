@@ -11,6 +11,7 @@ from app.deps import CurrentUser, require_admin
 from app.models import (
     BillingType,
     Client,
+    ClientPackage,
     Invoice,
     InvoiceLineItem,
     InvoiceStatus,
@@ -21,6 +22,24 @@ from app.schemas import InvoiceGenerateRequest, InvoiceLineItemResponse, Invoice
 from app.services.billing import get_billing_period, next_invoice_number
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
+
+
+def _invoice_amount(
+    billing_type: BillingType,
+    rate: Decimal,
+    total_hours: Decimal,
+    included_hours: Decimal | None = None,
+    overage_rate: Decimal | None = None,
+) -> tuple[Decimal, Decimal | None, Decimal | None]:
+    """Return (amount, overage_hours, overage_amount)."""
+    if billing_type == BillingType.hourly:
+        return (total_hours * rate).quantize(Decimal("0.01")), None, None
+    if billing_type == BillingType.package_hours:
+        included = included_hours or Decimal("0")
+        overage_hrs = max(Decimal("0"), total_hours - included)
+        overage_amt = (overage_hrs * (overage_rate or Decimal("0"))).quantize(Decimal("0.01"))
+        return (rate + overage_amt).quantize(Decimal("0.01")), overage_hrs, overage_amt
+    return rate, None, None
 
 
 def _serialize_invoice(inv: Invoice) -> InvoiceResponse:
@@ -105,19 +124,29 @@ def preview_invoice(
     rate: Decimal,
     _: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
+    package_id: UUID | None = None,
+    included_hours: Decimal | None = None,
+    overage_rate: Decimal | None = None,
 ):
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
 
+    if package_id:
+        pkg = db.query(ClientPackage).filter(ClientPackage.id == package_id, ClientPackage.client_id == client_id).first()
+        if pkg:
+            billing_type = pkg.billing_type
+            rate = pkg.amount
+            included_hours = pkg.included_hours
+            overage_rate = pkg.overage_rate
+
     period_start, period_end, period_label = get_billing_period(year, month, cutoff)
     approved, submitted_count = _period_logs(db, client_id, period_start, period_end)
     total_hours = sum((log.hours for log in approved), Decimal("0"))
 
-    if billing_type == BillingType.hourly:
-        estimated = (total_hours * rate).quantize(Decimal("0.01")) if approved else None
-    else:
-        estimated = rate if approved else None
+    estimated = overage_hrs = overage_amt = None
+    if approved:
+        estimated, overage_hrs, overage_amt = _invoice_amount(billing_type, rate, total_hours, included_hours, overage_rate)
 
     if approved:
         message = f"Ready to invoice {len(approved)} approved entr{'y' if len(approved) == 1 else 'ies'}."
@@ -137,6 +166,9 @@ def preview_invoice(
         billing_type=billing_type,
         can_generate=len(approved) > 0,
         message=message,
+        included_hours=included_hours,
+        overage_hours=overage_hrs,
+        overage_amount=overage_amt,
     )
 
 
@@ -157,11 +189,22 @@ def generate_invoice(
     if not logs:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No approved entries for this period")
 
+    billing_type = body.billing_type
+    rate = body.rate
+    included_hours = body.included_hours
+    overage_rate = body.overage_rate
+    if body.package_id:
+        pkg = db.query(ClientPackage).filter(ClientPackage.id == body.package_id, ClientPackage.client_id == body.client_id).first()
+        if pkg:
+            billing_type = body.billing_type or pkg.billing_type
+            if body.included_hours is None:
+                included_hours = pkg.included_hours
+            if body.overage_rate is None:
+                overage_rate = pkg.overage_rate
+            # body.rate is Jane's override (auto-filled from package in UI)
+
     total_hours = sum((log.hours for log in logs), Decimal("0"))
-    if body.billing_type == BillingType.hourly:
-        amount = (total_hours * body.rate).quantize(Decimal("0.01"))
-    else:
-        amount = body.rate
+    amount, overage_hrs, overage_amt = _invoice_amount(billing_type, rate, total_hours, included_hours, overage_rate)
 
     numbers = [inv.invoice_number for inv in db.query(Invoice.invoice_number).all()]
     invoice_number = body.invoice_number or next_invoice_number(numbers, body.year)
@@ -179,8 +222,8 @@ def generate_invoice(
         period_start=period_start,
         period_end=period_end,
         total_hours=total_hours,
-        billing_type=body.billing_type,
-        rate=body.rate,
+        billing_type=billing_type,
+        rate=rate,
         amount=amount,
         status=InvoiceStatus.unpaid,
         payment_method=body.payment_method,
@@ -192,22 +235,39 @@ def generate_invoice(
     db.add(invoice)
     db.flush()
 
-    client_rate = body.rate if body.billing_type == BillingType.hourly else (amount / total_hours if total_hours else body.rate)
+    client_rate = rate if billing_type == BillingType.hourly else (amount / total_hours if total_hours else rate)
 
     for log in logs:
-        line_amount = (log.hours * client_rate).quantize(Decimal("0.01")) if body.billing_type == BillingType.hourly else Decimal("0")
+        line_amount = (log.hours * client_rate).quantize(Decimal("0.01")) if billing_type == BillingType.hourly else Decimal("0")
         item = InvoiceLineItem(
             invoice_id=invoice.id,
             work_log_id=log.id,
             line_date=log.work_date,
             description=log.description_plain,
             hours=log.hours,
-            rate=client_rate,
-            amount=line_amount if body.billing_type == BillingType.hourly else Decimal("0"),
+            rate=client_rate if billing_type == BillingType.hourly else rate,
+            amount=line_amount if billing_type == BillingType.hourly else Decimal("0"),
         )
         db.add(item)
         log.status = WorkLogStatus.invoiced
         log.invoice_id = invoice.id
+
+    # Package / package_hours: add summary line items
+    if billing_type == BillingType.fixed:
+        db.add(InvoiceLineItem(
+            invoice_id=invoice.id, work_log_id=None, line_date=period_end,
+            description="Fixed package", hours=total_hours, rate=rate, amount=amount,
+        ))
+    elif billing_type == BillingType.package_hours:
+        db.add(InvoiceLineItem(
+            invoice_id=invoice.id, work_log_id=None, line_date=period_end,
+            description=f"Package ({included_hours or 0} hrs included)", hours=min(total_hours, included_hours or total_hours), rate=rate, amount=rate,
+        ))
+        if overage_hrs and overage_hrs > 0:
+            db.add(InvoiceLineItem(
+                invoice_id=invoice.id, work_log_id=None, line_date=period_end,
+                description="Overage hours", hours=overage_hrs, rate=overage_rate or Decimal("0"), amount=overage_amt or Decimal("0"),
+            ))
 
     db.commit()
     invoice = (

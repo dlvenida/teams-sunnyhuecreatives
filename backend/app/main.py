@@ -23,6 +23,7 @@ from app.routers import (
     timeclock,
     user_reports,
     va_portal,
+    va_rates,
     vas,
     work_logs,
 )
@@ -140,6 +141,7 @@ app.include_router(clients.router)
 app.include_router(vas.router)
 app.include_router(work_logs.router)
 app.include_router(va_portal.router)
+app.include_router(va_rates.router)
 app.include_router(dashboard.router)
 app.include_router(payroll.router)
 app.include_router(reports.router)

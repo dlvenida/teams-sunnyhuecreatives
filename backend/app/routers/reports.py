@@ -105,7 +105,15 @@ def report_clients(
                 pending_count=len(pending),
                 ready_to_invoice_hours=billable - invoiced,
                 invoiced_hours=invoiced,
-                amount=(sum((l.hours * l.va_rate for l in logs), Decimal("0")) if show_rate else None),
+                amount=(
+                    (
+                        sum((l.hours * (client.default_rate or Decimal("0")) for l in logs), Decimal("0"))
+                        if str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type) == "hourly"
+                        else (client.default_rate or Decimal("0"))
+                    )
+                    if show_rate
+                    else None
+                ),
                 va_names=sorted({l.va.name for l in logs if l.va}),
                 last_activity=max((l.work_date for l in logs), default=None),
                 invoice_number=invoice.invoice_number if invoice else None,
@@ -164,9 +172,17 @@ def generate_report(
             end_time=log.end_time.strftime("%H:%M") if log.end_time else None,
         )
         if show_rate:
-            line.rate = log.va_rate
-            line.amount = log.hours * log.va_rate
-            total_amount += line.amount
+            # Client billing track — never use VA payroll rates
+            client_rate = client.default_rate or Decimal("0")
+            billing = str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type)
+            if billing == "hourly":
+                line.rate = client_rate
+                line.amount = log.hours * client_rate
+                total_amount += line.amount
+            else:
+                # Fixed package: show hours only on lines; amount is the package (set once after loop)
+                line.rate = None
+                line.amount = None
         lines.append(line)
         total_hours += log.hours
         for bucket, key in (
@@ -203,6 +219,11 @@ def generate_report(
         )
         .count()
     )
+
+    if show_rate:
+        billing = str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type)
+        if billing != "hourly":
+            total_amount = client.default_rate or Decimal("0")
 
     return ReportResponse(
         client_name=client.name,

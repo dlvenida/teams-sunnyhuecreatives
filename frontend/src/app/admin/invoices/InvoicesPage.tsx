@@ -43,8 +43,11 @@ export function InvoicesPage() {
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1,
     cutoff: 30,
-    billing_type: "hourly" as "hourly" | "fixed",
+    billing_type: "hourly" as "hourly" | "fixed" | "package_hours",
     rate: "",
+    included_hours: "",
+    overage_rate: "",
+    package_id: "",
     invoice_number: "",
     payment_method: "wise" as "wise" | "paypal" | "bank_transfer",
     bank_details: "",
@@ -77,12 +80,28 @@ export function InvoicesPage() {
   const effectiveRate = rateNum
   const previewEnabled = !!form.client_id && !Number.isNaN(effectiveRate) && effectiveRate > 0
 
+  const { data: packages = [] } = useQuery({
+    queryKey: ["client-packages", form.client_id],
+    queryFn: () => apiFetch<import("@/lib/types").ClientPackage[]>(`/clients/${form.client_id}/packages`),
+    enabled: !!form.client_id,
+  })
+
   const { data: periodPreview, isFetching: previewLoading } = useQuery({
-    queryKey: ["invoice-preview", form.client_id, form.year, form.month, form.cutoff, form.billing_type, form.rate],
-    queryFn: () =>
-      apiFetch<InvoicePreview>(
-        `/invoices/preview?client_id=${form.client_id}&year=${form.year}&month=${form.month}&cutoff=${form.cutoff}&billing_type=${form.billing_type}&rate=${form.rate}`,
-      ),
+    queryKey: ["invoice-preview", form.client_id, form.year, form.month, form.cutoff, form.billing_type, form.rate, form.package_id, form.included_hours, form.overage_rate],
+    queryFn: () => {
+      const qs = new URLSearchParams({
+        client_id: form.client_id,
+        year: String(form.year),
+        month: String(form.month),
+        cutoff: String(form.cutoff),
+        billing_type: form.billing_type,
+        rate: form.rate,
+      })
+      if (form.package_id) qs.set("package_id", form.package_id)
+      if (form.included_hours) qs.set("included_hours", form.included_hours)
+      if (form.overage_rate) qs.set("overage_rate", form.overage_rate)
+      return apiFetch<InvoicePreview>(`/invoices/preview?${qs}`)
+    },
     enabled: previewEnabled,
   })
 
@@ -124,11 +143,30 @@ export function InvoicesPage() {
     setForm((f) => ({
       ...f,
       client_id: clientId,
-      billing_type: (c?.billing_type as "hourly" | "fixed") || "hourly",
+      billing_type: (c?.billing_type as "hourly" | "fixed" | "package_hours") || "hourly",
       rate,
+      package_id: "",
+      included_hours: "",
+      overage_rate: "",
     }))
     setGenerateError("")
     setGenerateSuccess("")
+  }
+
+  const onPackageChange = (packageId: string) => {
+    const p = packages.find((x) => x.id === packageId)
+    if (!p) {
+      setForm((f) => ({ ...f, package_id: "" }))
+      return
+    }
+    setForm((f) => ({
+      ...f,
+      package_id: packageId,
+      billing_type: p.billing_type,
+      rate: p.amount,
+      included_hours: p.included_hours || "",
+      overage_rate: p.overage_rate || "",
+    }))
   }
 
   const generate = useMutation({
@@ -146,6 +184,9 @@ export function InvoicesPage() {
           payment_method: form.payment_method,
           bank_details: form.bank_details || null,
           payment_terms_days: form.payment_terms_days,
+          package_id: form.package_id || null,
+          included_hours: form.included_hours ? parseFloat(form.included_hours) : null,
+          overage_rate: form.overage_rate ? parseFloat(form.overage_rate) : null,
         }),
       }),
     onSuccess: (inv) => {
@@ -310,16 +351,38 @@ export function InvoicesPage() {
             <Label>Cutoff</Label>
             <Select value={form.cutoff} onChange={(e) => setForm({ ...form, cutoff: Number(e.target.value) })}>
               <option value={15}>1st – 15th</option>
-              <option value={30}>Full month</option>
+              <option value={30}>16th – end</option>
             </Select>
           </div>
           <div>
             <Label>Billing type</Label>
-            <Select value={form.billing_type} onChange={(e) => setForm({ ...form, billing_type: e.target.value as "hourly" | "fixed" })}>
+            <Select value={form.billing_type} onChange={(e) => setForm({ ...form, billing_type: e.target.value as "hourly" | "fixed" | "package_hours" })}>
               <option value="hourly">Hourly</option>
               <option value="fixed">Fixed package</option>
+              <option value="package_hours">Package + included hours</option>
             </Select>
           </div>
+          {packages.length > 0 && (
+            <div>
+              <Label>Client package</Label>
+              <Select value={form.package_id} onChange={(e) => onPackageChange(e.target.value)}>
+                <option value="">Default / manual</option>
+                {packages.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.billing_type})</option>)}
+              </Select>
+            </div>
+          )}
+          {form.billing_type === "package_hours" && showPricing && (
+            <>
+              <div>
+                <Label>Included hours</Label>
+                <Input type="number" step="0.01" value={form.included_hours} onChange={(e) => setForm({ ...form, included_hours: e.target.value })} />
+              </div>
+              <div>
+                <Label>Overage rate ($)</Label>
+                <Input type="number" step="0.01" value={form.overage_rate} onChange={(e) => setForm({ ...form, overage_rate: e.target.value })} />
+              </div>
+            </>
+          )}
           {showPricing && (
           <div>
             <Label>{form.billing_type === "hourly" ? "Hourly rate ($)" : "Package amount ($)"}</Label>

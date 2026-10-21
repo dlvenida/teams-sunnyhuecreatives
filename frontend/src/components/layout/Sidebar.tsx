@@ -18,7 +18,7 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("sidebar-collapsed") === "1")
   const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const { data: profile } = useQuery({ queryKey: ["profile"], queryFn: () => apiFetch<UserProfile>("/profile/me"), staleTime: 60_000 })
-  const profilePath = user?.role === "admin" ? "/admin/profile" : "/va/profile"
+  const profilePath = user?.role === "va" ? "/va/profile" : "/admin/profile"
 
   useEffect(() => {
     if (profile && user && profile.display_name && profile.display_name !== user.name) {
@@ -55,7 +55,7 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
         {(!collapsed || mobileOpen) && (
           <div className="min-w-0 flex-1">
             <p className="gradient-text truncate text-[15px] font-extrabold tracking-tight">Teams.SHC</p>
-            <p className="text-[10px] capitalize text-muted-foreground">{user?.role === "admin" ? "Admin workspace" : "VA workspace"}</p>
+            <p className="text-[10px] capitalize text-muted-foreground">{user?.role === "admin" ? "Admin workspace" : user?.role === "auditor" ? "Auditor workspace" : "VA workspace"}</p>
           </div>
         )}
         {mobileOpen ? <button className="lg:hidden" onClick={onClose} aria-label="Close menu"><X className="h-5 w-5" /></button> : (

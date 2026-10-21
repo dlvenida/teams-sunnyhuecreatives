@@ -31,6 +31,18 @@ class UserRole(str, enum.Enum):
 class BillingType(str, enum.Enum):
     hourly = "hourly"
     fixed = "fixed"
+    package_hours = "package_hours"  # flat + included hours + overage rate
+
+
+class PayType(str, enum.Enum):
+    hourly = "hourly"
+    package = "package"
+
+
+class RateStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
 
 
 class Currency(str, enum.Enum):
@@ -146,6 +158,7 @@ class Client(Base):
     sub_clients: Mapped[list["SubClient"]] = relationship(back_populates="client", cascade="all, delete-orphan")
     work_logs: Mapped[list["WorkLog"]] = relationship(back_populates="client")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="client")
+    packages: Mapped[list["ClientPackage"]] = relationship(back_populates="client", cascade="all, delete-orphan")
 
 
 class SubClient(Base):
@@ -389,6 +402,7 @@ class WorkLog(Base):
     invoice: Mapped["Invoice | None"] = relationship(back_populates="work_logs")
     project: Mapped["Project | None"] = relationship()
     task: Mapped["Task | None"] = relationship()
+    attachments: Mapped[list["WorkLogAttachment"]] = relationship(back_populates="work_log", cascade="all, delete-orphan")
 
 
 class Invoice(Base):
@@ -570,3 +584,63 @@ class TimeClockAdjustment(Base):
 
     entry: Mapped["TimeClockEntry"] = relationship()
     va: Mapped["VA"] = relationship()
+
+
+class VARate(Base):
+    """Per-VA, per-client pay rate. Pending until Jane approves; prior approved stays active."""
+    __tablename__ = "va_rates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    va_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"), index=True)
+    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    pay_type: Mapped[PayType] = mapped_column(Enum(PayType, name="pay_type"))
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency", create_constraint=False))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    status: Mapped[RateStatus] = mapped_column(Enum(RateStatus, name="rate_status"), default=RateStatus.pending, index=True)
+    set_by_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    effective_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    va: Mapped["VA"] = relationship()
+    client: Mapped["Client"] = relationship()
+
+
+class WorkLogAttachment(Base):
+    """Optional proof-of-work images on a work log entry."""
+    __tablename__ = "work_log_attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    work_log_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("work_logs.id", ondelete="CASCADE"), index=True)
+    storage_key: Mapped[str] = mapped_column(String(512))
+    filename: Mapped[str] = mapped_column(String(255), default="")
+    content_type: Mapped[str] = mapped_column(String(100), default="image/jpeg")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    uploaded_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    work_log: Mapped["WorkLog"] = relationship(back_populates="attachments")
+
+
+class ClientPackage(Base):
+    """Client billing package — supports hourly, fixed, and package-with-included-hours."""
+    __tablename__ = "client_packages"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    billing_type: Mapped[BillingType] = mapped_column(Enum(BillingType, name="billing_type", create_constraint=False))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    included_hours: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    overage_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency", create_constraint=False), default=Currency.USD)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    client: Mapped["Client"] = relationship(back_populates="packages")

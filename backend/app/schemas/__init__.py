@@ -13,7 +13,9 @@ from app.models import (
     Currency,
     InvoiceStatus,
     PaymentMethod,
+    PayType,
     ProjectStatus,
+    RateStatus,
     TaskPriority,
     TaskStatus,
     UserRole,
@@ -108,6 +110,8 @@ class ClientCreate(BaseModel):
     name: str
     billing_type: BillingType
     default_rate: Decimal | None = None
+    included_hours: Decimal | None = None
+    overage_rate: Decimal | None = None
 
 
 class ClientUpdate(BaseModel):
@@ -115,6 +119,8 @@ class ClientUpdate(BaseModel):
     billing_type: BillingType | None = None
     default_rate: Decimal | None = None
     is_active: bool | None = None
+    included_hours: Decimal | None = None
+    overage_rate: Decimal | None = None
 
 
 class ClientResponse(BaseModel):
@@ -604,8 +610,97 @@ class WorkLogCreate(BaseModel):
     description_plain: str
     start_time: time
     end_time: time
-    va_rate: Decimal
+    va_rate: Decimal | None = None  # ignored — resolved from approved VARate
     notes: str | None = None
+
+
+class WorkLogAttachmentResponse(BaseModel):
+    id: UUID
+    work_log_id: UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+    width: int | None = None
+    height: int | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# VA Rates
+class VARateCreate(BaseModel):
+    client_id: UUID
+    pay_type: PayType
+    currency: Currency
+    amount: Decimal
+    notes: str | None = None
+
+
+class VARateAdminCreate(BaseModel):
+    va_id: UUID
+    client_id: UUID
+    pay_type: PayType
+    currency: Currency
+    amount: Decimal
+    notes: str | None = None
+
+
+class VARateResponse(BaseModel):
+    id: UUID
+    va_id: UUID
+    va_name: str | None = None
+    client_id: UUID
+    client_name: str | None = None
+    pay_type: PayType
+    currency: Currency
+    amount: Decimal
+    status: RateStatus
+    set_by_admin: bool
+    notes: str | None = None
+    effective_from: date | None = None
+    created_at: datetime
+    reviewed_at: datetime | None = None
+    is_active_approved: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+# Client Packages
+class ClientPackageCreate(BaseModel):
+    client_id: UUID
+    name: str
+    billing_type: BillingType
+    amount: Decimal
+    included_hours: Decimal | None = None
+    overage_rate: Decimal | None = None
+    currency: Currency = Currency.USD
+    is_default: bool = False
+
+
+class ClientPackageUpdate(BaseModel):
+    name: str | None = None
+    billing_type: BillingType | None = None
+    amount: Decimal | None = None
+    included_hours: Decimal | None = None
+    overage_rate: Decimal | None = None
+    currency: Currency | None = None
+    is_default: bool | None = None
+    is_active: bool | None = None
+
+
+class ClientPackageResponse(BaseModel):
+    id: UUID
+    client_id: UUID
+    name: str
+    billing_type: BillingType
+    amount: Decimal
+    included_hours: Decimal | None = None
+    overage_rate: Decimal | None = None
+    currency: Currency
+    is_default: bool
+    is_active: bool
+
+    model_config = {"from_attributes": True}
 
 
 class WorkLogUpdate(BaseModel):
@@ -637,8 +732,8 @@ class WorkLogResponse(BaseModel):
     start_time: time
     end_time: time
     hours: Decimal
-    va_rate: Decimal
-    va_pay: Decimal
+    va_rate: Decimal | None = None
+    va_pay: Decimal | None = None
     notes: str | None
     status: WorkLogStatus
     invoice_id: UUID | None
@@ -650,6 +745,7 @@ class WorkLogResponse(BaseModel):
     clock_out_at: datetime | None = None
     source: str = "manual"
     created_at: datetime
+    attachment_count: int = 0
 
     model_config = {"from_attributes": True}
 
@@ -666,6 +762,9 @@ class InvoiceGenerateRequest(BaseModel):
     payment_method: PaymentMethod
     bank_details: str | None = None
     payment_terms_days: int = 7
+    package_id: UUID | None = None
+    included_hours: Decimal | None = None
+    overage_rate: Decimal | None = None
 
 
 class InvoicePreviewResponse(BaseModel):
@@ -679,6 +778,9 @@ class InvoicePreviewResponse(BaseModel):
     billing_type: BillingType
     can_generate: bool
     message: str
+    included_hours: Decimal | None = None
+    overage_hours: Decimal | None = None
+    overage_amount: Decimal | None = None
 
 
 class InvoiceLineItemResponse(BaseModel):

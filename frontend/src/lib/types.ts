@@ -1,8 +1,21 @@
 export interface Client {
   id: string
   name: string
-  billing_type: "hourly" | "fixed"
+  billing_type: "hourly" | "fixed" | "package_hours"
   default_rate: string | null
+  is_active: boolean
+}
+
+export interface ClientPackage {
+  id: string
+  client_id: string
+  name: string
+  billing_type: "hourly" | "fixed" | "package_hours"
+  amount: string
+  included_hours?: string | null
+  overage_rate?: string | null
+  currency: "PHP" | "USD"
+  is_default: boolean
   is_active: boolean
 }
 
@@ -73,6 +86,7 @@ export interface WorkLog {
   clock_out_at?: string | null
   source?: string
   created_at: string
+  attachment_count?: number
 }
 
 export interface Invoice {
@@ -84,7 +98,7 @@ export interface Invoice {
   period_start: string
   period_end: string
   total_hours: string
-  billing_type: "hourly" | "fixed"
+  billing_type: "hourly" | "fixed" | "package_hours"
   rate: string
   amount: string
   status: "unpaid" | "paid"
@@ -114,9 +128,12 @@ export interface InvoicePreview {
   submitted_entries: number
   total_hours: string
   estimated_amount: string | null
-  billing_type: "hourly" | "fixed"
+  billing_type: "hourly" | "fixed" | "package_hours"
   can_generate: boolean
   message: string
+  included_hours?: string | null
+  overage_hours?: string | null
+  overage_amount?: string | null
 }
 
 export interface DashboardSummary {

@@ -1,9 +1,11 @@
 # Logs
 logs
 *.log
-# But keep the All Logs page source (folder named "logs")
+# But keep source folders named "logs"
 !src/app/admin/logs/
 !src/app/admin/logs/**
+!src/components/logs/
+!src/components/logs/**
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

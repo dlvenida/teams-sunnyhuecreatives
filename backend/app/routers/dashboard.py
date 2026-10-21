@@ -31,10 +31,11 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
     today = date.today()
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
-    is_admin = current.role == UserRole.admin
+    is_admin = current.role in (UserRole.admin, UserRole.auditor)
+    is_va = current.role == UserRole.va
 
     tq = db.query(Task).options(joinedload(Task.client), joinedload(Task.project), joinedload(Task.assignee))
-    if not is_admin:
+    if is_va:
         tq = tq.filter(or_(Task.assignee_va_id == current.va_id, Task.created_by == current.user.id))
     all_tasks = tq.order_by(Task.due_date.asc().nullslast(), Task.created_at.asc()).all()
 
@@ -49,7 +50,7 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
 
     # Hours
     lq = db.query(WorkLog)
-    if not is_admin:
+    if is_va:
         lq = lq.filter(WorkLog.va_id == current.va_id)
     hours_today = lq.filter(WorkLog.work_date == today).with_entities(_func.coalesce(_func.sum(WorkLog.hours), 0)).scalar() or 0
     hours_week = lq.filter(WorkLog.work_date >= week_start, WorkLog.work_date <= week_end).with_entities(_func.coalesce(_func.sum(WorkLog.hours), 0)).scalar() or 0
@@ -67,7 +68,8 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
         pending = db.query(WorkLog).filter(WorkLog.status == WorkLogStatus.submitted).count()
         if pending: attention.append({"type": "pending_logs", "severity": "medium", "title": f"{pending} time log(s) waiting for approval", "detail": "Review in All Logs", "link": "/admin/logs"})
         unpaid = db.query(Invoice).filter(Invoice.status == InvoiceStatus.unpaid).count()
-        if unpaid: attention.append({"type": "unpaid_invoices", "severity": "medium", "title": f"{unpaid} unpaid invoice(s)", "detail": "Follow up on payments", "link": "/admin/invoices"})
+        if unpaid and current.role == UserRole.admin:
+            attention.append({"type": "unpaid_invoices", "severity": "medium", "title": f"{unpaid} unpaid invoice(s)", "detail": "Follow up on payments", "link": "/admin/invoices"})
         prepare.append(f"Review {pending} pending time log(s)") if pending else None
     else:
         rejected = lq.filter(WorkLog.status == WorkLogStatus.rejected).count()
@@ -80,7 +82,7 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
 
     # Live clock
     cq = db.query(TimeClockEntry).options(joinedload(TimeClockEntry.va), joinedload(TimeClockEntry.task), joinedload(TimeClockEntry.client)).filter(TimeClockEntry.status.in_([ClockStatus.running, ClockStatus.paused]))
-    if not is_admin: cq = cq.filter(TimeClockEntry.va_id == current.va_id)
+    if is_va: cq = cq.filter(TimeClockEntry.va_id == current.va_id)
     from app.routers.timeclock import _serialize as serialize_clock
     live = [serialize_clock(e).model_dump(mode="json") for e in cq.all()]
 
@@ -262,9 +264,53 @@ def get_team_activity(_: Annotated[CurrentUser, Depends(require_admin_or_auditor
 
 @router.get("/summary", response_model=DashboardSummary)
 def get_dashboard_summary(
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
+    # Auditors get ops metrics only — money fields zeroed
+    if current.role == UserRole.auditor:
+        pending_entries = db.query(WorkLog).filter(WorkLog.status == WorkLogStatus.submitted).count()
+        approved_hours = (
+            db.query(func.coalesce(func.sum(WorkLog.hours), 0))
+            .filter(WorkLog.status.in_([WorkLogStatus.approved, WorkLogStatus.invoiced]))
+            .scalar()
+            or Decimal("0")
+        )
+        active_clients = db.query(Client).filter(Client.is_active == True).count()
+        active_vas = db.query(VA).filter(VA.is_active == True).count()
+        pending_logs = (
+            db.query(WorkLog)
+            .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.attachments))
+            .filter(WorkLog.status == WorkLogStatus.submitted)
+            .order_by(WorkLog.created_at.desc())
+            .limit(10)
+            .all()
+        )
+        hours_by_client = (
+            db.query(Client.name, func.sum(WorkLog.hours).label("hours"))
+            .join(WorkLog, WorkLog.client_id == Client.id)
+            .filter(WorkLog.status.in_([WorkLogStatus.approved, WorkLogStatus.invoiced]))
+            .group_by(Client.name)
+            .order_by(func.sum(WorkLog.hours).desc())
+            .all()
+        )
+        return DashboardSummary(
+            total_invoiced=Decimal("0"),
+            paid_by_clients=Decimal("0"),
+            total_va_payout=Decimal("0"),
+            estimated_profit=Decimal("0"),
+            pending_entries=pending_entries,
+            approved_hours=Decimal(str(approved_hours)),
+            active_clients=active_clients,
+            invoices_issued=0,
+            unpaid_invoices=0,
+            this_week_va_pay=Decimal("0"),
+            active_vas=active_vas,
+            hours_by_client=[{"client": r.name, "hours": float(r.hours)} for r in hours_by_client],
+            va_pay_this_week=[],
+            pending_logs=[_serialize_log(log, redact_money=True) for log in pending_logs],
+        )
+
     total_invoiced = db.query(func.coalesce(func.sum(Invoice.amount), 0)).scalar() or Decimal("0")
     paid_by_clients = (
         db.query(func.coalesce(func.sum(Invoice.amount), 0))
@@ -325,7 +371,7 @@ def get_dashboard_summary(
 
     pending_logs = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client))
+        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.attachments))
         .filter(WorkLog.status == WorkLogStatus.submitted)
         .order_by(WorkLog.created_at.desc())
         .limit(10)

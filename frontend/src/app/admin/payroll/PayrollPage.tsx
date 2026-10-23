@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
-import { cn, formatCurrency, formatDate } from "@/lib/utils"
+import { cn, formatCurrency, formatDate, payrollPdfFilename } from "@/lib/utils"
 import { PayrollDocument } from "@/components/pdf/PayrollDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { generatePdfBlob } from "@/lib/pdf"
@@ -35,7 +35,9 @@ export function PayrollPage() {
   const [dateTo, setDateTo] = useState("")
   const [openVa, setOpenVa] = useState<string>("")
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
+  const [pdfFilename, setPdfFilename] = useState("va-payroll.pdf")
   const [editing, setEditing] = useState<{ id: string; description: string; start_time: string; end_time: string; va_rate: string; va_name: string; work_date: string } | null>(null)
+  const [markPaidError, setMarkPaidError] = useState("")
 
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => apiFetch<Settings>("/settings") })
@@ -54,6 +56,11 @@ export function PayrollPage() {
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["payroll"] }); qc.invalidateQueries({ queryKey: ["payroll-runs"] }) }
   const markPaid = useMutation({
     mutationFn: (body: Record<string, unknown>) => apiFetch("/payroll/runs", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: () => { setMarkPaidError(""); invalidate() },
+    onError: (err: Error) => setMarkPaidError(err.message),
+  })
+  const reviewTimesheet = useMutation({
+    mutationFn: (id: string) => apiFetch(`/payroll/timesheets/${id}/review`, { method: "POST" }),
     onSuccess: invalidate,
   })
   const voidRun = useMutation({ mutationFn: (id: string) => apiFetch(`/payroll/runs/${id}`, { method: "DELETE" }), onSuccess: invalidate })
@@ -92,6 +99,12 @@ export function PayrollPage() {
   const exportPdf = async (onlyVa?: string) => {
     if (!payroll || !settings) return
     const doc = onlyVa ? { ...payroll, vas: payroll.vas.filter(v => v.va_id === onlyVa) } : payroll
+    const nameForFile = onlyVa
+      ? (doc.vas[0]?.va_name || "VA")
+      : doc.vas.length === 1
+        ? doc.vas[0].va_name
+        : "Team"
+    setPdfFilename(payrollPdfFilename(nameForFile, payroll.period_start, payroll.period_end))
     setPdfBlob(await generatePdfBlob(<PayrollDocument payroll={doc} settings={settings} showPricing={pdfShowPricing} />))
   }
   const exportCsv = () => {
@@ -107,10 +120,11 @@ export function PayrollPage() {
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
           <h1 className="font-display text-xl font-bold">VA Payroll</h1>
-          <p className="text-xs text-muted-foreground">Pick a VA and custom date range (e.g. Oct 1–15) to generate a timesheet with rates and totals. Edit entries inline, then export PDF.</p>
+          <p className="text-xs text-muted-foreground">Pick a VA and custom date range (e.g. Oct 1–15). VAs must submit their timesheet before you can mark payroll paid. Edit entries inline, then export PDF.</p>
         </div>
         {payroll && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">{formatDate(payroll.period_start)} – {formatDate(payroll.period_end)}</p>}
       </div>
+      {markPaidError && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{markPaidError}</p>}
 
       {/* Filters — results update live */}
       <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -185,12 +199,27 @@ export function PayrollPage() {
                     <span className="rounded-full bg-slate-100 px-2 py-0.5">✍ Manual {va.manual_hours}h</span>
                     <span className="rounded-full bg-violet-50 px-2 py-0.5 text-violet-700">✓ {va.tasks_done} tasks done</span>
                     {n(va.pending_hours) > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">⚠ {va.pending_hours}h pending</span>}
+                    {va.timesheet_submitted
+                      ? <span className="rounded-full bg-sky-100 px-2 py-0.5 text-sky-700">📋 Timesheet {va.timesheet_status || "submitted"}</span>
+                      : <span className="rounded-full bg-rose-100 px-2 py-0.5 text-rose-700">📋 Timesheet not submitted</span>}
                   </div>
                 </button>
-                <div className="mt-3 flex gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   {!va.is_paid && n(va.total_hours) > 0 && (
-                    <Button size="sm" variant="success" className="flex-1" disabled={markPaid.isPending} onClick={() => markPaid.mutate({ va_id: va.va_id, period_start: payroll.period_start, period_end: payroll.period_end, total_hours: va.total_hours, total_pay: va.total_pay, currency: va.currency, method: va.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer" })}>
+                    <Button
+                      size="sm"
+                      variant="success"
+                      className="flex-1"
+                      disabled={markPaid.isPending || !va.timesheet_submitted}
+                      title={!va.timesheet_submitted ? "VA must submit timesheet first" : undefined}
+                      onClick={() => markPaid.mutate({ va_id: va.va_id, period_start: payroll.period_start, period_end: payroll.period_end, total_hours: va.total_hours, total_pay: va.total_pay, currency: va.currency, method: va.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer" })}
+                    >
                       <Wallet className="h-3.5 w-3.5" /> Mark Paid
+                    </Button>
+                  )}
+                  {va.timesheet_submitted && va.timesheet_status !== "reviewed" && va.timesheet_id && (
+                    <Button size="sm" variant="outline" disabled={reviewTimesheet.isPending} onClick={() => reviewTimesheet.mutate(va.timesheet_id!)}>
+                      Mark reviewed
                     </Button>
                   )}
                   {va.is_paid && va.run_id && <Button size="sm" variant="outline" className="flex-1" onClick={() => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) }}>Undo Paid</Button>}
@@ -281,7 +310,7 @@ export function PayrollPage() {
         </div>
       )}
 
-      <PdfPreviewModal blob={pdfBlob} filename="va-payroll.pdf" onClose={() => setPdfBlob(null)} />
+      <PdfPreviewModal blob={pdfBlob} filename={pdfFilename} onClose={() => setPdfBlob(null)} />
     </div>
   )
 }

@@ -895,6 +895,29 @@ class PayrollVAResult(BaseModel):
     payment_label: str | None = None
     is_paid: bool = False
     run_id: UUID | None = None
+    timesheet_submitted: bool = False
+    timesheet_status: str | None = None
+    timesheet_id: UUID | None = None
+
+
+class TimesheetSubmitRequest(BaseModel):
+    date_from: date
+    date_to: date
+    notes: str | None = None
+
+
+class TimesheetSubmissionResponse(BaseModel):
+    id: UUID
+    va_id: UUID
+    va_name: str | None = None
+    period_start: date
+    period_end: date
+    status: str
+    notes: str | None = None
+    submitted_at: datetime
+    reviewed_at: datetime | None = None
+    entry_count: int = 0
+    total_hours: Decimal = Decimal("0")
 
 
 class PayrollResponse(BaseModel):

@@ -11,17 +11,19 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TASK_STATUSES, PRIORITY_META, formatDuration } from "@/components/tasks/task-utils"
 import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, DollarSign, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, TrendingUp, Volume2, X } from "lucide-react"
 
-const QUOTES = [
-  { text: "The secret of getting ahead is getting started.", author: "Mark Twain" },
-  { text: "Focus is a matter of deciding what not to do.", author: "John Carmack" },
-  { text: "Small progress is still progress.", author: "Unknown" },
-  { text: "Done is better than perfect.", author: "Sheryl Sandberg" },
-  { text: "Your future is created by what you do today, not tomorrow.", author: "Robert Kiyosaki" },
-  { text: "Discipline is choosing what you want most over what you want now.", author: "Abraham Lincoln" },
-  { text: "Start where you are. Use what you have. Do what you can.", author: "Arthur Ashe" },
-  { text: "It always seems impossible until it's done.", author: "Nelson Mandela" },
-  { text: "Quality means doing it right when no one is looking.", author: "Henry Ford" },
-  { text: "The way to get started is to quit talking and begin doing.", author: "Walt Disney" },
+const BIBLE_VERSES = [
+  { text: "She is clothed with strength and dignity; she can laugh at the days to come.", author: "Proverbs 31:25" },
+  { text: "I can do all things through Christ who strengthens me.", author: "Philippians 4:13" },
+  { text: "Be strong and courageous. Do not be afraid; do not be discouraged, for the Lord your God will be with you wherever you go.", author: "Joshua 1:9" },
+  { text: "The Lord is my shepherd; I shall not want.", author: "Psalm 23:1" },
+  { text: "For I know the plans I have for you, declares the Lord, plans to prosper you and not to harm you, plans to give you hope and a future.", author: "Jeremiah 29:11" },
+  { text: "Trust in the Lord with all your heart and lean not on your own understanding.", author: "Proverbs 3:5" },
+  { text: "Let all that you do be done in love.", author: "1 Corinthians 16:14" },
+  { text: "This is the day that the Lord has made; let us rejoice and be glad in it.", author: "Psalm 118:24" },
+  { text: "Cast all your anxiety on Him because He cares for you.", author: "1 Peter 5:7" },
+  { text: "The joy of the Lord is your strength.", author: "Nehemiah 8:10" },
+  { text: "A cheerful heart is good medicine.", author: "Proverbs 17:22" },
+  { text: "Be kind to one another, tenderhearted, forgiving one another, as God in Christ forgave you.", author: "Ephesians 4:32" },
 ]
 
 function greeting() {
@@ -31,9 +33,9 @@ function greeting() {
   if (h >= 17 && h < 21) return { label: "Good Evening", Icon: Sunset, emoji: "🌇", emojiClass: "emoji-float" }
   return { label: "Good Night", Icon: Sunset, emoji: "🌙", emojiClass: "emoji-moon" }
 }
-function quoteOfDay() {
+function verseOfDay() {
   const now = new Date(); const start = new Date(now.getFullYear(), 0, 0)
-  return QUOTES[Math.floor((now.getTime() - start.getTime()) / 86400000) % QUOTES.length]
+  return BIBLE_VERSES[Math.floor((now.getTime() - start.getTime()) / 86400000) % BIBLE_VERSES.length]
 }
 function statusLabel(s: string) { return TASK_STATUSES.find(x => x.id === s)?.label || s }
 
@@ -120,8 +122,8 @@ function buildBriefing(o: DashboardOverview, isAdmin: boolean, firstName: string
   if (o.projects.length) out.push({ feeling: "calm", text: `Your projects: ${o.projects.slice(0, 4).map(pr => `${pr.name}, ${pr.task_total ? Math.round((pr.task_done / pr.task_total) * 100) : 0} percent complete`).join(". ")}.` })
   if (isAdmin && o.team_load?.length) { const top = o.team_load[0]; out.push({ feeling: "calm", text: `Team load check: ${top.name} is the busiest with ${top.open} open tasks${top.overdue ? `, ${top.overdue} of them overdue` : ""}.` }) }
   if (!isAdmin && o.tomorrow_tasks?.length) out.push({ feeling: "calm", text: `Tomorrow starts with: ${o.tomorrow_tasks.slice(0, 3).map(t => t.title).join(", ")}. A two-minute look tonight means a fast start in the morning.` })
-  const q = quoteOfDay()
-  out.push({ feeling: "warm", text: `And here's your quote of the day, from ${q.author}: "${q.text}" You've got this, ${firstName}. Let's make today shine!` })
+  const q = verseOfDay()
+  out.push({ feeling: "warm", text: `And here's your Bible verse of the day, from ${q.author}: "${q.text}" You've got this, ${firstName}. Let's make today shine with kindness and joy!` })
   return out
 }
 
@@ -312,7 +314,7 @@ export function DashboardPage() {
   const { data: profile } = useQuery({ queryKey: ["profile"], queryFn: () => apiFetch<UserProfile>("/profile/me"), staleTime: 60_000 })
   const firstName = (profile?.display_name || user?.name || "there").split(" ")[0]
   const { label: greetLabel, Icon: GreetIcon, emoji, emojiClass } = greeting()
-  const quote = useMemo(quoteOfDay, [])
+  const quote = useMemo(verseOfDay, [])
 
   const { data: overview, isLoading: ovLoading } = useQuery({ queryKey: ["dashboard-overview"], queryFn: () => apiFetch<DashboardOverview>("/dashboard/overview"), refetchInterval: 30_000 })
   const { data } = useQuery({ queryKey: ["dashboard"], queryFn: () => apiFetch<DashboardSummary>("/dashboard/summary"), enabled: isStaff })
@@ -359,12 +361,12 @@ export function DashboardPage() {
           </div>
         </div>
         <div className="mt-4 max-w-3xl">
-          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Quote of the day</p>
-          <p className="mt-1 flex items-start gap-2.5 text-lg font-medium leading-snug"><Sparkles className="mt-1 h-4.5 w-4.5 shrink-0 text-primary" /><span>“{quote.text}” <span className="text-sm text-muted-foreground">— {quote.author}</span></span></p>
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary/80">Bible verse of the day 💕</p>
+          <p className="mt-1 flex items-start gap-2.5 text-lg font-medium leading-snug text-foreground/90"><Sparkles className="mt-1 h-4.5 w-4.5 shrink-0 text-primary" /><span>“{quote.text}” <span className="text-sm font-semibold text-primary/80">— {quote.author}</span></span></p>
         </div>
         <div className="mt-5 flex flex-wrap gap-2 [&>a]:min-w-0 [&_button]:w-full min-[480px]:[&_button]:w-auto">
           <Link to={`${base}/tasks`}><Button variant="gold" size="lg"><ListTodo className="h-4 w-4" /> Open Task Board</Button></Link>
-          {!isAdmin && <Link to="/va/time-clock"><Button variant="outline" size="lg"><Play className="h-4 w-4" /> Clock In</Button></Link>}
+          {isVA && <Link to="/va/time-clock"><Button variant="outline" size="lg"><Play className="h-4 w-4" /> Clock In</Button></Link>}
           <Link to={`${base}/projects`}><Button variant="outline" size="lg">Projects <ArrowRight className="h-3.5 w-3.5" /></Button></Link>
           <Button variant="outline" size="lg" onClick={() => setReaderOpen(true)}><Volume2 className="h-4 w-4 text-primary" /> Listen to updates</Button>
         </div>

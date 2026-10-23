@@ -339,28 +339,34 @@ export function ClientsPage() {
                         <Button variant="ghost" size="sm" title="View everything" onClick={() => { setViewingId(c.id); setDetailTab("overview") }}>
                           <Eye className="h-3.5 w-3.5" />
                         </Button>
-                        <Button variant="ghost" size="sm" title="Edit" onClick={() => openEditClient(c)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        {c.is_active ? (
-                          <Button variant="ghost" size="sm" title="Archive" onClick={() => archiveClient(c)}>
-                            <Archive className="h-3.5 w-3.5" />
-                          </Button>
-                        ) : (
-                          <Button variant="ghost" size="sm" title="Restore" onClick={() => restoreClient(c)}>
-                            <ArchiveRestore className="h-3.5 w-3.5" />
+                        {!readOnly && (
+                          <>
+                            <Button variant="ghost" size="sm" title="Edit" onClick={() => openEditClient(c)}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            {c.is_active ? (
+                              <Button variant="ghost" size="sm" title="Archive" onClick={() => archiveClient(c)}>
+                                <Archive className="h-3.5 w-3.5" />
+                              </Button>
+                            ) : (
+                              <Button variant="ghost" size="sm" title="Restore" onClick={() => restoreClient(c)}>
+                                <ArchiveRestore className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                          </>
+                        )}
+                        {!readOnly && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            title="Delete"
+                            onClick={() => {
+                              if (confirm(`Permanently delete "${c.name}"?`)) deleteClient.mutate(c.id)
+                            }}
+                          >
+                            <Trash2 className="h-3.5 w-3.5 text-red-600" />
                           </Button>
                         )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title="Delete"
-                          onClick={() => {
-                            if (confirm(`Permanently delete "${c.name}"?`)) deleteClient.mutate(c.id)
-                          }}
-                        >
-                          <Trash2 className="h-3.5 w-3.5 text-red-600" />
-                        </Button>
                       </div>
                     </td>
                   </tr>
@@ -399,28 +405,32 @@ export function ClientsPage() {
                     </td>
                     <td className="p-3">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="sm" title="Edit" onClick={() => openEditSub(s)}>
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        {s.is_active ? (
-                          <Button variant="ghost" size="sm" title="Archive" onClick={() => archiveSub(s)}>
-                            <Archive className="h-3.5 w-3.5" />
-                          </Button>
-                        ) : (
-                          <Button variant="ghost" size="sm" title="Restore" onClick={() => restoreSub(s)}>
-                            <ArchiveRestore className="h-3.5 w-3.5" />
-                          </Button>
+                        {!readOnly && (
+                          <>
+                            <Button variant="ghost" size="sm" title="Edit" onClick={() => openEditSub(s)}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            {s.is_active ? (
+                              <Button variant="ghost" size="sm" title="Archive" onClick={() => archiveSub(s)}>
+                                <Archive className="h-3.5 w-3.5" />
+                              </Button>
+                            ) : (
+                              <Button variant="ghost" size="sm" title="Restore" onClick={() => restoreSub(s)}>
+                                <ArchiveRestore className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Delete"
+                              onClick={() => {
+                                if (confirm(`Permanently delete "${s.name}"?`)) deleteSub.mutate(s.id)
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                            </Button>
+                          </>
                         )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          title="Delete"
-                          onClick={() => {
-                            if (confirm(`Permanently delete "${s.name}"?`)) deleteSub.mutate(s.id)
-                          }}
-                        >
-                          <Trash2 className="h-3.5 w-3.5 text-red-600" />
-                        </Button>
                       </div>
                     </td>
                   </tr>
@@ -448,12 +458,14 @@ export function ClientsPage() {
                     </div>
                   </div>
                   <div className="flex gap-1">
-                    <Button size="sm" variant="outline" onClick={() => { const c = clients.find(x => x.id === detail.client.id); if (c) openEditClient(c) }}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
+                    {!readOnly && (
+                      <Button size="sm" variant="outline" onClick={() => { const c = clients.find(x => x.id === detail.client.id); if (c) openEditClient(c) }}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
+                    )}
                     <button onClick={() => setViewingId("")} className="rounded-full p-2 hover:bg-muted"><X className="h-4 w-4" /></button>
                   </div>
                 </div>
                 <div className="mt-3 flex gap-1 overflow-x-auto">
-                  {([["overview", "Overview"], ["projects", `Projects (${detail.projects.length})`], ["tasks", `Tasks (${detail.stats.tasks_open} open)`], ["logs", `Logs (${detail.stats.logs_count})`], ["invoices", `Invoices (${detail.stats.invoices_count})`]] as const).map(([id, label]) => (
+                  {([["overview", "Overview"], ["projects", `Projects (${detail.projects.length})`], ["tasks", `Tasks (${detail.stats.tasks_open} open)`], ["logs", `Logs (${detail.stats.logs_count})`], ...(isAdmin ? [["invoices", `Invoices (${detail.stats.invoices_count})`] as const] : [])] as const).map(([id, label]) => (
                     <button key={id} onClick={() => setDetailTab(id)} className={cn("whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold", detailTab === id ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted/60")}>{label}</button>
                   ))}
                 </div>
@@ -501,9 +513,9 @@ export function ClientsPage() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <Link to={`/admin/reports`}><Button size="sm" variant="gold">Open Report</Button></Link>
+                    {isAdmin && <Link to={`/admin/reports`}><Button size="sm" variant="gold">Open Report</Button></Link>}
                     <Link to={`/admin/tasks?client=${detail.client.id}`}><Button size="sm" variant="outline">View in Task Board</Button></Link>
-                    <Link to={`/admin/invoices?client=${detail.client.id}`}><Button size="sm" variant="outline">Create Invoice</Button></Link>
+                    {isAdmin && <Link to={`/admin/invoices?client=${detail.client.id}`}><Button size="sm" variant="outline">Create Invoice</Button></Link>}
                   </div>
                 </>)}
 

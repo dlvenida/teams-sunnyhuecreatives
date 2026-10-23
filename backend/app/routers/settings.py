@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin
-from app.models import ActivityLog, EmailLog, EmailTemplate, SystemSetting
+from app.models import ActivityLog, EmailLog, EmailTemplate, SystemSetting, UserRole
 from app.schemas import (
     ActivityLogResponse,
     DisplaySettingsResponse,
@@ -103,15 +103,19 @@ def pricing_hidden(db: Session) -> bool:
 
 @router.get("/display", response_model=DisplaySettingsResponse)
 def get_display_settings(
-    _: Annotated[CurrentUser, Depends(get_current_user)],
+    current: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
     s = _get_settings(db)
+    # Auditors must never receive money-related defaults
+    rate = s.get("default_va_hourly_rate", "75.00")
+    if current.role == UserRole.auditor:
+        rate = "0"
     return DisplaySettingsResponse(
-        hide_pricing=bool(s.get("hide_pricing", True)),
+        hide_pricing=True if current.role == UserRole.auditor else bool(s.get("hide_pricing", True)),
         booking_url=s.get("booking_url") or "",
         booking_hide_pricing=bool(s.get("booking_hide_pricing", True)),
-        default_va_hourly_rate=s.get("default_va_hourly_rate", "75.00"),
+        default_va_hourly_rate=rate,
     )
 
 

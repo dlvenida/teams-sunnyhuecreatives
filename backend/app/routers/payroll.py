@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, require_admin
-from app.models import Currency, PayrollRun, Task, TaskStatus, VA, WorkLog, WorkLogStatus
+from app.deps import CurrentUser, require_admin, require_admin_or_auditor
+from app.models import Currency, PayrollRun, Task, TaskStatus, TimesheetStatus, TimesheetSubmission, VA, WorkLog, WorkLogStatus
 from app.schemas import (
     PayrollBreakdown,
     PayrollDay,
@@ -19,6 +19,7 @@ from app.schemas import (
     PayrollRunCreate,
     PayrollRunResponse,
     PayrollVAResult,
+    TimesheetSubmissionResponse,
 )
 from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
@@ -90,6 +91,12 @@ def calculate_payroll(
     runs = {
         r.va_id: r for r in db.query(PayrollRun).filter(PayrollRun.period_start == period_start, PayrollRun.period_end == period_end).all()
     }
+    sheets = {
+        t.va_id: t
+        for t in db.query(TimesheetSubmission)
+        .filter(TimesheetSubmission.period_start == period_start, TimesheetSubmission.period_end == period_end)
+        .all()
+    }
 
     results = []
     total_php = Decimal("0")
@@ -140,6 +147,7 @@ def calculate_payroll(
             ).count()
         )
         run = runs.get(va_id)
+        sheet = sheets.get(va_id)
         change = float((data["total_hours"] - prev_hours) / prev_hours * 100) if prev_hours > 0 else None
         prev_client_ids = {l.client_id for l in va_prev}
         prev_flats = package_flats_for_period(db, va_id, prev_client_ids)
@@ -157,6 +165,9 @@ def calculate_payroll(
             daily=daily, prev_hours=prev_hours,
             prev_pay=prev_pay, change_pct=change,
             payment_label=_payment_label(va), is_paid=run is not None, run_id=run.id if run else None,
+            timesheet_submitted=sheet is not None,
+            timesheet_status=(sheet.status.value if sheet and hasattr(sheet.status, "value") else (str(sheet.status) if sheet else None)),
+            timesheet_id=sheet.id if sheet else None,
         ))
         if va.currency == Currency.PHP:
             total_php += data["total_pay"]
@@ -188,12 +199,70 @@ def list_runs(
     ]
 
 
+@router.post("/timesheets/{timesheet_id}/review", response_model=TimesheetSubmissionResponse)
+def review_timesheet(
+    timesheet_id: UUID,
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    row = (
+        db.query(TimesheetSubmission)
+        .options(joinedload(TimesheetSubmission.va))
+        .filter(TimesheetSubmission.id == timesheet_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "Timesheet not found")
+    row.status = TimesheetStatus.reviewed
+    row.reviewed_at = datetime.now(timezone.utc)
+    row.reviewed_by = current.user.id
+    db.commit()
+    db.refresh(row)
+    logs = (
+        db.query(WorkLog)
+        .filter(
+            WorkLog.va_id == row.va_id,
+            WorkLog.work_date >= row.period_start,
+            WorkLog.work_date <= row.period_end,
+            WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
+        )
+        .all()
+    )
+    return TimesheetSubmissionResponse(
+        id=row.id,
+        va_id=row.va_id,
+        va_name=row.va.name if row.va else None,
+        period_start=row.period_start,
+        period_end=row.period_end,
+        status=row.status.value,
+        notes=row.notes,
+        submitted_at=row.submitted_at,
+        reviewed_at=row.reviewed_at,
+        entry_count=len(logs),
+        total_hours=sum((l.hours for l in logs), Decimal("0")),
+    )
+
+
 @router.post("/runs", response_model=PayrollRunResponse, status_code=status.HTTP_201_CREATED)
 def mark_paid(
     body: PayrollRunCreate,
     current: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ):
+    sheet = (
+        db.query(TimesheetSubmission)
+        .filter(
+            TimesheetSubmission.va_id == body.va_id,
+            TimesheetSubmission.period_start == body.period_start,
+            TimesheetSubmission.period_end == body.period_end,
+        )
+        .first()
+    )
+    if not sheet:
+        raise HTTPException(
+            400,
+            "VA must submit their timesheet for this period before payroll can be marked paid",
+        )
     existing = db.query(PayrollRun).filter(
         PayrollRun.va_id == body.va_id, PayrollRun.period_start == body.period_start, PayrollRun.period_end == body.period_end,
     ).first()

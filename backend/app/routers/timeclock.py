@@ -163,17 +163,27 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
         if hours == 0:
             hours = Decimal("0.01")
         from app.services.va_rates import resolve_log_pay
+        from app.services.work_log_overlap import assert_no_time_overlap
         rate, pay, _ = resolve_log_pay(db, current.va_id, entry.client_id, hours)
         tz = _va_timezone(db, current.va_id)
         clock_in_utc = _as_utc(entry.clock_in)
         local_in = clock_in_utc.astimezone(tz)
         local_out = now.astimezone(tz)
+        start_t = local_in.time().replace(microsecond=0)
+        end_t = local_out.time().replace(microsecond=0)
+        assert_no_time_overlap(
+            db,
+            va_id=current.va_id,
+            work_date=local_in.date(),
+            start_time=start_t,
+            end_time=end_t,
+        )
         desc = (body.description or "").strip() or (entry.task.title if entry.task else None) or (body.notes or "").strip() or "Clocked work"
         log = WorkLog(
             work_date=local_in.date(), va_id=current.va_id, client_id=entry.client_id,
             sub_client_id=entry.task.sub_client_id if entry.task else None,
             project_id=entry.project_id, task_id=entry.task_id,
-            description_plain=desc, start_time=local_in.time().replace(microsecond=0), end_time=local_out.time().replace(microsecond=0),
+            description_plain=desc, start_time=start_t, end_time=end_t,
             hours=hours, va_rate=rate, va_pay=pay,
             notes=entry.notes, status=WorkLogStatus.submitted, clock_in_at=entry.clock_in, clock_out_at=now, source="clock",
         )

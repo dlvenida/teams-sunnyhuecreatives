@@ -1,109 +1,294 @@
-import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer"
-import type { Invoice, Settings } from "@/lib/types"
-import { formatCurrency, formatDate } from "@/lib/utils"
+import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer"
+import type { Invoice, InvoiceLineItem, Settings } from "@/lib/types"
+import {
+  formatCurrency,
+  formatHoursMins,
+  formatInvoiceDate,
+  formatInvoiceRate,
+  formatInvoiceTotal,
+} from "@/lib/utils"
+
+const COLORS = {
+  page: "#fbf4f6",
+  band: "#f3d5df",
+  banner: "#b67486",
+  ink: "#3d2a32",
+  muted: "#8a6b76",
+  pink: "#c45a7a",
+  white: "#ffffff",
+  rowBorder: "#edd5de",
+  payBg: "#f8e8ee",
+  payBorder: "#c45a7a",
+}
 
 const styles = StyleSheet.create({
-  page: { padding: 40, fontFamily: "Helvetica", fontSize: 10, color: "#1a1a2e" },
-  header: { marginBottom: 30 },
-  company: { fontSize: 22, fontWeight: "bold", color: "#c9a227" },
-  subtitle: { fontSize: 10, color: "#666", marginTop: 4 },
-  row: { flexDirection: "row", justifyContent: "space-between", marginBottom: 20 },
-  label: { fontSize: 9, color: "#888", textTransform: "uppercase" },
-  table: { marginTop: 10 },
-  tableHeader: { flexDirection: "row", backgroundColor: "#1a1a2e", color: "#fff", padding: 8 },
-  tableRow: { flexDirection: "row", borderBottom: "1px solid #eee", padding: 8 },
-  colDate: { width: "15%" },
-  colDesc: { width: "40%" },
-  colHours: { width: "15%", textAlign: "right" },
-  colRate: { width: "15%", textAlign: "right" },
-  colAmount: { width: "15%", textAlign: "right" },
-  totalBox: { marginTop: 20, backgroundColor: "#faf8f5", padding: 15, alignItems: "flex-end" },
-  totalDue: { fontSize: 18, fontWeight: "bold", color: "#c9a227" },
-  footer: { marginTop: 40, padding: 15, backgroundColor: "#f5f5f5", fontSize: 9, color: "#555" },
+  page: {
+    paddingTop: 28,
+    paddingBottom: 36,
+    paddingHorizontal: 40,
+    fontFamily: "Helvetica",
+    fontSize: 10,
+    color: COLORS.ink,
+    backgroundColor: COLORS.page,
+  },
+  topBand: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 10,
+    backgroundColor: COLORS.band,
+  },
+  bottomBand: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 10,
+    backgroundColor: COLORS.band,
+  },
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 18,
+  },
+  logo: { width: 72, height: 72, borderRadius: 8 },
+  titleBlock: { marginTop: 4, marginBottom: 14 },
+  title: {
+    fontFamily: "Times-Italic",
+    fontSize: 36,
+    color: COLORS.pink,
+    marginBottom: 4,
+  },
+  subtitle: { fontSize: 10, color: COLORS.muted },
+  meta: { alignItems: "flex-end", marginTop: 8 },
+  metaLabel: { fontSize: 8, color: COLORS.muted, marginBottom: 2 },
+  metaValue: { fontSize: 10, color: COLORS.ink, marginBottom: 8 },
+  banner: {
+    backgroundColor: COLORS.banner,
+    borderRadius: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 22,
+  },
+  bannerAmount: { fontSize: 22, fontFamily: "Times-Bold", color: COLORS.white },
+  bannerDue: { fontSize: 11, color: COLORS.white, marginTop: 2 },
+  bannerPeriodLabel: { fontSize: 9, color: "rgba(255,255,255,0.85)", textAlign: "right" },
+  bannerPeriod: { fontSize: 12, color: COLORS.white, marginTop: 3, textAlign: "right" },
+  parties: { flexDirection: "row", marginBottom: 22, gap: 24 },
+  partyCol: { flex: 1 },
+  partyTitle: {
+    fontFamily: "Times-Italic",
+    fontSize: 14,
+    color: COLORS.pink,
+    marginBottom: 8,
+  },
+  partyLabel: {
+    fontSize: 7,
+    color: COLORS.pink,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 2,
+  },
+  partyValue: { fontSize: 11, color: COLORS.ink, marginBottom: 8 },
+  tableHeader: {
+    flexDirection: "row",
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.rowBorder,
+    paddingBottom: 6,
+    marginBottom: 4,
+  },
+  th: {
+    fontSize: 8,
+    color: COLORS.muted,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
+  colDesc: { width: "55%" },
+  colRate: { width: "22%", textAlign: "right" },
+  colAmt: { width: "23%", textAlign: "right" },
+  tableRow: {
+    flexDirection: "row",
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.rowBorder,
+    alignItems: "flex-start",
+  },
+  rowTitle: { fontSize: 11, color: COLORS.ink, marginBottom: 3 },
+  rowSub: { fontSize: 8, color: COLORS.muted, lineHeight: 1.35 },
+  rowRate: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  rowAmt: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  totalBlock: { alignItems: "flex-end", marginTop: 18, marginBottom: 20 },
+  totalLabel: {
+    fontSize: 8,
+    color: COLORS.muted,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 4,
+  },
+  totalValue: { fontFamily: "Times-Bold", fontSize: 22, color: COLORS.ink },
+  payBox: {
+    backgroundColor: COLORS.payBg,
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.payBorder,
+    borderRadius: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 18,
+  },
+  payTitle: { fontSize: 10, color: COLORS.ink, marginBottom: 4 },
+  payBody: { fontSize: 9, color: COLORS.muted, lineHeight: 1.45 },
+  footer: { fontSize: 8, color: COLORS.muted, textAlign: "center", marginTop: 8 },
 })
 
-function paymentFooter(method: string, settings: Settings, bankDetails?: string | null) {
-  if (method === "wise") return `Payment via Wise: ${settings.wise_email}`
-  if (method === "paypal") return `Payment via PayPal: ${settings.paypal_email}`
-  return `Payment via Bank Transfer:\n${bankDetails || ""}`
+function paymentCopy(method: string, settings: Settings, bankDetails?: string | null) {
+  if (method === "wise") {
+    return `Please send payment via Wise to ${settings.wise_email || bankDetails || "—"}.`
+  }
+  if (method === "paypal") {
+    return `Please send payment via PayPal to ${settings.paypal_email || bankDetails || "—"}.`
+  }
+  return `Please send payment via bank transfer:\n${bankDetails || "Details on request."}`
+}
+
+function lineParts(item: InvoiceLineItem) {
+  const parts = (item.description || "").split("\n")
+  return { title: parts[0] || "Services", sub: parts.slice(1).join(" ").trim() }
+}
+
+function rateLabel(item: InvoiceLineItem, billingType: string) {
+  const desc = (item.description || "").toLowerCase()
+  if (billingType === "hourly" || desc.includes("va services") || desc.includes("overage")) {
+    return formatInvoiceRate(item.rate)
+  }
+  return formatCurrency(item.rate)
+}
+
+function dueLabel(invoice: Invoice) {
+  if (!invoice.payment_terms_days || invoice.payment_terms_days === 0) return "Due upon receipt"
+  return formatInvoiceDate(invoice.due_date)
 }
 
 export function InvoiceDocument({
   invoice,
   settings,
-  showPricing = true,
 }: {
   invoice: Invoice
   settings: Settings
   showPricing?: boolean
 }) {
+  const logoSrc =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/brand/sunnyhue-logo.png`
+      : "/brand/sunnyhue-logo.png"
+
+  const priced = (invoice.line_items || []).filter((li) => Number(li.amount) > 0)
+  const lines = priced.length > 0 ? priced : invoice.line_items || []
+
   return (
     <Document>
       <Page size="A4" style={styles.page}>
+        <View style={styles.topBand} fixed />
+        <View style={styles.bottomBand} fixed />
+
         <View style={styles.header}>
-          <Text style={styles.company}>{settings.company_name}</Text>
-          <Text style={styles.subtitle}>{settings.principal_name}, Principal</Text>
-          <Text style={styles.subtitle}>{settings.location}</Text>
+          <Image src={logoSrc} style={styles.logo} />
+          <View style={styles.meta}>
+            <Text style={styles.metaLabel}>Invoice date</Text>
+            <Text style={styles.metaValue}>{formatInvoiceDate(invoice.issue_date)}</Text>
+            <Text style={styles.metaLabel}>Due date</Text>
+            <Text style={styles.metaValue}>{dueLabel(invoice)}</Text>
+          </View>
         </View>
 
-        <View style={styles.row}>
+        <View style={styles.titleBlock}>
+          <Text style={styles.title}>Invoice</Text>
+          <Text style={styles.subtitle}>
+            Social media VA services · Prepared for {invoice.client_name}
+          </Text>
+        </View>
+
+        <View style={styles.banner}>
           <View>
-            <Text style={styles.label}>Invoice</Text>
-            <Text style={{ fontSize: 14, fontWeight: "bold" }}>{invoice.invoice_number}</Text>
+            <Text style={styles.bannerAmount}>{formatCurrency(invoice.amount)}</Text>
+            <Text style={styles.bannerDue}>due this period</Text>
           </View>
           <View>
-            <Text style={styles.label}>Issue Date</Text>
-            <Text>{formatDate(invoice.issue_date)}</Text>
-            <Text style={[styles.label, { marginTop: 8 }]}>Due Date</Text>
-            <Text>{formatDate(invoice.due_date)}</Text>
+            <Text style={styles.bannerPeriodLabel}>Service period</Text>
+            <Text style={styles.bannerPeriod}>{invoice.period_label}</Text>
           </View>
         </View>
 
-        <View style={{ marginBottom: 20 }}>
-          <Text style={styles.label}>Bill To</Text>
-          <Text style={{ fontSize: 12, fontWeight: "bold" }}>{invoice.client_name}</Text>
-          <Text style={{ color: "#666" }}>{invoice.period_label}</Text>
+        <View style={styles.parties}>
+          <View style={styles.partyCol}>
+            <Text style={styles.partyTitle}>Billed to</Text>
+            <Text style={styles.partyLabel}>Client</Text>
+            <Text style={styles.partyValue}>{invoice.client_name}</Text>
+          </View>
+          <View style={styles.partyCol}>
+            <Text style={styles.partyTitle}>Paid to</Text>
+            <Text style={styles.partyLabel}>Name</Text>
+            <Text style={styles.partyValue}>{settings.principal_name}</Text>
+            <Text style={styles.partyLabel}>Business</Text>
+            <Text style={styles.partyValue}>
+              {settings.company_name}
+              {settings.location ? `\n${settings.location}` : ""}
+            </Text>
+          </View>
         </View>
 
-        <View style={styles.table}>
-          <View style={styles.tableHeader}>
-            <Text style={styles.colDate}>Date</Text>
-            <Text style={styles.colDesc}>Description</Text>
-            <Text style={styles.colHours}>Hours</Text>
-            {showPricing && (
-              <>
-                <Text style={styles.colRate}>Rate</Text>
-                <Text style={styles.colAmount}>Amount</Text>
-              </>
-            )}
-          </View>
-          {invoice.line_items.map((item, i) => (
-            <View key={i} style={styles.tableRow}>
-              <Text style={styles.colDate}>{formatDate(item.line_date)}</Text>
-              <Text style={styles.colDesc}>{item.description}</Text>
-              <Text style={styles.colHours}>{item.hours}</Text>
-              {showPricing && (
-                <>
-                  <Text style={styles.colRate}>{formatCurrency(item.rate)}</Text>
-                  <Text style={styles.colAmount}>{formatCurrency(item.amount)}</Text>
-                </>
-              )}
+        <View style={styles.tableHeader}>
+          <Text style={[styles.th, styles.colDesc]}>Description</Text>
+          <Text style={[styles.th, styles.colRate]}>Rate</Text>
+          <Text style={[styles.th, styles.colAmt]}>Amount</Text>
+        </View>
+
+        {lines.map((item) => {
+          const { title, sub } = lineParts(item)
+          const hoursSub =
+            sub ||
+            (Number(item.hours) > 0
+              ? `${formatHoursMins(item.hours)} logged`
+              : "")
+          return (
+            <View key={item.id} style={styles.tableRow} wrap={false}>
+              <View style={styles.colDesc}>
+                <Text style={styles.rowTitle}>{title}</Text>
+                {!!hoursSub && <Text style={styles.rowSub}>{hoursSub}</Text>}
+              </View>
+              <Text style={[styles.rowRate, styles.colRate]}>
+                {rateLabel(item, invoice.billing_type)}
+              </Text>
+              <Text style={[styles.rowAmt, styles.colAmt]}>{formatCurrency(item.amount)}</Text>
             </View>
-          ))}
+          )
+        })}
+
+        <View style={styles.totalBlock}>
+          <Text style={styles.totalLabel}>Total due</Text>
+          <Text style={styles.totalValue}>{formatInvoiceTotal(invoice.amount)}</Text>
         </View>
 
-        <View style={styles.totalBox}>
-          <Text>Total Hours: {invoice.total_hours}</Text>
-          {showPricing && (
-            <Text style={styles.totalDue}>Total Due: {formatCurrency(invoice.amount)}</Text>
-          )}
+        <View style={styles.payBox}>
+          <Text style={styles.payTitle}>
+            {invoice.payment_method === "wise"
+              ? "Wise"
+              : invoice.payment_method === "paypal"
+                ? "PayPal"
+                : "Bank transfer"}
+          </Text>
+          <Text style={styles.payBody}>
+            {paymentCopy(invoice.payment_method, settings, invoice.bank_details)}
+          </Text>
         </View>
 
-        <View style={styles.footer}>
-          <Text>Payment due within {invoice.payment_terms_days} days of invoice date.</Text>
-          <Text style={{ marginTop: 6 }}>{paymentFooter(invoice.payment_method, settings, invoice.bank_details)}</Text>
-          <Text style={{ marginTop: 10 }}>Thank you for choosing {settings.company_name}.</Text>
-        </View>
+        <Text style={styles.footer}>
+          {settings.company_name} · Invoice {invoice.invoice_number} · {invoice.period_label}
+        </Text>
       </Page>
     </Document>
   )

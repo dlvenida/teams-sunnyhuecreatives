@@ -139,7 +139,7 @@ export function InvoicesPage() {
 
   const onClientChange = (clientId: string) => {
     const c = activeClients.find((x) => x.id === clientId)
-    const rate = c?.default_rate || (showPricing ? "" : "75")
+    const rate = c?.default_rate || ""
     setForm((f) => ({
       ...f,
       client_id: clientId,
@@ -222,7 +222,7 @@ export function InvoicesPage() {
   const buildPdf = async (inv: Invoice) => {
     if (!settings) return null
     return generatePdfBlob(
-      <InvoiceDocument invoice={inv} settings={settings} showPricing={showPricing} />,
+      <InvoiceDocument invoice={inv} settings={settings} />,
     )
   }
   /** View in the React PDF viewer (view + download inside the viewer). */
@@ -371,24 +371,35 @@ export function InvoicesPage() {
               </Select>
             </div>
           )}
-          {form.billing_type === "package_hours" && showPricing && (
+          {form.billing_type === "package_hours" && (
             <>
               <div>
                 <Label>Included hours</Label>
                 <Input type="number" step="0.01" value={form.included_hours} onChange={(e) => setForm({ ...form, included_hours: e.target.value })} />
               </div>
               <div>
-                <Label>Overage rate ($)</Label>
-                <Input type="number" step="0.01" value={form.overage_rate} onChange={(e) => setForm({ ...form, overage_rate: e.target.value })} />
+                <Label>Overage rate ($/hr)</Label>
+                <Input type="number" step="0.01" value={form.overage_rate} onChange={(e) => setForm({ ...form, overage_rate: e.target.value })} placeholder="0.00" />
               </div>
             </>
           )}
-          {showPricing && (
           <div>
-            <Label>{form.billing_type === "hourly" ? "Hourly rate ($)" : "Package amount ($)"}</Label>
-            <Input type="number" min="0" step="0.01" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} placeholder="0.00" />
+            <Label>
+              {form.billing_type === "hourly"
+                ? "Rate per hour ($)"
+                : form.billing_type === "package_hours"
+                  ? "Package amount ($)"
+                  : "Flat amount ($)"}
+            </Label>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.rate}
+              onChange={(e) => setForm({ ...form, rate: e.target.value })}
+              placeholder={form.billing_type === "hourly" ? "e.g. 13.00" : "e.g. 100.00"}
+            />
           </div>
-          )}
           <div>
             <Label>Invoice #</Label>
             <Input value={form.invoice_number} onChange={(e) => setForm({ ...form, invoice_number: e.target.value })} />

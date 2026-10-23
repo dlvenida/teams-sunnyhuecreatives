@@ -1,5 +1,5 @@
 from calendar import monthrange
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
@@ -209,7 +209,12 @@ def my_earnings(
 
     logs = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.client), joinedload(WorkLog.va))
+        .options(
+            joinedload(WorkLog.client),
+            joinedload(WorkLog.va),
+            joinedload(WorkLog.project),
+            joinedload(WorkLog.task),
+        )
         .filter(WorkLog.va_id == current.va_id, WorkLog.status.in_(BILLABLE))
         .order_by(WorkLog.work_date.desc())
         .all()
@@ -258,13 +263,35 @@ def my_earnings(
         for r in sorted(by_client_map.values(), key=lambda x: x["client_name"].lower())
     ]
 
+    entries = [
+        {
+            "id": str(l.id),
+            "work_date": str(l.work_date),
+            "client_name": l.client.name if l.client else "Client",
+            "description": l.description_plain or "",
+            "hours": str(l.hours),
+            "rate": str(l.va_rate),
+            "pay": str(l.va_pay),
+            "project_name": l.project.name if getattr(l, "project", None) else None,
+            "task_title": l.task.title if getattr(l, "task", None) else None,
+            "source": l.source or "manual",
+        }
+        for l in sorted(range_logs, key=lambda x: (x.work_date, x.start_time or time.min))
+    ]
+
+    from app.routers.settings import _get_settings
+    company_name = _get_settings(db).get("company_name") or "Sunny Hue Creatives"
+
     return {
         "currency": currency,
+        "va_name": va.name if va else None,
+        "company_name": company_name,
         "this_week": period_stats(week_start, week_end),
         "this_month": period_stats(month_start, month_end),
         "all_time": period_stats(None, None),
         "range": period_stats(range_start, range_end) if (date_from or date_to) else None,
         "by_client": by_client,
+        "entries": entries,
         "date_from": str(date_from) if date_from else None,
         "date_to": str(date_to) if date_to else None,
     }

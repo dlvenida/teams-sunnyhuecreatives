@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
 import type { Client, Project, SubClient, TaskItem, WorkLog } from "@/lib/types"
@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/ui/badge"
 import { RichTextEditor } from "@/components/lexical/RichTextEditor"
 import { calculateHoursFromTimes, formatCurrency } from "@/lib/utils"
-import { ImagePlus } from "lucide-react"
+import { Paperclip, X } from "lucide-react"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
 
 interface ApprovedRate {
@@ -18,8 +18,33 @@ interface ApprovedRate {
   amount: string
 }
 
+async function uploadWorkLogFile(logId: string, file: File) {
+  const fd = new FormData()
+  fd.append("file", file)
+  return apiFetch(`/work-logs/${logId}/attachments`, { method: "POST", body: fd })
+}
+
+async function uploadTaskCommentFiles(taskId: string, files: File[], note: string) {
+  if (!files.length) return
+  const ids: string[] = []
+  for (const file of files) {
+    const fd = new FormData()
+    fd.append("file", file)
+    const att = await apiFetch<{ id: string }>(`/tasks/${taskId}/comments/attachments`, { method: "POST", body: fd })
+    ids.push(att.id)
+  }
+  await apiFetch(`/tasks/${taskId}/comments`, {
+    method: "POST",
+    body: JSON.stringify({
+      body: note.trim() || `📎 Attached ${files.length} file(s) with time log`,
+      attachment_ids: ids,
+    }),
+  })
+}
+
 export function VATimeLogPage() {
   const qc = useQueryClient()
+  const fileRef = useRef<HTMLInputElement>(null)
   const [form, setForm] = useState({
     work_date: new Date().toISOString().split("T")[0],
     client_id: "",
@@ -64,6 +89,12 @@ export function VATimeLogPage() {
   const [editTimes, setEditTimes] = useState({ start_time: "09:00", end_time: "17:00" })
   const [viewingLog, setViewingLog] = useState<WorkLog | null>(null)
 
+  const addFiles = (list: FileList | File[] | null) => {
+    if (!list) return
+    const next = Array.from(list)
+    setPendingFiles((prev) => [...prev, ...next])
+  }
+
   const editLog = useMutation({
     mutationFn: () =>
       apiFetch(`/va/work-logs/${editingLog!.id}`, {
@@ -96,16 +127,30 @@ export function VATimeLogPage() {
           notes: form.notes || null,
         }),
       })
+      const uploadErrors: string[] = []
       for (const file of pendingFiles) {
-        const fd = new FormData()
-        fd.append("file", file)
-        await apiFetch(`/work-logs/${log.id}/attachments`, { method: "POST", body: fd })
+        try {
+          await uploadWorkLogFile(log.id, file)
+        } catch (err) {
+          uploadErrors.push(`${file.name}: ${err instanceof Error ? err.message : "upload failed"}`)
+        }
+      }
+      if (form.task_id && pendingFiles.length) {
+        try {
+          await uploadTaskCommentFiles(form.task_id, pendingFiles, descriptionPlain)
+        } catch (err) {
+          uploadErrors.push(`Task comment: ${err instanceof Error ? err.message : "attach failed"}`)
+        }
+      }
+      if (uploadErrors.length) {
+        throw new Error(`Time log saved, but some attachments failed: ${uploadErrors.join("; ")}`)
       }
       return log
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["va-logs"] })
       qc.invalidateQueries({ queryKey: ["notifications-va-logs"] })
+      if (form.task_id) qc.invalidateQueries({ queryKey: ["comments", "task", form.task_id] })
       setDescriptionPlain("")
       setDescriptionLexical(null)
       setPendingFiles([])
@@ -136,15 +181,44 @@ export function VATimeLogPage() {
             <div><Label>Your Rate</Label><Input value={approvedRate ? `${formatCurrency(approvedRate.amount, approvedRate.currency)}${approvedRate.pay_type === "hourly" ? "/hr" : " flat"}` : "No approved rate — set in My Rates"} disabled /></div>
             <div><Label>Estimated Pay</Label><Input value={estimatedPay} disabled /></div>
           </div>
-          <div><Label>Task / Service Performed</Label><RichTextEditor onChange={(lex, plain) => { setDescriptionLexical(lex); setDescriptionPlain(plain) }} /></div>
+          <div>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <Label>Task / Service Performed</Label>
+              <Button type="button" size="sm" variant="outline" onClick={() => fileRef.current?.click()}>
+                <Paperclip className="h-3.5 w-3.5" /> Attach files
+              </Button>
+            </div>
+            <RichTextEditor onChange={(lex, plain) => { setDescriptionLexical(lex); setDescriptionPlain(plain) }} />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Attach images, PDFs, or any other files here. {form.task_id ? "They are also posted on the selected task as a comment." : "Select a task above to also post them on the task thread."}
+            </p>
+          </div>
           <div><Label>Notes (optional)</Label><Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
           <div>
-            <Label>Proof images (optional PNG/JPEG)</Label>
+            <Label>Attachments (any file type, up to 25 MB each)</Label>
             <label className="mt-1 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed p-4 text-xs text-muted-foreground hover:bg-muted/40">
-              <ImagePlus className="mb-1 h-5 w-5" />
-              {pendingFiles.length ? `${pendingFiles.length} file(s) selected` : "Drag & drop or click to browse"}
-              <input type="file" accept="image/png,image/jpeg,image/jpg" multiple className="hidden" onChange={(e) => setPendingFiles(Array.from(e.target.files || []))} />
+              <Paperclip className="mb-1 h-5 w-5" />
+              {pendingFiles.length ? `${pendingFiles.length} file(s) selected — click to add more` : "Drag & drop or click to browse"}
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => { addFiles(e.target.files); e.target.value = "" }}
+              />
             </label>
+            {pendingFiles.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {pendingFiles.map((f, i) => (
+                  <li key={`${f.name}-${i}`} className="flex items-center justify-between gap-2 rounded-lg border px-2 py-1.5 text-[11px]">
+                    <span className="truncate">{f.name} <span className="text-muted-foreground">({Math.max(1, Math.round(f.size / 1024))} KB)</span></span>
+                    <button type="button" className="text-red-600" onClick={() => setPendingFiles((prev) => prev.filter((_, idx) => idx !== i))} aria-label="Remove file">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
           {error && <p className="text-[11px] text-red-600">{error}</p>}
           <Button variant="gold" className="w-full" onClick={() => submit.mutate()} disabled={!form.client_id || !descriptionPlain || submit.isPending}>
@@ -172,7 +246,7 @@ export function VATimeLogPage() {
                     <button className="underline mr-2" onClick={() => { setEditingLog(log); setEditDesc(log.description_plain); setEditTimes({ start_time: log.start_time?.slice(0, 5) || "09:00", end_time: log.end_time?.slice(0, 5) || "17:00" }) }}>Edit</button>
                     <button className="underline text-red-600" onClick={() => { if (confirm("Delete this log entry?")) deleteLog.mutate(log.id) }}>Delete</button>
                   </> : <span className="text-[10px] text-muted-foreground">locked</span>}
-                  {(log.attachment_count ?? 0) > 0 && <button className="ml-2 underline" onClick={() => setViewingLog(log)}>Images</button>}
+                  {(log.attachment_count ?? 0) > 0 && <button className="ml-2 underline" onClick={() => setViewingLog(log)}>Files</button>}
                 </td>
               </tr>
             ))}</tbody>

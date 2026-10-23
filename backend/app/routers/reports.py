@@ -34,6 +34,24 @@ def _prev_period(year: int, month: int, cutoff: int) -> tuple[date, date]:
     return start, end
 
 
+def _resolve_period(
+    *,
+    year: int | None,
+    month: int | None,
+    cutoff: int | None,
+    date_from: date | None,
+    date_to: date | None,
+) -> tuple[date, date, str]:
+    if date_from and date_to:
+        if date_to < date_from:
+            raise HTTPException(400, "date_to must be on or after date_from")
+        label = f"{date_from.strftime('%b %d, %Y')} – {date_to.strftime('%b %d, %Y')}"
+        return date_from, date_to, label
+    if year is None or month is None:
+        raise HTTPException(400, "Provide year/month/cutoff or a custom date_from and date_to")
+    return get_billing_period(year, month, cutoff or 30)
+
+
 def _logs(db: Session, client_id, start: date, end: date, statuses):
     return (
         db.query(WorkLog)
@@ -55,19 +73,37 @@ def _logs(db: Session, client_id, start: date, end: date, statuses):
     )
 
 
+def _client_line_amount(client: Client, hours: Decimal) -> tuple[Decimal | None, Decimal | None]:
+    """Return (rate, amount) for a client billing line. Package clients get rate/amount only at totals."""
+    client_rate = client.default_rate or Decimal("0")
+    billing = str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type)
+    if billing == "hourly":
+        return client_rate, hours * client_rate
+    return None, None
+
+
 @router.get("/clients", response_model=ReportClientsResponse)
 def report_clients(
     _: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
-    year: int,
-    month: int,
+    year: int | None = None,
+    month: int | None = None,
     cutoff: int = 30,
+    date_from: date | None = None,
+    date_to: date | None = None,
     show_rate: bool = False,
 ):
     """Every client with their report stats for the period — powers the client list."""
     show_rate = show_rate and not pricing_hidden(db)
-    period_start, period_end, period_label = get_billing_period(year, month, cutoff)
-    prev_start, prev_end = _prev_period(year, month, cutoff)
+    period_start, period_end, period_label = _resolve_period(
+        year=year, month=month, cutoff=cutoff, date_from=date_from, date_to=date_to
+    )
+    if date_from and date_to:
+        span = (period_end - period_start).days + 1
+        prev_end = period_start - timedelta(days=1)
+        prev_start = prev_end - timedelta(days=span - 1)
+    else:
+        prev_start, prev_end = _prev_period(year or period_start.year, month or period_start.month, cutoff)
 
     summaries: list[ReportClientSummary] = []
     total_hours = Decimal("0")
@@ -93,11 +129,12 @@ def report_clients(
             change = float((billable - prev_hours) / prev_hours * 100)
         total_hours += billable
         total_pending += pend_hours
+        billing = str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type)
         summaries.append(
             ReportClientSummary(
                 client_id=client.id,
                 client_name=client.name,
-                billing_type=str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type),
+                billing_type=billing,
                 is_active=bool(client.is_active),
                 billable_hours=billable,
                 entries=len(logs),
@@ -108,7 +145,7 @@ def report_clients(
                 amount=(
                     (
                         sum((l.hours * (client.default_rate or Decimal("0")) for l in logs), Decimal("0"))
-                        if str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type) == "hourly"
+                        if billing == "hourly"
                         else (client.default_rate or Decimal("0"))
                     )
                     if show_rate
@@ -146,7 +183,13 @@ def generate_report(
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
 
-    period_start, period_end, period_label = get_billing_period(body.year, body.month, body.cutoff)
+    period_start, period_end, period_label = _resolve_period(
+        year=body.year,
+        month=body.month,
+        cutoff=body.cutoff,
+        date_from=body.date_from,
+        date_to=body.date_to,
+    )
     logs = _logs(db, body.client_id, period_start, period_end, BILLABLE)
     pending = _logs(db, body.client_id, period_start, period_end, [WorkLogStatus.submitted])
 
@@ -157,6 +200,7 @@ def generate_report(
     by_project: dict[str, dict] = {}
     by_sub: dict[str, dict] = {}
     by_day: dict[date, Decimal] = {}
+    billing = str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type)
 
     for log in logs:
         line = ReportLine(
@@ -171,38 +215,50 @@ def generate_report(
             start_time=log.start_time.strftime("%H:%M") if log.start_time else None,
             end_time=log.end_time.strftime("%H:%M") if log.end_time else None,
         )
+        line_amount = Decimal("0")
         if show_rate:
-            # Client billing track — never use VA payroll rates
-            client_rate = client.default_rate or Decimal("0")
-            billing = str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type)
-            if billing == "hourly":
-                line.rate = client_rate
-                line.amount = log.hours * client_rate
-                total_amount += line.amount
-            else:
-                # Fixed package: show hours only on lines; amount is the package (set once after loop)
-                line.rate = None
-                line.amount = None
+            rate, amount = _client_line_amount(client, log.hours)
+            line.rate = rate
+            line.amount = amount
+            if amount is not None:
+                total_amount += amount
+                line_amount = amount
         lines.append(line)
         total_hours += log.hours
+
+        va_key = log.va.name if log.va else "Unassigned"
+        va_row = by_va.setdefault(va_key, {"hours": Decimal("0"), "entries": 0, "amount": Decimal("0")})
+        va_row["hours"] += log.hours
+        va_row["entries"] += 1
+        va_row["amount"] += line_amount
+
         for bucket, key in (
-            (by_va, log.va.name if log.va else "Unassigned"),
             (by_project, log.project.name if log.project else "General"),
             (by_sub, log.sub_client.name if log.sub_client else client.name),
         ):
-            bucket.setdefault(key, {"hours": Decimal("0"), "entries": 0})
+            bucket.setdefault(key, {"hours": Decimal("0"), "entries": 0, "amount": Decimal("0")})
             bucket[key]["hours"] += log.hours
             bucket[key]["entries"] += 1
+            bucket[key]["amount"] += line_amount
         by_day[log.work_date] = by_day.get(log.work_date, Decimal("0")) + log.hours
 
-    def to_breakdowns(bucket: dict) -> list[ReportBreakdown]:
+    def to_breakdowns(bucket: dict, with_money: bool = False) -> list[ReportBreakdown]:
+        client_rate = client.default_rate or Decimal("0") if show_rate and billing == "hourly" else None
         return sorted(
-            (ReportBreakdown(label=k, hours=v["hours"], entries=v["entries"]) for k, v in bucket.items()),
+            (
+                ReportBreakdown(
+                    label=k,
+                    hours=v["hours"],
+                    entries=v["entries"],
+                    amount=(v["amount"] if with_money and show_rate else None),
+                    rate=(client_rate if with_money and show_rate and billing == "hourly" and v["hours"] else None),
+                )
+                for k, v in bucket.items()
+            ),
             key=lambda b: b.hours,
             reverse=True,
         )
 
-    # Fill every day in the period so the chart reads as a real timeline
     days: list[ReportDay] = []
     d = period_start
     while d <= period_end:
@@ -220,10 +276,8 @@ def generate_report(
         .count()
     )
 
-    if show_rate:
-        billing = str(client.billing_type.value if hasattr(client.billing_type, "value") else client.billing_type)
-        if billing != "hourly":
-            total_amount = client.default_rate or Decimal("0")
+    if show_rate and billing != "hourly":
+        total_amount = client.default_rate or Decimal("0")
 
     return ReportResponse(
         client_name=client.name,
@@ -235,7 +289,7 @@ def generate_report(
         lines=lines,
         total_hours=total_hours,
         total_amount=total_amount,
-        by_va=to_breakdowns(by_va),
+        by_va=to_breakdowns(by_va, with_money=True),
         by_project=to_breakdowns(by_project),
         by_sub_client=to_breakdowns(by_sub),
         by_day=days,

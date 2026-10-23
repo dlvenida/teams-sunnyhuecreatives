@@ -77,15 +77,22 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
   async function stageFiles(files: FileList | File[], withGuide = false) {
     setUploadNote("")
     for (const raw of Array.from(files)) {
-      const { file, note } = await prepareImage(raw)
+      const isImage = (raw.type || "").startsWith("image/")
+      if (withGuide && !isImage) {
+        setUploadNote("Image guide only works with image files.")
+        continue
+      }
+      const { file, note } = isImage ? await prepareImage(raw) : { file: raw }
       if (note) setUploadNote(note)
       const preview = URL.createObjectURL(file)
-      const dims = await new Promise<{ w: number; h: number } | null>(res => {
-        const img = new Image()
-        img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight })
-        img.onerror = () => res(null)
-        img.src = preview
-      })
+      const dims = isImage
+        ? await new Promise<{ w: number; h: number } | null>(res => {
+            const img = new Image()
+            img.onload = () => res({ w: img.naturalWidth, h: img.naturalHeight })
+            img.onerror = () => res(null)
+            img.src = preview
+          })
+        : null
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`
       setStaged(s => [...s, { key, blob: file, name: file.name, preview, width: dims?.w, height: dims?.h, annotated: false, mode: withGuide ? null : ("plain" as const) }])
       if (withGuide) setAnnotateLocal(key)
@@ -238,31 +245,39 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
           <div className="mt-2">
             <p className="mb-1.5 text-[10px] font-medium text-muted-foreground">Preview — choose how to attach each image. It only uploads when you post.</p>
             <div className="flex flex-wrap gap-3">
-              {staged.map(a => (
+              {staged.map(a => {
+                const isImage = (a.blob.type || "").startsWith("image/") || !!a.width
+                return (
                 <figure key={a.key} className="w-full max-w-[280px]">
                   <div className="relative">
-                    <img src={a.preview} alt={a.name} className="h-36 w-full cursor-pointer rounded-lg border object-cover" onClick={() => setAnnotateLocal(a.key)} />
+                    {isImage ? (
+                      <img src={a.preview} alt={a.name} className="h-36 w-full cursor-pointer rounded-lg border object-cover" onClick={() => setAnnotateLocal(a.key)} />
+                    ) : (
+                      <div className="flex h-36 w-full items-center justify-center rounded-lg border bg-muted/40 px-3 text-center text-[11px] font-medium">{a.name}</div>
+                    )}
                     <button title="Remove" className="absolute right-1.5 top-1.5 rounded-full bg-black/60 p-1 text-white hover:bg-black"
                       onClick={() => { URL.revokeObjectURL(a.preview); setStaged(s => s.filter(x => x.key !== a.key)) }}><X className="h-3 w-3" /></button>
                     {a.annotated && <span className="absolute left-1.5 top-1.5 rounded-full bg-red-500 px-1.5 py-px text-[9px] font-semibold text-white">✏️ With guide</span>}
                   </div>
                   <figcaption className="mt-1 truncate text-[9px] leading-tight text-muted-foreground" title={a.name}>
-                    {a.name}{a.width ? ` · ${a.width}×${a.height}` : ""} · {formatBytes(a.blob.size)} · {a.mode === "guide" ? "with guide" : "plain image"} · not attached yet
+                    {a.name}{a.width ? ` · ${a.width}×${a.height}` : ""} · {formatBytes(a.blob.size)} · {isImage ? (a.mode === "guide" ? "with guide" : "image") : "file"} · not attached yet
                   </figcaption>
-                  <Button size="sm" variant="outline" className="mt-1.5 w-full whitespace-nowrap border-red-200 text-red-600 hover:bg-red-50" onClick={() => setAnnotateLocal(a.key)}>
-                    <Pencil className="h-3.5 w-3.5" /> {a.mode === "guide" ? "Edit guide" : "Add guide to this image"}
-                  </Button>
+                  {isImage && (
+                    <Button size="sm" variant="outline" className="mt-1.5 w-full whitespace-nowrap border-red-200 text-red-600 hover:bg-red-50" onClick={() => setAnnotateLocal(a.key)}>
+                      <Pencil className="h-3.5 w-3.5" /> {a.mode === "guide" ? "Edit guide" : "Add guide to this image"}
+                    </Button>
+                  )}
                 </figure>
-              ))}
+              )})}
             </div>
           </div>
         )}
         {uploadNote && <p className="mt-1 text-[10px] text-amber-600">{uploadNote}</p>}
 
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/avif,image/gif" multiple hidden
+          <input ref={fileRef} type="file" multiple hidden
             onChange={e => { if (e.target.files) stageFiles(e.target.files, nextWithGuide.current).catch(err => setUploadNote(err.message)); nextWithGuide.current = false; e.target.value = "" }} />
-          <Button size="sm" variant="outline" className="whitespace-nowrap" onClick={() => { nextWithGuide.current = false; fileRef.current?.click() }}><ImagePlus className="h-3.5 w-3.5" /> Attach image</Button>
+          <Button size="sm" variant="outline" className="whitespace-nowrap" onClick={() => { nextWithGuide.current = false; fileRef.current?.click() }}><ImagePlus className="h-3.5 w-3.5" /> Attach file</Button>
           <Button size="sm" variant="outline" className="whitespace-nowrap border-red-200 text-red-600 hover:bg-red-50" onClick={() => { nextWithGuide.current = true; fileRef.current?.click() }}><Pencil className="h-3.5 w-3.5" /> Attach image with guide</Button>
           <Button variant="gold" size="sm" className="ml-auto" disabled={(!body.trim() && staged.length === 0) || post.isPending} onClick={() => post.mutate()}>
             {post.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} {post.isPending && staged.length ? "Attaching image…" : editing ? "Save edit" : replyTo ? "Reply" : staged.length ? `Post comment + attach ${staged.length} image${staged.length > 1 ? "s" : ""}` : "Post comment"}

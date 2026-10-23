@@ -16,6 +16,7 @@ import { SettingsPage } from "@/app/admin/settings/SettingsPage"
 import { ClientsPage } from "@/app/admin/clients/ClientsPage"
 import { UsersPage } from "@/app/admin/users/UsersPage"
 import { VATimeLogPage } from "@/app/va/time-log/VATimeLogPage"
+import { VAPayrollPage } from "@/app/va/payroll/VAPayrollPage"
 import { VARatesPage } from "@/app/va/rates/VARatesPage"
 import { VARatesAdminPage } from "@/app/admin/va-rates/VARatesAdminPage"
 import { ProfilePage } from "@/app/profile/ProfilePage"
@@ -91,6 +92,7 @@ export default function App() {
                 <Route path="/va/projects" element={<ProjectsPage />} />
                 <Route path="/va/time-clock" element={<TimeClockPage />} />
                 <Route path="/va/time-log" element={<VATimeLogPage />} />
+                <Route path="/va/payroll" element={<VAPayrollPage />} />
                 <Route path="/va/rates" element={<VARatesPage />} />
                 <Route path="/va/clients" element={<VAClientsPage />} />
                 <Route path="/va/reports" element={<UserReportsPage />} />

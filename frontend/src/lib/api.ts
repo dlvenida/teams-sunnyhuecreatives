@@ -155,13 +155,22 @@ export async function apiFetch<T>(
   }
   if (access) headers["Authorization"] = `Bearer ${access}`
 
-  let res = await fetch(`${API_URL}${path}`, { ...options, headers })
+  let res: Response
+  try {
+    res = await fetch(`${API_URL}${path}`, { ...options, headers })
+  } catch {
+    throw new Error(`Could not reach the API at ${API_URL}. Check your connection and that the backend is running.`)
+  }
 
   if (res.status === 401 && getTokens().refresh) {
     access = await refreshAccessToken()
     if (access) {
       headers["Authorization"] = `Bearer ${access}`
-      res = await fetch(`${API_URL}${path}`, { ...options, headers })
+      try {
+        res = await fetch(`${API_URL}${path}`, { ...options, headers })
+      } catch {
+        throw new Error(`Could not reach the API at ${API_URL}. Check your connection and that the backend is running.`)
+      }
     }
   }
 

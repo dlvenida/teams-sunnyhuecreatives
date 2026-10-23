@@ -21,6 +21,9 @@ from app.services.notifications import push, va_user_id
 
 router = APIRouter(prefix="/work-logs", tags=["work-logs"])
 
+# Work-log proof attachments: any file type, capped so uploads don't hang/fail silently.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
 
 def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
     return WorkLogResponse(
@@ -237,28 +240,46 @@ async def upload_attachment(
     elif current.role not in (UserRole.admin, UserRole.auditor):
         raise HTTPException(403, "Forbidden")
 
-    ctype = (file.content_type or "").lower()
-    if ctype not in ALLOWED_CONTENT_TYPES and not ctype.startswith("image/"):
-        raise HTTPException(400, "Only PNG/JPEG images are allowed")
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "Empty file")
-    try:
-        opt = optimize_image(raw)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    if len(raw) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(400, f"File is too large — keep attachments under {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB")
+
+    filename = (file.filename or "attachment")[:255]
+    ctype = (file.content_type or "application/octet-stream").lower()
     att_id = uuid_mod.uuid4()
-    key = f"work-logs/{log_id}/{att_id}.{opt['format']}"
-    storage.save_bytes(key, opt["data"], opt["content_type"])
+    width = height = None
+    data = raw
+    stored_ctype = ctype
+
+    # Optimize known images; store every other file as-is (PDF, docs, screenshots, etc.)
+    is_image = ctype in ALLOWED_CONTENT_TYPES or ctype.startswith("image/")
+    if is_image:
+        try:
+            opt = optimize_image(raw)
+            data = opt["data"]
+            stored_ctype = opt["content_type"]
+            width = opt["width"]
+            height = opt["height"]
+            ext = opt["format"]
+        except ValueError:
+            # Unreadable "image/*" — keep original bytes so the upload still succeeds
+            ext = (filename.rsplit(".", 1)[-1] if "." in filename else "bin")[:12]
+    else:
+        ext = (filename.rsplit(".", 1)[-1] if "." in filename else "bin")[:12]
+
+    key = f"work-logs/{log_id}/{att_id}.{ext}"
+    storage.save_bytes(key, data, stored_ctype)
     att = WorkLogAttachment(
         id=att_id,
         work_log_id=log_id,
         storage_key=key,
-        filename=(file.filename or "image")[:255],
-        content_type=opt["content_type"],
-        size_bytes=len(opt["data"]),
-        width=opt["width"],
-        height=opt["height"],
+        filename=filename,
+        content_type=stored_ctype,
+        size_bytes=len(data),
+        width=width,
+        height=height,
         uploaded_by=current.user.id,
     )
     db.add(att)

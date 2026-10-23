@@ -25,25 +25,37 @@ export function ReportsPage() {
   const { showPricing } = useDisplaySettings()
   const chartColor = useCssVar("--chart", "#ec4899")
   const now = new Date()
+  const [periodMode, setPeriodMode] = useState<"cutoff" | "custom">("cutoff")
   const [year, setYear] = useState(now.getFullYear())
   const [month, setMonth] = useState(now.getMonth() + 1)
   const [cutoff, setCutoff] = useState(30)
-  const [showRate, setShowRate] = useState(false)
+  const [dateFrom, setDateFrom] = useState("")
+  const [dateTo, setDateTo] = useState("")
+  const [showRate, setShowRate] = useState(true)
   const [selected, setSelected] = useState<string>("")
   const [search, setSearch] = useState("")
   const [vaFilter, setVaFilter] = useState("")
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
 
   const rateOn = showPricing && showRate
+  const customReady = periodMode !== "custom" || (!!dateFrom && !!dateTo)
+  const periodParams = periodMode === "custom"
+    ? `date_from=${dateFrom}&date_to=${dateTo}&show_rate=${rateOn}`
+    : `year=${year}&month=${month}&cutoff=${cutoff}&show_rate=${rateOn}`
+  const generateBody = periodMode === "custom"
+    ? { client_id: selected, date_from: dateFrom, date_to: dateTo, show_rate: rateOn }
+    : { client_id: selected, year, month, cutoff, show_rate: rateOn }
+
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => apiFetch<Settings>("/settings") })
   const { data: list, isLoading: listLoading } = useQuery({
-    queryKey: ["report-clients", year, month, cutoff, rateOn],
-    queryFn: () => apiFetch<ReportClientsResponse>(`/reports/clients?year=${year}&month=${month}&cutoff=${cutoff}&show_rate=${rateOn}`),
+    queryKey: ["report-clients", periodMode, year, month, cutoff, dateFrom, dateTo, rateOn],
+    queryFn: () => apiFetch<ReportClientsResponse>(`/reports/clients?${periodParams}`),
+    enabled: customReady,
   })
   const { data: report, isLoading: repLoading } = useQuery({
-    queryKey: ["report", selected, year, month, cutoff, rateOn],
-    queryFn: () => apiFetch<ReportResponse>("/reports/generate", { method: "POST", body: JSON.stringify({ client_id: selected, year, month, cutoff, show_rate: rateOn }) }),
-    enabled: !!selected,
+    queryKey: ["report", selected, periodMode, year, month, cutoff, dateFrom, dateTo, rateOn],
+    queryFn: () => apiFetch<ReportResponse>("/reports/generate", { method: "POST", body: JSON.stringify(generateBody) }),
+    enabled: !!selected && customReady,
   })
 
   const selectedSummary = list?.clients.find(c => c.client_id === selected)
@@ -76,13 +88,32 @@ export function ReportsPage() {
       </div>
 
       {/* Period controls — everything below updates automatically */}
-      <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-5">
-        <div><Label>Month</Label><Select value={month} onChange={(e) => setMonth(Number(e.target.value))}>{MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></div>
-        <div><Label>Year</Label><Select value={year} onChange={(e) => setYear(Number(e.target.value))}>{[2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}</Select></div>
-        <div><Label>Cutoff</Label><Select value={cutoff} onChange={(e) => setCutoff(Number(e.target.value))}><option value={15}>1st – 15th</option><option value={30}>16th – end</option></Select></div>
+      <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-6">
+        <div>
+          <Label>Period type</Label>
+          <Select value={periodMode} onChange={(e) => setPeriodMode(e.target.value as "cutoff" | "custom")}>
+            <option value="cutoff">Billing cutoff</option>
+            <option value="custom">Custom date range</option>
+          </Select>
+        </div>
+        {periodMode === "cutoff" ? (
+          <>
+            <div><Label>Month</Label><Select value={month} onChange={(e) => setMonth(Number(e.target.value))}>{MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</Select></div>
+            <div><Label>Year</Label><Select value={year} onChange={(e) => setYear(Number(e.target.value))}>{[2025, 2026, 2027].map(y => <option key={y} value={y}>{y}</option>)}</Select></div>
+            <div><Label>Cutoff</Label><Select value={cutoff} onChange={(e) => setCutoff(Number(e.target.value))}><option value={15}>1st – 15th</option><option value={30}>16th – end</option></Select></div>
+          </>
+        ) : (
+          <>
+            <div><Label>From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
+            <div><Label>To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
+          </>
+        )}
         {showPricing && <div><Label>Amounts</Label><Select value={showRate ? "yes" : "no"} onChange={(e) => setShowRate(e.target.value === "yes")}><option value="no">Hours only</option><option value="yes">Include rate & amount</option></Select></div>}
         <div><Label>Find client</Label><div className="relative"><Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" /><Input className="pl-8" placeholder="Search clients…" value={search} onChange={(e) => setSearch(e.target.value)} /></div></div>
       </div>
+      {periodMode === "custom" && (!dateFrom || !dateTo) && (
+        <p className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">Pick a From and To date to build the custom report period.</p>
+      )}
 
       {/* Client list */}
       <div>
@@ -157,7 +188,7 @@ export function ReportsPage() {
               </CardContent></Card>
               <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Hours by VA</CardTitle></CardHeader><CardContent className="space-y-2.5">
                 {(report.by_va ?? []).map(b => { const pct = Number(report.total_hours) ? (Number(b.hours) / Number(report.total_hours)) * 100 : 0; return (
-                  <div key={b.label} className="text-xs"><div className="flex justify-between"><span className="font-semibold">{b.label}</span><span className="text-muted-foreground">{b.hours} hrs · {b.entries} entries</span></div>
+                  <div key={b.label} className="text-xs"><div className="flex justify-between gap-2"><span className="font-semibold">{b.label}</span><span className="whitespace-nowrap text-muted-foreground">{b.hours} hrs{report.show_rate && b.amount != null ? ` · ${formatCurrency(b.amount)}` : ` · ${b.entries} entries`}</span></div>
                   <div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} /></div></div>) })}
                 {(report.by_va ?? []).length === 0 && <p className="text-xs text-muted-foreground">No approved work in this period.</p>}
               </CardContent></Card>
@@ -177,7 +208,7 @@ export function ReportsPage() {
                 </div></div></CardHeader>
               <CardContent className="overflow-x-auto p-0">
                 <table className="w-full text-xs">
-                  <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">VA</th><th className="p-3">Project / Task</th><th className="p-3">Description</th><th className="p-3">Time</th><th className="p-3">Hours</th>{report.show_rate && <th className="p-3">Amount</th>}</tr></thead>
+                  <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">VA</th><th className="p-3">Project / Task</th><th className="p-3">Description</th><th className="p-3">Time</th><th className="p-3">Hours</th>{report.show_rate && <><th className="p-3">Rate</th><th className="p-3">Amount</th></>}</tr></thead>
                   <tbody>{lines.map((l, i) => (
                     <tr key={i} className="border-b hover:bg-muted/30">
                       <td className="whitespace-nowrap p-3">{formatDate(l.work_date)}</td>
@@ -186,9 +217,9 @@ export function ReportsPage() {
                       <td className="max-w-xs p-3"><span className="line-clamp-2">{l.description}</span>{l.task_title && l.project_name && <span className="block text-[11px] text-muted-foreground">{l.task_title}</span>}</td>
                       <td className="whitespace-nowrap p-3 text-muted-foreground">{l.start_time && l.end_time ? `${l.start_time}–${l.end_time}` : "—"}<span className={cn("ml-1.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", l.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{l.source === "clock" ? "Clock" : "Manual"}</span></td>
                       <td className="p-3 font-semibold">{l.hours}</td>
-                      {report.show_rate && <td className="p-3">{formatCurrency(l.amount || 0)}</td>}
+                      {report.show_rate && <><td className="p-3">{l.rate != null ? formatCurrency(l.rate) : "—"}</td><td className="p-3">{formatCurrency(l.amount || 0)}</td></>}
                     </tr>))}
-                    {lines.length === 0 && <tr><td colSpan={report.show_rate ? 7 : 6} className="p-6 text-center text-muted-foreground">No entries match. Try another VA or clear the search.</td></tr>}
+                    {lines.length === 0 && <tr><td colSpan={report.show_rate ? 8 : 6} className="p-6 text-center text-muted-foreground">No entries match. Try another VA or clear the search.</td></tr>}
                   </tbody>
                 </table>
               </CardContent>

@@ -46,9 +46,15 @@ def serialize_comment(db: Session, c, scope: str, me_id) -> dict:
 
 
 def serialize_attachment(a: CommentAttachment) -> dict:
+    if a.link_url:
+        kind = "link"
+    elif a.width or (a.format or "").lower() in ("avif", "webp", "jpg", "jpeg", "png", "gif"):
+        kind = "image"
+    else:
+        kind = "file"
     return {
         "id": a.id, "comment_id": a.comment_id, "original_name": a.original_name,
-        "link_url": a.link_url, "provider": a.provider, "kind": "link" if a.link_url else "image",
+        "link_url": a.link_url, "provider": a.provider, "kind": kind,
         "size_bytes": a.size_bytes, "original_size": a.original_size,
         "width": a.width, "height": a.height, "original_width": a.original_width, "original_height": a.original_height,
         "format": a.format, "storage_backend": a.storage_backend, "is_annotation": bool(a.is_annotation),
@@ -57,31 +63,61 @@ def serialize_attachment(a: CommentAttachment) -> dict:
     }
 
 
+MAX_COMMENT_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+
 async def store_attachment(db: Session, *, scope: str, scope_id, current, file: UploadFile,
                            comment_id=None, is_annotation: bool = False, annotated_from_id=None) -> CommentAttachment:
-    """Optimize an uploaded image to AVIF and put it in the bucket (services.storage)."""
-    if file.content_type and file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(400, "Only image files are supported (JPG, PNG, WebP, AVIF, GIF).")
+    """Store a comment attachment. Images are AVIF-optimized; any other file is stored as-is."""
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "Empty file")
-    try:
-        opt = optimize_image(raw)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    if len(raw) > MAX_COMMENT_ATTACHMENT_BYTES:
+        raise HTTPException(400, f"File is too large — keep attachments under {MAX_COMMENT_ATTACHMENT_BYTES // (1024 * 1024)} MB")
+
+    filename = (file.filename or "attachment")[:255]
+    ctype = (file.content_type or "application/octet-stream").lower()
     att_id = uuid.uuid4()
-    ext = opt["format"]
+    is_image = ctype in ALLOWED_CONTENT_TYPES or ctype.startswith("image/")
+
+    if is_image and not is_annotation:
+        try:
+            opt = optimize_image(raw)
+            data, ext = opt["data"], opt["format"]
+            width, height = opt["width"], opt["height"]
+            ow, oh = opt["original_width"], opt["original_height"]
+            stored_ctype = opt["content_type"]
+        except ValueError:
+            data, ext = raw, (filename.rsplit(".", 1)[-1] if "." in filename else "bin")[:12]
+            width = height = ow = oh = None
+            stored_ctype = ctype
+    elif is_image:
+        # Annotations are often PNG from the canvas — still try optimize, fall back to raw
+        try:
+            opt = optimize_image(raw)
+            data, ext = opt["data"], opt["format"]
+            width, height = opt["width"], opt["height"]
+            ow, oh = opt["original_width"], opt["original_height"]
+            stored_ctype = opt["content_type"]
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    else:
+        data = raw
+        ext = (filename.rsplit(".", 1)[-1] if "." in filename else "bin")[:12]
+        width = height = ow = oh = None
+        stored_ctype = ctype
+
     key = f"{scope}-comments/{scope_id}/{att_id}.{ext}"
     # Bucket first: storage.save_bytes writes to the S3-compatible Railway bucket
     # whenever S3_*/AWS_* bucket credentials are configured on the api service,
     # and only falls back to local disk in dev. We record which backend was used.
-    ref = storage.save_bytes(key, opt["data"], opt["content_type"])
+    ref = storage.save_bytes(key, data, stored_ctype)
     a = CommentAttachment(
         id=att_id, scope=scope, scope_id=scope_id, comment_id=comment_id,
         uploaded_by=current.user.id, uploader_name=display_name(db, current),
         storage_key=key, storage_backend="bucket" if ref.startswith("s3://") else "local",
-        original_name=(file.filename or "image")[:255], original_size=len(raw), size_bytes=len(opt["data"]),
-        width=opt["width"], height=opt["height"], original_width=opt["original_width"], original_height=opt["original_height"],
+        original_name=filename, original_size=len(raw), size_bytes=len(data),
+        width=width, height=height, original_width=ow, original_height=oh,
         format=ext, is_annotation=is_annotation, annotated_from_id=annotated_from_id,
     )
     db.add(a)

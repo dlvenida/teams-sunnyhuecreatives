@@ -53,6 +53,7 @@ export const VA_NAV: NavItem[] = [
   { to: "/va/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "client project"], section: "Workspace", color: "#06b6d4" },
   { to: "/va/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock in", "clock out", "timer"], section: "Workspace", color: "#22c55e" },
   { to: "/va/time-log", label: "Log Time", icon: Clock, keywords: ["submit", "hours", "work"], section: "Workspace", color: "#f59e0b" },
+  { to: "/va/payroll", label: "My Payroll", icon: DollarSign, keywords: ["pay", "payroll", "timesheet", "earnings", "report"], section: "Manage", color: "#10b981" },
   { to: "/va/rates", label: "My Rates", icon: DollarSign, keywords: ["rate", "pay", "hourly", "package"], section: "Manage", color: "#14b8a6" },
   { to: "/va/clients", label: "Clients", icon: Building2, keywords: ["assigned clients", "my clients", "client list"], section: "Manage", color: "#a855f7" },
   { to: "/va/reports", label: "My Reports", icon: Flag, keywords: ["report", "flag", "issue", "report to admin", "auditor"], section: "Manage", color: "#f87ca6" },

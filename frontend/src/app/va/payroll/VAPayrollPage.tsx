@@ -110,6 +110,8 @@ export function VAPayrollPage() {
             date_from: dateFrom,
             date_to: dateTo,
             company_name: earnings.company_name || "Sunny Hue Creatives",
+            principal_name: "Jane Laurine Venida",
+            location: "Dumaguete City, Philippines",
             range: earnings.range,
             by_client: earnings.by_client,
             entries: earnings.entries ?? [],

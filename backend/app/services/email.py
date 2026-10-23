@@ -25,29 +25,35 @@ def branded_email(title: str, preheader: str, body_html: str, cta_label: str | N
         <tr><td style="padding:8px 32px 28px;">
           <a href="{_esc(cta_url)}" style="display:inline-block;background:{accent};color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:13px 28px;border-radius:999px;box-shadow:0 8px 20px -6px {accent};">{_esc(cta_label)}</a>
         </td></tr>"""
+    logo = f"{settings.app_url.rstrip('/')}/brand/sunnyhue-logo.png"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_esc(title)}</title></head>
-<body style="margin:0;padding:0;background:#fff1f5;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:{DARK};">
+<body style="margin:0;padding:0;background:#fff1f5;font-family:Georgia,'Times New Roman',serif;color:{DARK};">
 <span style="display:none;max-height:0;overflow:hidden;">{_esc(preheader)}</span>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff1f5;padding:28px 12px;">
 <tr><td align="center">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 16px 40px -16px rgba(236,72,153,.35);">
-  <tr><td style="background:linear-gradient(120deg,#ec4899,#f472b6 55%,#a855f7);padding:26px 32px;">
-    <div style="font-size:20px;font-weight:800;color:#ffffff;letter-spacing:-.02em;">☀️ Teams.SHC</div>
-    <div style="font-size:12px;color:#ffe4f1;margin-top:2px;">Sunny Hue Creatives · Work that shines</div>
+  <tr><td style="background:linear-gradient(120deg,#f9a8d4,#ec4899 45%,#db2777);padding:22px 32px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td width="64" valign="middle"><img src="{_esc(logo)}" width="56" height="56" alt="Sunny Hue Creatives" style="display:block;border-radius:12px;border:2px solid rgba(255,255,255,.5);" /></td>
+      <td style="padding-left:14px;" valign="middle">
+        <div style="font-size:20px;font-weight:800;color:#ffffff;letter-spacing:-.02em;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">sunnyhue creatives</div>
+        <div style="font-size:12px;color:#ffe4f1;margin-top:2px;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">Work that shines · since 2020 💕</div>
+      </td>
+    </tr></table>
   </td></tr>
   <tr><td style="padding:26px 32px 6px;">
-    <h1 style="margin:0;font-size:21px;line-height:1.3;letter-spacing:-.02em;">{_esc(title)}</h1>
+    <h1 style="margin:0;font-size:22px;line-height:1.35;letter-spacing:-.02em;font-style:italic;color:#be185d;">{_esc(title)}</h1>
   </td></tr>
-  <tr><td style="padding:6px 32px 18px;font-size:14px;line-height:1.65;color:#831843;">{body_html}</td></tr>
+  <tr><td style="padding:6px 32px 18px;font-size:15px;line-height:1.7;color:#831843;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">{body_html}</td></tr>
   {cta}
-  <tr><td style="padding:16px 32px;background:#fff7fa;border-top:1px solid #fce7f3;font-size:11px;color:#be185d;">
-    You're receiving this because you're part of Sunny Hue Creatives. Manage notifications with your admin.
+  <tr><td style="padding:16px 32px;background:#fff7fa;border-top:1px solid #fce7f3;font-size:11px;color:#be185d;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    You're receiving this because you're part of the Sunny Hue Creatives family. Spread kindness and do cute work. 🌸
     <br><a href="{_esc(settings.app_url)}" style="color:{PRIMARY};font-weight:600;text-decoration:none;">Open Teams.SHC →</a>
   </td></tr>
 </table>
-<p style="font-size:11px;color:#f9a8d4;margin:14px 0 0;">© Sunny Hue Creatives · Dumaguete City, Philippines</p>
+<p style="font-size:11px;color:#f9a8d4;margin:14px 0 0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">© Sunny Hue Creatives · Dumaguete City, Philippines</p>
 </td></tr></table>
 </body></html>"""
 

@@ -786,6 +786,12 @@ class InvoiceGenerateRequest(BaseModel):
     overage_rate: Decimal | None = None
 
 
+class InvoiceLineItemUpdate(BaseModel):
+    description: str | None = None
+    rate: Decimal | None = None
+    amount: Decimal | None = None
+
+
 class InvoicePreviewResponse(BaseModel):
     period_label: str
     period_start: date

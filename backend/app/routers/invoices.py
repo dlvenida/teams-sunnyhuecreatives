@@ -18,7 +18,13 @@ from app.models import (
     WorkLog,
     WorkLogStatus,
 )
-from app.schemas import InvoiceGenerateRequest, InvoiceLineItemResponse, InvoicePreviewResponse, InvoiceResponse
+from app.schemas import (
+    InvoiceGenerateRequest,
+    InvoiceLineItemResponse,
+    InvoiceLineItemUpdate,
+    InvoicePreviewResponse,
+    InvoiceResponse,
+)
 from app.services.billing import get_billing_period, next_invoice_number
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
@@ -183,15 +189,41 @@ def preview_invoice(
     total_hours = sum((log.hours for log in approved), Decimal("0"))
 
     estimated = overage_hrs = overage_amt = None
-    if approved:
-        estimated, overage_hrs, overage_amt = _invoice_amount(billing_type, rate, total_hours, included_hours, overage_rate)
+    # Client invoices are independent of VA timesheet/payroll approval.
+    # Fixed/package can generate with just a rate; hourly uses approved hours when present.
+    package_ok = billing_type in (BillingType.fixed, BillingType.package_hours) and rate > 0
+    if approved or package_ok:
+        hours_for_est = total_hours if billing_type == BillingType.hourly else total_hours
+        estimated, overage_hrs, overage_amt = _invoice_amount(
+            billing_type, rate, hours_for_est, included_hours, overage_rate
+        )
 
-    if approved:
-        message = f"Ready to invoice {len(approved)} approved entr{'y' if len(approved) == 1 else 'ies'}."
+    can_generate = package_ok or (billing_type == BillingType.hourly and rate > 0 and len(approved) > 0)
+    # Allow hourly with rate even without logs → admin can edit a single service line after generate
+    if billing_type == BillingType.hourly and rate > 0 and not approved:
+        can_generate = True
+        estimated = Decimal("0.00")
+        message = (
+            "No approved time logs yet — you can still generate a client invoice and customize the "
+            "service description. (Independent of VA timesheet / payroll approval.)"
+        )
+    elif approved:
+        message = (
+            f"Ready to invoice{f' {len(approved)} approved entries' if approved else ''}. "
+            "Client invoice is independent of VA timesheet approval."
+        )
+    elif package_ok:
+        message = (
+            f"Ready to generate a {billing_type.replace('_', ' ')} invoice for {period_label} "
+            "(no VA timesheet approval required)."
+        )
     elif submitted_count:
-        message = f"{submitted_count} submitted entr{'y' if submitted_count == 1 else 'ies'} awaiting approval — approve in All Logs first."
+        message = (
+            f"{submitted_count} submitted entries awaiting approval — optional for client invoices. "
+            "You can still generate a package invoice, or approve logs for hourly billing."
+        )
     else:
-        message = "No approved entries for this period. Approve VA time logs or pick a different month."
+        message = "Set a rate/amount to generate. Client invoices do not require VA timesheet approval."
 
     return InvoicePreviewResponse(
         period_label=period_label,
@@ -202,7 +234,7 @@ def preview_invoice(
         total_hours=total_hours,
         estimated_amount=estimated,
         billing_type=billing_type,
-        can_generate=len(approved) > 0,
+        can_generate=can_generate,
         message=message,
         included_hours=included_hours,
         overage_hours=overage_hrs,
@@ -224,9 +256,6 @@ def generate_invoice(
 
     logs, _ = _period_logs(db, body.client_id, period_start, period_end)
 
-    if not logs:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No approved entries for this period")
-
     billing_type = body.billing_type
     rate = body.rate
     included_hours = body.included_hours
@@ -240,6 +269,16 @@ def generate_invoice(
             if body.overage_rate is None:
                 overage_rate = pkg.overage_rate
             # body.rate is Jane's override (auto-filled from package in UI)
+
+    # Client invoices are independent of VA timesheet / payroll approval.
+    # Fixed & package invoices can be created with no work logs.
+    if not logs and billing_type == BillingType.hourly and rate <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Enter a rate to generate, or wait for approved time logs",
+        )
+    if not logs and billing_type not in (BillingType.fixed, BillingType.package_hours, BillingType.hourly):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to invoice for this period")
 
     total_hours = sum((log.hours for log in logs), Decimal("0"))
     amount, overage_hrs, overage_amt = _invoice_amount(billing_type, rate, total_hours, included_hours, overage_rate)
@@ -277,42 +316,52 @@ def generate_invoice(
         log.status = WorkLogStatus.invoiced
         log.invoice_id = invoice.id
 
-    # Hourly: one aggregated line per sub-client (fallback: parent client name)
+    # Client-facing lines: service description + period only (no timesheet / hour logs).
     if billing_type == BillingType.hourly:
-        groups: dict[UUID | None, list[WorkLog]] = {}
-        for log in logs:
-            groups.setdefault(log.sub_client_id, []).append(log)
+        if logs:
+            groups: dict[UUID | None, list[WorkLog]] = {}
+            for log in logs:
+                groups.setdefault(log.sub_client_id, []).append(log)
 
-        for group_logs in groups.values():
-            label = (
-                group_logs[0].sub_client.name
-                if group_logs[0].sub_client is not None
-                else client.name
-            )
-            group_hours = sum((log.hours for log in group_logs), Decimal("0"))
-            group_amount = (group_hours * rate).quantize(Decimal("0.01"))
-            date_span = _format_date_span([log.work_date for log in group_logs])
-            sub = f"{_format_hours_label(group_hours)} logged · {date_span}"
+            for group_logs in groups.values():
+                label = (
+                    group_logs[0].sub_client.name
+                    if group_logs[0].sub_client is not None
+                    else client.name
+                )
+                group_hours = sum((log.hours for log in group_logs), Decimal("0"))
+                group_amount = (group_hours * rate).quantize(Decimal("0.01"))
+                db.add(
+                    InvoiceLineItem(
+                        invoice_id=invoice.id,
+                        work_log_id=None,
+                        line_date=period_end,
+                        description=f"{label} · Social Media VA Services\n{period_label}",
+                        hours=group_hours,
+                        rate=rate,
+                        amount=group_amount,
+                    )
+                )
+        else:
             db.add(
                 InvoiceLineItem(
                     invoice_id=invoice.id,
                     work_log_id=None,
                     line_date=period_end,
-                    description=f"{label} · Social Media VA Services\n{sub}",
-                    hours=group_hours,
+                    description=f"Social Media VA Services\n{period_label}",
+                    hours=Decimal("0"),
                     rate=rate,
-                    amount=group_amount,
+                    amount=Decimal("0.00"),
                 )
             )
 
-    # Package / package_hours: summary line items
     elif billing_type == BillingType.fixed:
         db.add(
             InvoiceLineItem(
                 invoice_id=invoice.id,
                 work_log_id=None,
                 line_date=period_end,
-                description=f"Engagement\n${rate}/month package · {period_label}",
+                description=f"Engagement package\n{period_label}",
                 hours=total_hours,
                 rate=rate,
                 amount=amount,
@@ -326,7 +375,7 @@ def generate_invoice(
                 invoice_id=invoice.id,
                 work_log_id=None,
                 line_date=period_end,
-                description=f"Package ({included} hrs included)\n{period_label}",
+                description=f"Retainer package\n{period_label}",
                 hours=package_hours,
                 rate=rate,
                 amount=rate,
@@ -338,7 +387,7 @@ def generate_invoice(
                     invoice_id=invoice.id,
                     work_log_id=None,
                     line_date=period_end,
-                    description=f"Overage hours\n{_format_hours_label(overage_hrs)} beyond package",
+                    description=f"Additional services\n{period_label}",
                     hours=overage_hrs,
                     rate=overage_rate or Decimal("0"),
                     amount=overage_amt or Decimal("0"),
@@ -350,6 +399,46 @@ def generate_invoice(
         db.query(Invoice)
         .options(joinedload(Invoice.client), joinedload(Invoice.line_items))
         .filter(Invoice.id == invoice.id)
+        .first()
+    )
+    return _serialize_invoice(invoice)
+
+
+@router.patch("/{invoice_id}/line-items/{line_id}", response_model=InvoiceResponse)
+def update_invoice_line_item(
+    invoice_id: UUID,
+    line_id: UUID,
+    body: InvoiceLineItemUpdate,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Let admin customize client-facing service descriptions (and amounts) before sending."""
+    invoice = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.client), joinedload(Invoice.line_items))
+        .filter(Invoice.id == invoice_id)
+        .first()
+    )
+    if not invoice:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invoice not found")
+    line = next((li for li in invoice.line_items if li.id == line_id), None)
+    if not line:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Line item not found")
+
+    data = body.model_dump(exclude_unset=True)
+    if "description" in data and data["description"] is not None:
+        line.description = data["description"].strip() or line.description
+    if "rate" in data and data["rate"] is not None:
+        line.rate = data["rate"]
+    if "amount" in data and data["amount"] is not None:
+        line.amount = data["amount"]
+
+    invoice.amount = sum((li.amount for li in invoice.line_items), Decimal("0")).quantize(Decimal("0.01"))
+    db.commit()
+    invoice = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.client), joinedload(Invoice.line_items))
+        .filter(Invoice.id == invoice_id)
         .first()
     )
     return _serialize_invoice(invoice)

@@ -2,7 +2,6 @@ import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/render
 import type { Invoice, InvoiceLineItem, Settings } from "@/lib/types"
 import {
   formatCurrency,
-  formatHoursMins,
   formatInvoiceDate,
   formatInvoiceRate,
   formatInvoiceTotal,
@@ -249,16 +248,13 @@ export function InvoiceDocument({
 
         {lines.map((item) => {
           const { title, sub } = lineParts(item)
-          const hoursSub =
-            sub ||
-            (Number(item.hours) > 0
-              ? `${formatHoursMins(item.hours)} logged`
-              : "")
+          // Never show timesheet / hour-log details on the client invoice — only service copy.
+          const serviceSub = sub && !/hrs|mins|logged/i.test(sub) ? sub : ""
           return (
             <View key={item.id} style={styles.tableRow} wrap={false}>
               <View style={styles.colDesc}>
                 <Text style={styles.rowTitle}>{title}</Text>
-                {!!hoursSub && <Text style={styles.rowSub}>{hoursSub}</Text>}
+                {!!serviceSub && <Text style={styles.rowSub}>{serviceSub}</Text>}
               </View>
               <Text style={[styles.rowRate, styles.colRate]}>
                 {rateLabel(item, invoice.billing_type)}

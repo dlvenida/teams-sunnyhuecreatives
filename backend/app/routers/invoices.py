@@ -103,6 +103,7 @@ def get_next_invoice_number(
 def _period_logs(db: Session, client_id: UUID, period_start, period_end):
     base = (
         db.query(WorkLog)
+        .options(joinedload(WorkLog.sub_client))
         .filter(
             WorkLog.client_id == client_id,
             WorkLog.work_date >= period_start,
@@ -110,8 +111,45 @@ def _period_logs(db: Session, client_id: UUID, period_start, period_end):
         )
     )
     approved = base.filter(WorkLog.status == WorkLogStatus.approved).order_by(WorkLog.work_date).all()
-    submitted_count = base.filter(WorkLog.status == WorkLogStatus.submitted).count()
+    submitted_count = (
+        db.query(WorkLog)
+        .filter(
+            WorkLog.client_id == client_id,
+            WorkLog.work_date >= period_start,
+            WorkLog.work_date <= period_end,
+            WorkLog.status == WorkLogStatus.submitted,
+        )
+        .count()
+    )
     return approved, submitted_count
+
+
+def _format_hours_label(hours: Decimal) -> str:
+    total_mins = int(round(float(hours) * 60))
+    h, m = divmod(total_mins, 60)
+    if h == 0:
+        return f"{m} mins"
+    if m == 0:
+        return f"{h} hrs"
+    return f"{h} hrs {m} mins"
+
+
+def _format_date_span(dates: list[date]) -> str:
+    unique = sorted(set(dates))
+    if not unique:
+        return ""
+    if len(unique) == 1:
+        d = unique[0]
+        return f"{d.strftime('%B')} {d.day}, {d.year}"
+    if len(unique) == 2:
+        a, b = unique
+        if a.month == b.month and a.year == b.year:
+            return f"{a.strftime('%B')} {a.day} and {b.day}, {a.year}"
+        return f"{a.strftime('%B')} {a.day}, {a.year} and {b.strftime('%B')} {b.day}, {b.year}"
+    a, b = unique[0], unique[-1]
+    if a.month == b.month and a.year == b.year:
+        return f"{a.strftime('%B')} {a.day} to {b.day}, {a.year}"
+    return f"{a.strftime('%B')} {a.day}, {a.year} to {b.strftime('%B')} {b.day}, {b.year}"
 
 
 @router.get("/preview", response_model=InvoicePreviewResponse)
@@ -235,39 +273,77 @@ def generate_invoice(
     db.add(invoice)
     db.flush()
 
-    client_rate = rate if billing_type == BillingType.hourly else (amount / total_hours if total_hours else rate)
-
     for log in logs:
-        line_amount = (log.hours * client_rate).quantize(Decimal("0.01")) if billing_type == BillingType.hourly else Decimal("0")
-        item = InvoiceLineItem(
-            invoice_id=invoice.id,
-            work_log_id=log.id,
-            line_date=log.work_date,
-            description=log.description_plain,
-            hours=log.hours,
-            rate=client_rate if billing_type == BillingType.hourly else rate,
-            amount=line_amount if billing_type == BillingType.hourly else Decimal("0"),
-        )
-        db.add(item)
         log.status = WorkLogStatus.invoiced
         log.invoice_id = invoice.id
 
-    # Package / package_hours: add summary line items
-    if billing_type == BillingType.fixed:
-        db.add(InvoiceLineItem(
-            invoice_id=invoice.id, work_log_id=None, line_date=period_end,
-            description="Fixed package", hours=total_hours, rate=rate, amount=amount,
-        ))
+    # Hourly: one aggregated line per sub-client (fallback: parent client name)
+    if billing_type == BillingType.hourly:
+        groups: dict[UUID | None, list[WorkLog]] = {}
+        for log in logs:
+            groups.setdefault(log.sub_client_id, []).append(log)
+
+        for group_logs in groups.values():
+            label = (
+                group_logs[0].sub_client.name
+                if group_logs[0].sub_client is not None
+                else client.name
+            )
+            group_hours = sum((log.hours for log in group_logs), Decimal("0"))
+            group_amount = (group_hours * rate).quantize(Decimal("0.01"))
+            date_span = _format_date_span([log.work_date for log in group_logs])
+            sub = f"{_format_hours_label(group_hours)} logged · {date_span}"
+            db.add(
+                InvoiceLineItem(
+                    invoice_id=invoice.id,
+                    work_log_id=None,
+                    line_date=period_end,
+                    description=f"{label} · Social Media VA Services\n{sub}",
+                    hours=group_hours,
+                    rate=rate,
+                    amount=group_amount,
+                )
+            )
+
+    # Package / package_hours: summary line items
+    elif billing_type == BillingType.fixed:
+        db.add(
+            InvoiceLineItem(
+                invoice_id=invoice.id,
+                work_log_id=None,
+                line_date=period_end,
+                description=f"Engagement\n${rate}/month package · {period_label}",
+                hours=total_hours,
+                rate=rate,
+                amount=amount,
+            )
+        )
     elif billing_type == BillingType.package_hours:
-        db.add(InvoiceLineItem(
-            invoice_id=invoice.id, work_log_id=None, line_date=period_end,
-            description=f"Package ({included_hours or 0} hrs included)", hours=min(total_hours, included_hours or total_hours), rate=rate, amount=rate,
-        ))
+        included = included_hours or Decimal("0")
+        package_hours = min(total_hours, included) if included else total_hours
+        db.add(
+            InvoiceLineItem(
+                invoice_id=invoice.id,
+                work_log_id=None,
+                line_date=period_end,
+                description=f"Package ({included} hrs included)\n{period_label}",
+                hours=package_hours,
+                rate=rate,
+                amount=rate,
+            )
+        )
         if overage_hrs and overage_hrs > 0:
-            db.add(InvoiceLineItem(
-                invoice_id=invoice.id, work_log_id=None, line_date=period_end,
-                description="Overage hours", hours=overage_hrs, rate=overage_rate or Decimal("0"), amount=overage_amt or Decimal("0"),
-            ))
+            db.add(
+                InvoiceLineItem(
+                    invoice_id=invoice.id,
+                    work_log_id=None,
+                    line_date=period_end,
+                    description=f"Overage hours\n{_format_hours_label(overage_hrs)} beyond package",
+                    hours=overage_hrs,
+                    rate=overage_rate or Decimal("0"),
+                    amount=overage_amt or Decimal("0"),
+                )
+            )
 
     db.commit()
     invoice = (

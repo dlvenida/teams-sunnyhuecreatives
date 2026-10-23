@@ -156,9 +156,19 @@ def update_work_log(
     for k, v in data.items():
         setattr(log, k, v)
 
-    if body.start_time or body.end_time or (body.va_rate is not None and current.role == UserRole.admin):
+    if body.start_time or body.end_time or body.work_date or (body.va_rate is not None and current.role == UserRole.admin):
         start = body.start_time or log.start_time
         end = body.end_time or log.end_time
+        work_date = body.work_date or log.work_date
+        from app.services.work_log_overlap import assert_no_time_overlap
+        assert_no_time_overlap(
+            db,
+            va_id=log.va_id,
+            work_date=work_date,
+            start_time=start,
+            end_time=end,
+            exclude_id=log.id,
+        )
         rate = body.va_rate if (body.va_rate is not None and current.role == UserRole.admin) else log.va_rate
         log.hours = calculate_hours(start, end)
         log.va_pay = calculate_pay(log.hours, rate)

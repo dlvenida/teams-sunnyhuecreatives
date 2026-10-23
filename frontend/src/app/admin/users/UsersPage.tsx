@@ -39,6 +39,8 @@ export function UsersPage() {
   const [editing, setEditing] = useState<VA | null>(null)
   const [form, setForm] = useState<UserForm>(emptyForm)
   const [newPassword, setNewPassword] = useState("")
+  const [showPassword, setShowPassword] = useState(false)
+  const [lastSetPassword, setLastSetPassword] = useState("")
   const [error, setError] = useState("")
   const [viewingUserId, setViewingUserId] = useState("")
   const switchToUser = async (userId?: string | null, role?: string) => {
@@ -136,17 +138,23 @@ export function UsersPage() {
     setEditing(null)
     setForm(emptyForm)
     setNewPassword("")
+    setShowPassword(false)
+    setLastSetPassword("")
     setError("")
   }
 
   const openCreate = () => {
     setError("")
+    setLastSetPassword("")
+    setShowPassword(true)
     setForm(emptyForm)
     setModal("create")
   }
 
   const openEdit = (user: VA) => {
     setError("")
+    setLastSetPassword("")
+    setShowPassword(true)
     setEditing(user)
     setForm({
       name: user.name,
@@ -176,6 +184,10 @@ export function UsersPage() {
           method: "POST",
           body: JSON.stringify({ password: newPassword }),
         })
+        setLastSetPassword(newPassword)
+        setShowPassword(true)
+        invalidate()
+        return
       }
       invalidate()
       closeModal()
@@ -415,47 +427,71 @@ export function UsersPage() {
               </div>}
               {modal === "create" ? (
                 <div>
-                  <Label>Temporary Password</Label>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <Label>Password (share with VA)</Label>
+                    <button type="button" className="text-[10px] font-semibold text-primary" onClick={() => setShowPassword((s) => !s)}>
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
                   <Input
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     value={form.password}
                     onChange={(e) => setForm({ ...form, password: e.target.value })}
                     minLength={8}
+                    placeholder="At least 8 characters"
+                    autoComplete="new-password"
                   />
+                  <p className="mt-1 text-[10px] text-muted-foreground">Visible so you can copy and send it to them.</p>
                 </div>
-              ) : (
+              ) : roleTab === "va" ? (
                 <div>
-                  <Label>Reset Password (optional)</Label>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <Label>Set / view password</Label>
+                    <button type="button" className="text-[10px] font-semibold text-primary" onClick={() => setShowPassword((s) => !s)}>
+                      {showPassword ? "Hide" : "Show"}
+                    </button>
+                  </div>
                   <Input
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Leave blank to keep current"
+                    onChange={(e) => { setNewPassword(e.target.value); setLastSetPassword("") }}
+                    placeholder="Type a new password (min 8 chars)"
                     minLength={8}
+                    autoComplete="new-password"
                   />
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    Existing passwords are encrypted and cannot be retrieved — set a new one here, then copy it to share.
+                  </p>
+                  {lastSetPassword && (
+                    <p className="mt-2 rounded-lg border border-green-200 bg-green-50 px-2.5 py-2 text-[11px] text-green-800">
+                      Password saved. Share this with the VA: <strong className="select-all font-mono">{lastSetPassword}</strong>
+                    </p>
+                  )}
                 </div>
-              )}
+              ) : null}
             </div>
 
             {error && <p className="mt-3 text-[11px] text-red-600">{error}</p>}
 
             <div className="mt-5 flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={closeModal}>
-                Cancel
+                {lastSetPassword ? "Done" : "Cancel"}
               </Button>
-              <Button
-                variant="gold"
-                size="sm"
-                disabled={
-                  !form.name ||
-                  !form.email ||
-                  (modal === "create" && form.password.length < 8) ||
-                  isSaving
-                }
-                onClick={() => void save()}
-              >
-                {modal === "create" ? "Create" : "Update"}
-              </Button>
+              {!lastSetPassword && (
+                <Button
+                  variant="gold"
+                  size="sm"
+                  disabled={
+                    !form.name ||
+                    !form.email ||
+                    (modal === "create" && form.password.length < 8) ||
+                    isSaving
+                  }
+                  onClick={() => void save()}
+                >
+                  {modal === "create" ? "Create" : newPassword.length >= 8 ? "Save & set password" : "Update"}
+                </Button>
+              )}
             </div>
           </div>
         </div>

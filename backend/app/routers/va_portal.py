@@ -9,14 +9,15 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, require_va
-from app.models import Client, SubClient, VA, WorkLog, WorkLogStatus
-from app.schemas import ClientResponse, SubClientResponse, VAWorkLogUpdate
+from app.models import Client, SubClient, TimesheetStatus, TimesheetSubmission, VA, WorkLog, WorkLogStatus
+from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionResponse, TimesheetSubmitRequest, VAWorkLogUpdate
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
 from app.services.calculations import calculate_hours
 from app.services.email import send_va_submission_notification
-from app.services.notifications import admin_user_ids, push
+from app.services.notifications import admin_and_auditor_user_ids, push
 from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
+from app.services.work_log_overlap import assert_no_time_overlap
 
 router = APIRouter(prefix="/va", tags=["va"])
 
@@ -171,9 +172,18 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
     data = body.model_dump(exclude_unset=True)
     for k, v in data.items():
         setattr(log, k, v)
-    if body.start_time or body.end_time:
+    if body.start_time or body.end_time or body.work_date:
         start = body.start_time or log.start_time
         end = body.end_time or log.end_time
+        work_date = body.work_date or log.work_date
+        assert_no_time_overlap(
+            db,
+            va_id=current.va_id,
+            work_date=work_date,
+            start_time=start,
+            end_time=end,
+            exclude_id=log.id,
+        )
         log.hours = calculate_hours(start, end)
         rate, pay, _ = resolve_log_pay(db, current.va_id, log.client_id, log.hours)
         log.va_rate = rate
@@ -304,6 +314,13 @@ def submit_work_log(
     db: Annotated[Session, Depends(get_db)],
 ):
     hours = calculate_hours(body.start_time, body.end_time)
+    assert_no_time_overlap(
+        db,
+        va_id=current.va_id,
+        work_date=body.work_date,
+        start_time=body.start_time,
+        end_time=body.end_time,
+    )
     rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
 
     log = WorkLog(
@@ -340,7 +357,125 @@ def submit_work_log(
         work_date=str(log.work_date),
         description=log.description_plain[:200],
     )
-    push(db, admin_user_ids(db), "log", f"🕒 New time log from {log.va.name}",
+    push(db, admin_and_auditor_user_ids(db), "log", f"🕒 New time log from {log.va.name}",
          f"{log.client.name} · {log.work_date} · {log.hours} hrs waiting for approval.", "/admin/logs")
 
     return _serialize_log(log)
+
+
+@router.get("/timesheets", response_model=list[TimesheetSubmissionResponse])
+def list_my_timesheets(
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    q = db.query(TimesheetSubmission).filter(TimesheetSubmission.va_id == current.va_id)
+    if date_from and date_to:
+        q = q.filter(
+            TimesheetSubmission.period_start == date_from,
+            TimesheetSubmission.period_end == date_to,
+        )
+    rows = q.order_by(TimesheetSubmission.submitted_at.desc()).limit(50).all()
+    va = db.query(VA).filter(VA.id == current.va_id).first()
+    out = []
+    for r in rows:
+        logs = (
+            db.query(WorkLog)
+            .filter(
+                WorkLog.va_id == r.va_id,
+                WorkLog.work_date >= r.period_start,
+                WorkLog.work_date <= r.period_end,
+                WorkLog.status.in_(BILLABLE + [WorkLogStatus.submitted]),
+            )
+            .all()
+        )
+        out.append(
+            TimesheetSubmissionResponse(
+                id=r.id,
+                va_id=r.va_id,
+                va_name=va.name if va else None,
+                period_start=r.period_start,
+                period_end=r.period_end,
+                status=r.status.value if hasattr(r.status, "value") else str(r.status),
+                notes=r.notes,
+                submitted_at=r.submitted_at,
+                reviewed_at=r.reviewed_at,
+                entry_count=len(logs),
+                total_hours=sum((l.hours for l in logs), Decimal("0")),
+            )
+        )
+    return out
+
+
+@router.post("/timesheets/submit", response_model=TimesheetSubmissionResponse, status_code=status.HTTP_201_CREATED)
+def submit_timesheet(
+    body: TimesheetSubmitRequest,
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if body.date_to < body.date_from:
+        raise HTTPException(status_code=400, detail="date_to must be on or after date_from")
+
+    existing = (
+        db.query(TimesheetSubmission)
+        .filter(
+            TimesheetSubmission.va_id == current.va_id,
+            TimesheetSubmission.period_start == body.date_from,
+            TimesheetSubmission.period_end == body.date_to,
+        )
+        .first()
+    )
+    if existing:
+        existing.notes = body.notes
+        existing.status = TimesheetStatus.submitted
+        existing.reviewed_at = None
+        existing.reviewed_by = None
+        db.commit()
+        db.refresh(existing)
+        row = existing
+    else:
+        row = TimesheetSubmission(
+            va_id=current.va_id,
+            period_start=body.date_from,
+            period_end=body.date_to,
+            notes=body.notes,
+            status=TimesheetStatus.submitted,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+    va = db.query(VA).filter(VA.id == current.va_id).first()
+    logs = (
+        db.query(WorkLog)
+        .filter(
+            WorkLog.va_id == current.va_id,
+            WorkLog.work_date >= body.date_from,
+            WorkLog.work_date <= body.date_to,
+            WorkLog.status.in_(BILLABLE + [WorkLogStatus.submitted]),
+        )
+        .all()
+    )
+    hours = sum((l.hours for l in logs), Decimal("0"))
+    push(
+        db,
+        admin_and_auditor_user_ids(db),
+        "log",
+        f"📋 Timesheet submitted by {va.name if va else 'VA'}",
+        f"{body.date_from} – {body.date_to} · {hours} hrs · {len(logs)} entries ready for review.",
+        "/admin/payroll",
+    )
+    return TimesheetSubmissionResponse(
+        id=row.id,
+        va_id=row.va_id,
+        va_name=va.name if va else None,
+        period_start=row.period_start,
+        period_end=row.period_end,
+        status=row.status.value if hasattr(row.status, "value") else str(row.status),
+        notes=row.notes,
+        submitted_at=row.submitted_at,
+        reviewed_at=row.reviewed_at,
+        entry_count=len(logs),
+        total_hours=hours,
+    )

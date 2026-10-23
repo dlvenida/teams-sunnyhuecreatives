@@ -169,6 +169,9 @@ export interface PayrollVA {
   currency: "PHP" | "USD"
   total_hours: string
   total_pay: string
+  timesheet_submitted?: boolean
+  timesheet_status?: string | null
+  timesheet_id?: string | null
   entry_count: number
   entries: {
     id: string

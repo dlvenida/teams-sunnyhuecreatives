@@ -1,13 +1,14 @@
 import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer"
 import type { PayrollResponse, Settings } from "@/lib/types"
-import { formatCurrency, formatDate } from "@/lib/utils"
+import { formatCurrency, formatDate, formatInvoiceDate } from "@/lib/utils"
+import { PDF_FONT } from "@/lib/pdfFonts"
 
 const styles = StyleSheet.create({
-  page: { padding: 40, fontFamily: "Helvetica", fontSize: 10, color: "#1a1a2e" },
+  page: { padding: 40, fontFamily: PDF_FONT, fontSize: 10, color: "#3d2a32", backgroundColor: "#fbf4f6" },
   header: { marginBottom: 20 },
-  company: { fontSize: 18, fontWeight: "bold", color: "#c9a227" },
+  company: { fontSize: 16, color: "#c45a7a" },
   vaSection: { marginTop: 20, marginBottom: 10 },
-  vaName: { fontSize: 12, fontWeight: "bold", backgroundColor: "#f5f5f5", padding: 8 },
+  vaName: { fontSize: 12, fontWeight: "bold", backgroundColor: "#f3d5df", padding: 8, borderRadius: 4 },
   tableHeader: { flexDirection: "row", backgroundColor: "#1a1a2e", color: "#fff", padding: 6, marginTop: 6 },
   tableRow: { flexDirection: "row", borderBottom: "1px solid #eee", padding: 6, fontSize: 9 },
   col: { flex: 1 },
@@ -30,10 +31,13 @@ export function PayrollDocument({
       <Page size="A4" style={styles.page}>
         <View style={styles.header}>
           <Text style={styles.company}>{settings.company_name} — VA Payroll Report</Text>
-          <Text style={{ color: "#666", marginTop: 4 }}>
-            Period: {formatDate(payroll.period_start)} – {formatDate(payroll.period_end)}
+          {payroll.vas.length === 1 && (
+            <Text style={{ fontSize: 18, color: "#3d2a32", marginTop: 8 }}>{payroll.vas[0].va_name}</Text>
+          )}
+          <Text style={{ color: "#8a6b76", marginTop: 4 }}>
+            Date range: {formatInvoiceDate(payroll.period_start)} – {formatInvoiceDate(payroll.period_end)}
           </Text>
-          <Text style={{ color: "#666" }}>CONFIDENTIAL — Internal Use Only</Text>
+          <Text style={{ color: "#8a6b76" }}>CONFIDENTIAL — Internal Use Only</Text>
         </View>
 
         {payroll.vas.map((va) => (

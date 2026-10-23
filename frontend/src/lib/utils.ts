@@ -7,8 +7,24 @@ export function cn(...inputs: ClassValue[]) {
 
 export function formatCurrency(amount: number | string, currency = "USD") {
   const num = typeof amount === "string" ? parseFloat(amount) : amount
+  if (Number.isNaN(num)) return currency === "PHP" ? "₱0.00" : "$0.00"
   if (currency === "PHP") return `₱${num.toFixed(2)}`
   return `$${num.toFixed(2)}`
+}
+
+/** Slug for payroll PDF downloads: `Arby-Oct1-Oct15-2026.pdf` */
+export function payrollPdfFilename(vaName: string, dateFrom: string, dateTo: string) {
+  const slug = (vaName || "VA")
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "VA"
+  const short = (iso: string) => {
+    const d = new Date(iso + "T00:00:00")
+    const mon = d.toLocaleDateString("en-US", { month: "short" })
+    return `${mon}${d.getDate()}`
+  }
+  const year = new Date(dateTo + "T00:00:00").getFullYear()
+  return `${slug}-${short(dateFrom)}-${short(dateTo)}-${year}.pdf`
 }
 
 /** Invoice PDF: `$13.00/hr` */

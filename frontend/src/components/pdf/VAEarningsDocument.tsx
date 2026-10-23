@@ -1,15 +1,18 @@
 import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer"
-import { formatCurrency, formatDate } from "@/lib/utils"
+import { formatCurrency, formatDate, formatInvoiceDate } from "@/lib/utils"
+import { PDF_FONT } from "@/lib/pdfFonts"
 
 const styles = StyleSheet.create({
-  page: { padding: 40, fontFamily: "Helvetica", fontSize: 10, color: "#1a1a2e" },
+  page: { padding: 40, fontFamily: PDF_FONT, fontSize: 10, color: "#3d2a32", backgroundColor: "#fbf4f6" },
   header: { marginBottom: 20 },
-  company: { fontSize: 18, fontWeight: "bold", color: "#c9a227" },
-  tableHeader: { flexDirection: "row", backgroundColor: "#1a1a2e", color: "#fff", padding: 6, marginTop: 12 },
-  tableRow: { flexDirection: "row", borderBottom: "1px solid #eee", padding: 6, fontSize: 9 },
+  company: { fontSize: 16, color: "#c45a7a", marginBottom: 8 },
+  vaName: { fontSize: 20, color: "#3d2a32", marginBottom: 4 },
+  period: { fontSize: 12, color: "#8a6b76" },
+  tableHeader: { flexDirection: "row", backgroundColor: "#b67486", color: "#fff", padding: 6, marginTop: 12 },
+  tableRow: { flexDirection: "row", borderBottom: "1px solid #edd5de", padding: 6, fontSize: 9 },
   col: { flex: 1 },
   section: { marginTop: 16 },
-  totalBar: { marginTop: 16, backgroundColor: "#1a1a2e", color: "#fff", padding: 12 },
+  totalBar: { marginTop: 16, backgroundColor: "#b67486", color: "#fff", padding: 12, borderRadius: 6 },
 })
 
 export interface VAEarningsPdfData {
@@ -35,7 +38,7 @@ export interface VAEarningsPdfData {
 export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
   const period =
     data.date_from && data.date_to
-      ? `${formatDate(data.date_from)} – ${formatDate(data.date_to)}`
+      ? `${formatInvoiceDate(data.date_from)} – ${formatInvoiceDate(data.date_to)}`
       : "Selected range"
   const currency = (data.range?.currency || data.currency) as "PHP" | "USD"
 
@@ -43,9 +46,9 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
     <Document>
       <Page size="A4" style={styles.page}>
         <View style={styles.header}>
-          <Text style={styles.company}>{data.company_name} — VA Timesheet</Text>
-          <Text style={{ color: "#666", marginTop: 4 }}>{data.va_name || "VA"}</Text>
-          <Text style={{ color: "#666" }}>Period: {period}</Text>
+          <Text style={styles.company}>{data.company_name} — VA Payroll Timesheet</Text>
+          <Text style={styles.vaName}>{data.va_name || "VA"}</Text>
+          <Text style={styles.period}>Date range: {period}</Text>
         </View>
 
         <View style={styles.section}>
@@ -89,7 +92,7 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
             </View>
           ))}
           {data.entries.length === 0 && (
-            <Text style={{ marginTop: 8, color: "#666" }}>No approved entries in this range.</Text>
+            <Text style={{ marginTop: 8, color: "#8a6b76" }}>No approved entries in this range.</Text>
           )}
         </View>
 

@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     Time,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -55,6 +56,11 @@ class WorkLogStatus(str, enum.Enum):
     approved = "approved"
     rejected = "rejected"
     invoiced = "invoiced"
+
+
+class TimesheetStatus(str, enum.Enum):
+    submitted = "submitted"
+    reviewed = "reviewed"
 
 
 class InvoiceStatus(str, enum.Enum):
@@ -496,6 +502,31 @@ class PayrollRun(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    va: Mapped["VA"] = relationship()
+
+
+class TimesheetSubmission(Base):
+    """VA declares a date-range timesheet ready for admin/auditor review before payroll."""
+
+    __tablename__ = "timesheet_submissions"
+    __table_args__ = (
+        UniqueConstraint("va_id", "period_start", "period_end", name="uq_timesheet_va_period"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    va_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    status: Mapped[TimesheetStatus] = mapped_column(
+        Enum(TimesheetStatus, name="timesheet_status"), default=TimesheetStatus.submitted
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     va: Mapped["VA"] = relationship()
 

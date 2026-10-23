@@ -1,18 +1,84 @@
-import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer"
-import { formatCurrency, formatDate, formatInvoiceDate } from "@/lib/utils"
+import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer"
+import { formatCurrency, formatInvoiceDate, formatInvoiceTotal } from "@/lib/utils"
 import { PDF_FONT } from "@/lib/pdfFonts"
 
+const COLORS = {
+  page: "#fbf4f6",
+  band: "#f3d5df",
+  banner: "#b67486",
+  ink: "#3d2a32",
+  muted: "#8a6b76",
+  pink: "#c45a7a",
+  white: "#ffffff",
+  rowBorder: "#edd5de",
+  payBg: "#f8e8ee",
+  payBorder: "#c45a7a",
+}
+
 const styles = StyleSheet.create({
-  page: { padding: 40, fontFamily: PDF_FONT, fontSize: 10, color: "#3d2a32", backgroundColor: "#fbf4f6" },
-  header: { marginBottom: 20 },
-  company: { fontSize: 16, color: "#c45a7a", marginBottom: 8 },
-  vaName: { fontSize: 20, color: "#3d2a32", marginBottom: 4 },
-  period: { fontSize: 12, color: "#8a6b76" },
-  tableHeader: { flexDirection: "row", backgroundColor: "#b67486", color: "#fff", padding: 6, marginTop: 12 },
-  tableRow: { flexDirection: "row", borderBottom: "1px solid #edd5de", padding: 6, fontSize: 9 },
-  col: { flex: 1 },
-  section: { marginTop: 16 },
-  totalBar: { marginTop: 16, backgroundColor: "#b67486", color: "#fff", padding: 12, borderRadius: 6 },
+  page: {
+    paddingTop: 28,
+    paddingBottom: 36,
+    paddingHorizontal: 40,
+    fontFamily: PDF_FONT,
+    fontSize: 10,
+    color: COLORS.ink,
+    backgroundColor: COLORS.page,
+  },
+  topBand: { position: "absolute", top: 0, left: 0, right: 0, height: 10, backgroundColor: COLORS.band },
+  bottomBand: { position: "absolute", bottom: 0, left: 0, right: 0, height: 10, backgroundColor: COLORS.band },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 },
+  logo: { width: 72, height: 72, borderRadius: 8 },
+  titleBlock: { marginTop: 4, marginBottom: 10 },
+  title: { fontFamily: "Times-Italic", fontSize: 34, color: COLORS.pink, marginBottom: 4 },
+  subtitle: { fontSize: 10, color: COLORS.muted },
+  agency: { fontSize: 11, color: COLORS.pink, marginTop: 6 },
+  greeting: { fontFamily: "Times-Italic", fontSize: 14, color: COLORS.ink, marginTop: 12, marginBottom: 4 },
+  greetingSub: { fontSize: 10, color: COLORS.muted, marginBottom: 16 },
+  banner: {
+    backgroundColor: COLORS.banner,
+    borderRadius: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 22,
+  },
+  bannerAmount: { fontSize: 22, fontFamily: "Times-Bold", color: COLORS.white },
+  bannerDue: { fontSize: 11, color: COLORS.white, marginTop: 2 },
+  bannerPeriodLabel: { fontSize: 9, color: "rgba(255,255,255,0.85)", textAlign: "right" },
+  bannerPeriod: { fontSize: 12, color: COLORS.white, marginTop: 3, textAlign: "right" },
+  parties: { flexDirection: "row", marginBottom: 22, gap: 24 },
+  partyCol: { flex: 1 },
+  partyTitle: { fontFamily: "Times-Italic", fontSize: 14, color: COLORS.pink, marginBottom: 8 },
+  partyLabel: { fontSize: 7, color: COLORS.pink, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 2 },
+  partyValue: { fontSize: 11, color: COLORS.ink, marginBottom: 8 },
+  tableHeader: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: COLORS.rowBorder, paddingBottom: 6, marginBottom: 4 },
+  th: { fontSize: 8, color: COLORS.muted, letterSpacing: 0.6, textTransform: "uppercase" },
+  colDesc: { width: "55%" },
+  colRate: { width: "22%", textAlign: "right" },
+  colAmt: { width: "23%", textAlign: "right" },
+  tableRow: { flexDirection: "row", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.rowBorder, alignItems: "flex-start" },
+  rowTitle: { fontSize: 11, color: COLORS.ink, marginBottom: 3 },
+  rowSub: { fontSize: 8, color: COLORS.muted, lineHeight: 1.35 },
+  rowRate: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  rowAmt: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  totalBlock: { alignItems: "flex-end", marginTop: 18, marginBottom: 20 },
+  totalLabel: { fontSize: 8, color: COLORS.muted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 },
+  totalValue: { fontFamily: "Times-Bold", fontSize: 22, color: COLORS.ink },
+  payBox: {
+    backgroundColor: COLORS.payBg,
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.payBorder,
+    borderRadius: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 18,
+  },
+  payTitle: { fontSize: 10, color: COLORS.ink, marginBottom: 4 },
+  payBody: { fontSize: 9, color: COLORS.muted, lineHeight: 1.45 },
+  footer: { fontSize: 8, color: COLORS.muted, textAlign: "center", marginTop: 8 },
 })
 
 export interface VAEarningsPdfData {
@@ -21,6 +87,8 @@ export interface VAEarningsPdfData {
   date_from?: string | null
   date_to?: string | null
   company_name: string
+  principal_name?: string | null
+  location?: string | null
   range?: { hours: string; earned: string; entries: number; currency: string } | null
   by_client: { client_name: string; hours: string; earned: string; pay_type: string; currency: string }[]
   entries: {
@@ -41,69 +109,120 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
       ? `${formatInvoiceDate(data.date_from)} – ${formatInvoiceDate(data.date_to)}`
       : "Selected range"
   const currency = (data.range?.currency || data.currency) as "PHP" | "USD"
+  const total = data.range?.earned ?? "0"
+  const vaName = data.va_name || "VA"
+  const logoSrc =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/brand/sunnyhue-logo.png`
+      : "/brand/sunnyhue-logo.png"
+  const monthLabel =
+    data.date_from
+      ? new Date(data.date_from + "T00:00:00").toLocaleDateString("en-US", { month: "long", year: "numeric" })
+      : ""
+
+  const lines =
+    data.by_client.length > 0
+      ? data.by_client.map((c) => ({
+          title: `${c.client_name} · ${c.pay_type === "package" ? "Package" : "VA services"}`,
+          sub: period,
+          rate: c.pay_type === "hourly" ? `${formatCurrency(Number(c.earned) / Math.max(Number(c.hours) || 1, 0.01), (c.currency || currency) as "PHP" | "USD")}/hr` : formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD"),
+          amount: formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD"),
+        }))
+      : data.entries.map((e) => ({
+          title: e.client_name || "Services",
+          sub: period,
+          rate: formatCurrency(e.rate, currency),
+          amount: formatCurrency(e.pay, currency),
+        }))
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
+        <View style={styles.topBand} fixed />
+        <View style={styles.bottomBand} fixed />
+
         <View style={styles.header}>
-          <Text style={styles.company}>{data.company_name} — VA Payroll Timesheet</Text>
-          <Text style={styles.vaName}>{data.va_name || "VA"}</Text>
-          <Text style={styles.period}>Date range: {period}</Text>
+          <Image src={logoSrc} style={styles.logo} />
         </View>
 
-        <View style={styles.section}>
-          <Text style={{ fontWeight: "bold", marginBottom: 6 }}>Earnings by Client</Text>
-          <View style={styles.tableHeader}>
-            <Text style={[styles.col, { width: "40%" }]}>Client</Text>
-            <Text style={[styles.col, { width: "15%" }]}>Type</Text>
-            <Text style={[styles.col, { width: "15%", textAlign: "right" }]}>Hours</Text>
-            <Text style={[styles.col, { width: "30%", textAlign: "right" }]}>Earned</Text>
+        <View style={styles.titleBlock}>
+          <Text style={styles.title}>Payroll Report</Text>
+          <Text style={styles.subtitle}>Bi-weekly payroll · Prepared for {vaName}</Text>
+          <Text style={styles.agency}>
+            {data.company_name}
+            {monthLabel ? ` · ${monthLabel}` : ""}
+          </Text>
+        </View>
+
+        <Text style={styles.greeting}>Hi {vaName.split(" ")[0]}! Here’s your payroll report.</Text>
+        <Text style={styles.greetingSub}>Thank you for your beautiful work this period — you make Sunny Hue shine. 💕</Text>
+
+        <View style={styles.banner}>
+          <View>
+            <Text style={styles.bannerAmount}>{formatCurrency(total, currency)}</Text>
+            <Text style={styles.bannerDue}>earned this period</Text>
           </View>
-          {data.by_client.map((c) => (
-            <View key={c.client_name} style={styles.tableRow}>
-              <Text style={[styles.col, { width: "40%" }]}>{c.client_name}</Text>
-              <Text style={[styles.col, { width: "15%" }]}>{c.pay_type}</Text>
-              <Text style={[styles.col, { width: "15%", textAlign: "right" }]}>{c.hours}</Text>
-              <Text style={[styles.col, { width: "30%", textAlign: "right" }]}>
-                {formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD")}
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        <View style={styles.section}>
-          <Text style={{ fontWeight: "bold", marginBottom: 6 }}>Entry Detail</Text>
-          <View style={styles.tableHeader}>
-            <Text style={[styles.col, { width: "14%" }]}>Date</Text>
-            <Text style={[styles.col, { width: "18%" }]}>Client</Text>
-            <Text style={[styles.col, { width: "34%" }]}>Description</Text>
-            <Text style={[styles.col, { width: "10%", textAlign: "right" }]}>Hours</Text>
-            <Text style={[styles.col, { width: "12%", textAlign: "right" }]}>Rate</Text>
-            <Text style={[styles.col, { width: "12%", textAlign: "right" }]}>Pay</Text>
+          <View>
+            <Text style={styles.bannerPeriodLabel}>Service period</Text>
+            <Text style={styles.bannerPeriod}>{period}</Text>
           </View>
-          {data.entries.map((e, i) => (
-            <View key={`${e.work_date}-${i}`} style={styles.tableRow}>
-              <Text style={[styles.col, { width: "14%" }]}>{formatDate(e.work_date)}</Text>
-              <Text style={[styles.col, { width: "18%" }]}>{e.client_name}</Text>
-              <Text style={[styles.col, { width: "34%" }]}>{e.description || e.task_title || "—"}</Text>
-              <Text style={[styles.col, { width: "10%", textAlign: "right" }]}>{e.hours}</Text>
-              <Text style={[styles.col, { width: "12%", textAlign: "right" }]}>{formatCurrency(e.rate, currency)}</Text>
-              <Text style={[styles.col, { width: "12%", textAlign: "right" }]}>{formatCurrency(e.pay, currency)}</Text>
-            </View>
-          ))}
-          {data.entries.length === 0 && (
-            <Text style={{ marginTop: 8, color: "#8a6b76" }}>No approved entries in this range.</Text>
-          )}
         </View>
 
-        {data.range && (
-          <View style={styles.totalBar}>
-            <Text>
-              Range total: {formatCurrency(data.range.earned, currency)} · {data.range.hours} hrs ·{" "}
-              {data.range.entries} entries
+        <View style={styles.parties}>
+          <View style={styles.partyCol}>
+            <Text style={styles.partyTitle}>Billed to</Text>
+            <Text style={styles.partyLabel}>Team member</Text>
+            <Text style={styles.partyValue}>{vaName}</Text>
+          </View>
+          <View style={styles.partyCol}>
+            <Text style={styles.partyTitle}>Paid to</Text>
+            <Text style={styles.partyLabel}>Name</Text>
+            <Text style={styles.partyValue}>{data.principal_name || "Jane Laurine Venida"}</Text>
+            <Text style={styles.partyLabel}>Business</Text>
+            <Text style={styles.partyValue}>
+              {data.company_name}
+              {"\n"}
+              {data.location || "Dumaguete City, Philippines"}
             </Text>
           </View>
+        </View>
+
+        <View style={styles.tableHeader}>
+          <Text style={[styles.th, styles.colDesc]}>Description</Text>
+          <Text style={[styles.th, styles.colRate]}>Rate</Text>
+          <Text style={[styles.th, styles.colAmt]}>Amount</Text>
+        </View>
+
+        {lines.map((line, i) => (
+          <View key={i} style={styles.tableRow} wrap={false}>
+            <View style={styles.colDesc}>
+              <Text style={styles.rowTitle}>{line.title}</Text>
+              <Text style={styles.rowSub}>{line.sub}</Text>
+            </View>
+            <Text style={[styles.rowRate, styles.colRate]}>{line.rate}</Text>
+            <Text style={[styles.rowAmt, styles.colAmt]}>{line.amount}</Text>
+          </View>
+        ))}
+
+        {lines.length === 0 && (
+          <Text style={{ marginTop: 8, color: COLORS.muted }}>No approved entries in this range.</Text>
         )}
+
+        <View style={styles.totalBlock}>
+          <Text style={styles.totalLabel}>Total due</Text>
+          <Text style={styles.totalValue}>{formatInvoiceTotal(total).replace("USD", currency)}</Text>
+        </View>
+
+        <View style={styles.payBox}>
+          <Text style={styles.payTitle}>Payment</Text>
+          <Text style={styles.payBody}>
+            Your payroll for this period will be sent via your saved payment method. Questions? Message Jane anytime — we’re so grateful for you!
+          </Text>
+        </View>
+
+        <Text style={styles.footer}>
+          {data.company_name} · Payroll · {vaName} · {period}
+        </Text>
       </Page>
     </Document>
   )

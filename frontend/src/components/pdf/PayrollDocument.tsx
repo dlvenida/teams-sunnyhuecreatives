@@ -1,20 +1,86 @@
-import { Document, Page, Text, View, StyleSheet } from "@react-pdf/renderer"
+import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer"
 import type { PayrollResponse, Settings } from "@/lib/types"
-import { formatCurrency, formatDate, formatInvoiceDate } from "@/lib/utils"
+import { formatCurrency, formatInvoiceDate, formatInvoiceTotal } from "@/lib/utils"
 import { PDF_FONT } from "@/lib/pdfFonts"
 
+const COLORS = {
+  page: "#fbf4f6",
+  band: "#f3d5df",
+  banner: "#b67486",
+  ink: "#3d2a32",
+  muted: "#8a6b76",
+  pink: "#c45a7a",
+  white: "#ffffff",
+  rowBorder: "#edd5de",
+  payBg: "#f8e8ee",
+  payBorder: "#c45a7a",
+}
+
 const styles = StyleSheet.create({
-  page: { padding: 40, fontFamily: PDF_FONT, fontSize: 10, color: "#3d2a32", backgroundColor: "#fbf4f6" },
-  header: { marginBottom: 20 },
-  company: { fontSize: 16, color: "#c45a7a" },
-  vaSection: { marginTop: 20, marginBottom: 10 },
-  vaName: { fontSize: 12, fontWeight: "bold", backgroundColor: "#f3d5df", padding: 8, borderRadius: 4 },
-  tableHeader: { flexDirection: "row", backgroundColor: "#1a1a2e", color: "#fff", padding: 6, marginTop: 6 },
-  tableRow: { flexDirection: "row", borderBottom: "1px solid #eee", padding: 6, fontSize: 9 },
-  col: { flex: 1 },
-  subtotal: { flexDirection: "row", justifyContent: "flex-end", padding: 8, fontWeight: "bold" },
-  grandTotal: { marginTop: 20, backgroundColor: "#1a1a2e", color: "#fff", padding: 12 },
-  clientRow: { flexDirection: "row", paddingVertical: 3, fontSize: 9 },
+  page: {
+    paddingTop: 28,
+    paddingBottom: 36,
+    paddingHorizontal: 40,
+    fontFamily: PDF_FONT,
+    fontSize: 10,
+    color: COLORS.ink,
+    backgroundColor: COLORS.page,
+  },
+  topBand: { position: "absolute", top: 0, left: 0, right: 0, height: 10, backgroundColor: COLORS.band },
+  bottomBand: { position: "absolute", bottom: 0, left: 0, right: 0, height: 10, backgroundColor: COLORS.band },
+  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 },
+  logo: { width: 72, height: 72, borderRadius: 8 },
+  titleBlock: { marginTop: 4, marginBottom: 10 },
+  title: { fontFamily: "Times-Italic", fontSize: 34, color: COLORS.pink, marginBottom: 4 },
+  subtitle: { fontSize: 10, color: COLORS.muted },
+  agency: { fontSize: 11, color: COLORS.pink, marginTop: 6 },
+  greeting: { fontFamily: "Times-Italic", fontSize: 14, color: COLORS.ink, marginTop: 12, marginBottom: 4 },
+  greetingSub: { fontSize: 10, color: COLORS.muted, marginBottom: 16 },
+  banner: {
+    backgroundColor: COLORS.banner,
+    borderRadius: 10,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 22,
+  },
+  bannerAmount: { fontSize: 22, fontFamily: "Times-Bold", color: COLORS.white },
+  bannerDue: { fontSize: 11, color: COLORS.white, marginTop: 2 },
+  bannerPeriodLabel: { fontSize: 9, color: "rgba(255,255,255,0.85)", textAlign: "right" },
+  bannerPeriod: { fontSize: 12, color: COLORS.white, marginTop: 3, textAlign: "right" },
+  parties: { flexDirection: "row", marginBottom: 22, gap: 24 },
+  partyCol: { flex: 1 },
+  partyTitle: { fontFamily: "Times-Italic", fontSize: 14, color: COLORS.pink, marginBottom: 8 },
+  partyLabel: { fontSize: 7, color: COLORS.pink, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 2 },
+  partyValue: { fontSize: 11, color: COLORS.ink, marginBottom: 8 },
+  tableHeader: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: COLORS.rowBorder, paddingBottom: 6, marginBottom: 4 },
+  th: { fontSize: 8, color: COLORS.muted, letterSpacing: 0.6, textTransform: "uppercase" },
+  colDesc: { width: "55%" },
+  colRate: { width: "22%", textAlign: "right" },
+  colAmt: { width: "23%", textAlign: "right" },
+  tableRow: { flexDirection: "row", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.rowBorder, alignItems: "flex-start" },
+  rowTitle: { fontSize: 11, color: COLORS.ink, marginBottom: 3 },
+  rowSub: { fontSize: 8, color: COLORS.muted, lineHeight: 1.35 },
+  rowRate: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  rowAmt: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  totalBlock: { alignItems: "flex-end", marginTop: 18, marginBottom: 20 },
+  totalLabel: { fontSize: 8, color: COLORS.muted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 },
+  totalValue: { fontFamily: "Times-Bold", fontSize: 22, color: COLORS.ink },
+  payBox: {
+    backgroundColor: COLORS.payBg,
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.payBorder,
+    borderRadius: 4,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 18,
+  },
+  payTitle: { fontSize: 10, color: COLORS.ink, marginBottom: 4 },
+  payBody: { fontSize: 9, color: COLORS.muted, lineHeight: 1.45 },
+  footer: { fontSize: 8, color: COLORS.muted, textAlign: "center", marginTop: 8 },
+  vaBreak: { marginTop: 28 },
 })
 
 export function PayrollDocument({
@@ -26,86 +92,129 @@ export function PayrollDocument({
   settings: Settings
   showPricing?: boolean
 }) {
+  const period = `${formatInvoiceDate(payroll.period_start)} – ${formatInvoiceDate(payroll.period_end)}`
+  const monthLabel = new Date(payroll.period_start + "T00:00:00").toLocaleDateString("en-US", {
+    month: "long",
+    year: "numeric",
+  })
+  const logoSrc =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/brand/sunnyhue-logo.png`
+      : "/brand/sunnyhue-logo.png"
+
   return (
     <Document>
-      <Page size="A4" style={styles.page}>
-        <View style={styles.header}>
-          <Text style={styles.company}>{settings.company_name} — VA Payroll Report</Text>
-          {payroll.vas.length === 1 && (
-            <Text style={{ fontSize: 18, color: "#3d2a32", marginTop: 8 }}>{payroll.vas[0].va_name}</Text>
-          )}
-          <Text style={{ color: "#8a6b76", marginTop: 4 }}>
-            Date range: {formatInvoiceDate(payroll.period_start)} – {formatInvoiceDate(payroll.period_end)}
-          </Text>
-          <Text style={{ color: "#8a6b76" }}>CONFIDENTIAL — Internal Use Only</Text>
-        </View>
+      {payroll.vas.map((va) => {
+        const total = showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`
+        const first = va.va_name.split(" ")[0]
+        const lines =
+          (va.by_client ?? []).length > 0
+            ? (va.by_client ?? []).map((c) => ({
+                title: `${c.label} · VA services`,
+                sub: period,
+                rate: showPricing ? formatCurrency(c.pay, va.currency) : "—",
+                amount: showPricing ? formatCurrency(c.pay, va.currency) : `${c.hours} hrs`,
+              }))
+            : va.entries.map((e) => ({
+                title: e.client_name || "Services",
+                sub: period,
+                rate: showPricing ? formatCurrency(e.rate, va.currency) : "—",
+                amount: showPricing ? formatCurrency(e.pay, va.currency) : `${e.hours} hrs`,
+              }))
 
-        {payroll.vas.map((va) => (
-          <View key={va.va_id} style={styles.vaSection} wrap={false}>
-            <Text style={styles.vaName}>
-              {va.va_name} ({va.currency}) —{" "}
-              {showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`} | {va.total_hours} hrs |{" "}
-              {va.entry_count} entries
+        return (
+          <Page key={va.va_id} size="A4" style={styles.page}>
+            <View style={styles.topBand} fixed />
+            <View style={styles.bottomBand} fixed />
+
+            <View style={styles.header}>
+              <Image src={logoSrc} style={styles.logo} />
+            </View>
+
+            <View style={styles.titleBlock}>
+              <Text style={styles.title}>Payroll Report</Text>
+              <Text style={styles.subtitle}>Bi-weekly payroll · Prepared for {va.va_name}</Text>
+              <Text style={styles.agency}>
+                {settings.company_name} · {monthLabel}
+              </Text>
+            </View>
+
+            <Text style={styles.greeting}>Hi {first}! Here’s your payroll report.</Text>
+            <Text style={styles.greetingSub}>
+              Thank you for your beautiful work this period — you make Sunny Hue shine. 💕
             </Text>
 
-            {(va.by_client ?? []).length > 0 && (
-              <View style={{ marginTop: 6, marginBottom: 4 }}>
-                <Text style={{ fontSize: 9, fontWeight: "bold", marginBottom: 2 }}>By client</Text>
-                {(va.by_client ?? []).map((c) => (
-                  <View key={c.label} style={styles.clientRow}>
-                    <Text style={{ width: "50%" }}>{c.label}</Text>
-                    <Text style={{ width: "25%", textAlign: "right" }}>{c.hours} hrs</Text>
-                    {showPricing && (
-                      <Text style={{ width: "25%", textAlign: "right" }}>{formatCurrency(c.pay, va.currency)}</Text>
-                    )}
-                  </View>
-                ))}
+            <View style={styles.banner}>
+              <View>
+                <Text style={styles.bannerAmount}>{total}</Text>
+                <Text style={styles.bannerDue}>earned this period</Text>
               </View>
-            )}
-
-            <View style={styles.tableHeader}>
-              <Text style={[styles.col, { width: "14%" }]}>Date</Text>
-              <Text style={[styles.col, { width: "18%" }]}>Client</Text>
-              <Text style={[styles.col, { width: showPricing ? "34%" : "58%" }]}>Description</Text>
-              <Text style={[styles.col, { width: "10%", textAlign: "right" }]}>Hours</Text>
-              {showPricing && (
-                <>
-                  <Text style={[styles.col, { width: "12%", textAlign: "right" }]}>Rate</Text>
-                  <Text style={[styles.col, { width: "12%", textAlign: "right" }]}>Pay</Text>
-                </>
-              )}
+              <View>
+                <Text style={styles.bannerPeriodLabel}>Service period</Text>
+                <Text style={styles.bannerPeriod}>{period}</Text>
+              </View>
             </View>
-            {va.entries.map((e) => (
-              <View key={e.id} style={styles.tableRow}>
-                <Text style={[styles.col, { width: "14%" }]}>{formatDate(e.work_date)}</Text>
-                <Text style={[styles.col, { width: "18%" }]}>{e.client_name}</Text>
-                <Text style={[styles.col, { width: showPricing ? "34%" : "58%" }]}>{e.description}</Text>
-                <Text style={[styles.col, { width: "10%", textAlign: "right" }]}>{e.hours}</Text>
-                {showPricing && (
-                  <>
-                    <Text style={[styles.col, { width: "12%", textAlign: "right" }]}>{formatCurrency(e.rate, va.currency)}</Text>
-                    <Text style={[styles.col, { width: "12%", textAlign: "right" }]}>{formatCurrency(e.pay, va.currency)}</Text>
-                  </>
-                )}
+
+            <View style={styles.parties}>
+              <View style={styles.partyCol}>
+                <Text style={styles.partyTitle}>Billed to</Text>
+                <Text style={styles.partyLabel}>Team member</Text>
+                <Text style={styles.partyValue}>{va.va_name}</Text>
               </View>
-            ))}
-            {showPricing && (
-              <View style={styles.subtotal}>
-                <Text>
-                  Subtotal {va.va_name}: {formatCurrency(va.total_pay, va.currency)} ({va.total_hours} hrs)
+              <View style={styles.partyCol}>
+                <Text style={styles.partyTitle}>Paid to</Text>
+                <Text style={styles.partyLabel}>Name</Text>
+                <Text style={styles.partyValue}>{settings.principal_name}</Text>
+                <Text style={styles.partyLabel}>Business</Text>
+                <Text style={styles.partyValue}>
+                  {settings.company_name}
+                  {settings.location ? `\n${settings.location}` : ""}
                 </Text>
               </View>
-            )}
-          </View>
-        ))}
+            </View>
 
-        {showPricing && (
-          <View style={styles.grandTotal}>
-            <Text>Total PHP Payout: {formatCurrency(payroll.total_php, "PHP")}</Text>
-            <Text style={{ marginTop: 4 }}>Total USD Payout: {formatCurrency(payroll.total_usd, "USD")}</Text>
-          </View>
-        )}
-      </Page>
+            <View style={styles.tableHeader}>
+              <Text style={[styles.th, styles.colDesc]}>Description</Text>
+              <Text style={[styles.th, styles.colRate]}>Rate</Text>
+              <Text style={[styles.th, styles.colAmt]}>Amount</Text>
+            </View>
+
+            {lines.map((line, i) => (
+              <View key={i} style={styles.tableRow} wrap={false}>
+                <View style={styles.colDesc}>
+                  <Text style={styles.rowTitle}>{line.title}</Text>
+                  <Text style={styles.rowSub}>{line.sub}</Text>
+                </View>
+                <Text style={[styles.rowRate, styles.colRate]}>{line.rate}</Text>
+                <Text style={[styles.rowAmt, styles.colAmt]}>{line.amount}</Text>
+              </View>
+            ))}
+
+            <View style={styles.totalBlock}>
+              <Text style={styles.totalLabel}>Total due</Text>
+              <Text style={styles.totalValue}>
+                {showPricing
+                  ? formatInvoiceTotal(va.total_pay).replace("USD", va.currency)
+                  : `${va.total_hours} hrs`}
+              </Text>
+            </View>
+
+            <View style={styles.payBox}>
+              <Text style={styles.payTitle}>Payment</Text>
+              <Text style={styles.payBody}>
+                {va.payment_label
+                  ? `Payout via ${va.payment_label}.`
+                  : "Your payroll for this period will be sent via your saved payment method."}{" "}
+                Questions? Message Jane anytime — we’re so grateful for you!
+              </Text>
+            </View>
+
+            <Text style={styles.footer}>
+              {settings.company_name} · Payroll · {va.va_name} · {period}
+            </Text>
+          </Page>
+        )
+      })}
     </Document>
   )
 }

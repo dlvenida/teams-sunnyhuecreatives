@@ -218,6 +218,18 @@ export function InvoicesPage() {
     mutationFn: (id: string) => apiFetch(`/invoices/${id}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["invoices"] }),
   })
+  const saveLine = useMutation({
+    mutationFn: ({ invoiceId, lineId, description }: { invoiceId: string; lineId: string; description: string }) =>
+      apiFetch<Invoice>(`/invoices/${invoiceId}/line-items/${lineId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ description }),
+      }),
+    onSuccess: (inv) => {
+      qc.invalidateQueries({ queryKey: ["invoices"] })
+      setDetail(inv)
+      setPreviewInvoice(inv)
+    },
+  })
 
   const buildPdf = async (inv: Invoice) => {
     if (!settings) return null
@@ -284,7 +296,7 @@ export function InvoicesPage() {
     <div className="space-y-5 animate-fade-in">
       <div>
         <h1 className="font-display text-base font-semibold">Invoices</h1>
-        <p className="mt-0.5 text-xs text-muted-foreground">Generate client invoices from approved VA time logs</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Generate client invoices anytime — independent of VA timesheet / payroll approval. Customize service descriptions before sending.</p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -603,12 +615,44 @@ export function InvoicesPage() {
               <div className="rounded-xl border p-3"><p className="text-muted-foreground">{showPricing ? "Amount" : "Payment"}</p><p className="mt-1 font-bold">{showPricing ? formatCurrency(detail.amount) : detail.payment_method}</p></div>
             </div>
             <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarClock className="h-3.5 w-3.5" /> Net {detail.payment_terms_days} days via {detail.payment_method}{detail.paid_at ? ` · Paid ${formatDate(detail.paid_at.slice(0, 10))}` : ""}</p>
-            <div className="mt-4 overflow-x-auto rounded-xl border">
+            <p className="mt-4 text-[11px] text-muted-foreground">
+              Customize each service description before sending the PDF to the client. Time logs stay internal and are not shown on the invoice.
+            </p>
+            <div className="mt-2 overflow-x-auto rounded-xl border">
               <table className="w-full text-xs">
-                <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-2.5">Date</th><th className="p-2.5">Description</th><th className="p-2.5">Hours</th>{showPricing && <th className="p-2.5">Amount</th>}</tr></thead>
-                <tbody>{(detail.line_items ?? []).map(li => (
-                  <tr key={li.id} className="border-b last:border-0"><td className="whitespace-nowrap p-2.5">{formatDate(li.line_date)}</td><td className="p-2.5">{li.description}</td><td className="p-2.5 font-semibold">{li.hours}</td>{showPricing && <td className="p-2.5">{formatCurrency(li.amount)}</td>}</tr>
-                ))}{(detail.line_items ?? []).length === 0 && <tr><td colSpan={showPricing ? 4 : 3} className="p-4 text-center text-muted-foreground">No line items stored for this invoice.</td></tr>}</tbody>
+                <thead>
+                  <tr className="border-b bg-muted/40 text-left text-muted-foreground">
+                    <th className="p-2.5">Service description (client-facing)</th>
+                    {showPricing && <th className="p-2.5 w-28">Amount</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(detail.line_items ?? []).map((li) => (
+                    <tr key={li.id} className="border-b last:border-0 align-top">
+                      <td className="p-2.5">
+                        <Textarea
+                          rows={2}
+                          className="min-h-[56px] text-xs"
+                          defaultValue={li.description}
+                          onBlur={(e) => {
+                            const next = e.target.value.trim()
+                            if (next && next !== li.description) {
+                              saveLine.mutate({ invoiceId: detail.id, lineId: li.id, description: next })
+                            }
+                          }}
+                        />
+                      </td>
+                      {showPricing && <td className="whitespace-nowrap p-2.5 font-semibold">{formatCurrency(li.amount)}</td>}
+                    </tr>
+                  ))}
+                  {(detail.line_items ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={showPricing ? 2 : 1} className="p-4 text-center text-muted-foreground">
+                        No line items stored for this invoice.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
               </table>
             </div>
             <div className="mt-4 flex flex-wrap justify-end gap-2">

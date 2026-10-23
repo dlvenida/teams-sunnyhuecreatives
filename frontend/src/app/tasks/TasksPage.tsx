@@ -192,7 +192,7 @@ export function TasksPage() {
           <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Task</th><th className="p-3">Client / Project</th><th className="p-3">Assignee</th><th className="p-3">Status</th><th className="p-3">Priority</th><th className="p-3">Deadline</th><th className="p-3">Repeat</th><th className="p-3">Hours</th><th className="p-3"></th></tr></thead>
           <tbody>{tasks.map(t => (
             <tr key={t.id} className="border-b hover:bg-muted/20">
-              <td className="p-3"><button className="font-medium hover:underline text-left" onClick={() => openEdit(t)}>{t.title}</button>{isOverdue(t) && <span className="ml-2 text-red-600 inline-flex items-center gap-1"><AlertTriangle className="h-3 w-3" />overdue</span>}</td>
+              <td className="p-3"><button className="font-medium hover:underline text-left" onClick={() => setCommentTask(t)} title="Open task detail">{t.title}</button>{isOverdue(t) && <span className="ml-2 text-red-600 inline-flex items-center gap-1"><AlertTriangle className="h-3 w-3" />overdue</span>}</td>
               <td className="p-3">{t.client_name}{t.project_name ? <span className="text-muted-foreground"> · {t.project_name}</span> : null}</td>
               <td className="p-3">{t.assignee_name || <span className="text-amber-600">Unassigned</span>}</td>
               <td className="p-3"><Select value={t.status} onChange={e => move.mutate({ id: t.id, status: e.target.value as TaskStatus })} className="h-7 w-auto text-[11px]">{TASK_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select></td>
@@ -335,8 +335,26 @@ export function TasksPage() {
 
 function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onComments: () => void; draggable?: boolean; onDragStart?: () => void }) {
   return (
-    <div draggable={draggable} onDragStart={onDragStart} className="monday-card rounded-xl border bg-card p-3 shadow-sm cursor-grab active:cursor-grabbing" style={{ borderLeft: `4px solid ${t.project_color || "var(--primary)"}` }}>
-      <button className="text-left w-full" onClick={onComments} title="Open Task View"><span className="text-xs font-semibold leading-snug hover:underline">{t.title}</span></button>
+    <div
+      role="button"
+      tabIndex={0}
+      draggable={draggable}
+      onDragStart={(e) => {
+        e.stopPropagation()
+        onDragStart?.()
+      }}
+      onClick={onComments}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault()
+          onComments()
+        }
+      }}
+      title="Open task — comments, files, reactions & mentions"
+      className="monday-card cursor-pointer rounded-xl border bg-card p-3 shadow-sm transition hover:border-primary/40 hover:shadow-md active:cursor-grabbing"
+      style={{ borderLeft: `4px solid ${t.project_color || "var(--primary)"}` }}
+    >
+      <span className="text-left w-full"><span className="text-xs font-semibold leading-snug">{t.title}</span></span>
       <div className="mt-2 flex flex-wrap gap-1.5">
         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", PRIORITY_META[t.priority].className)}>{PRIORITY_META[t.priority].label}</span>
         {t.recurrence_label && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700"><Repeat className="h-2.5 w-2.5" />{t.recurrence_label}</span>}
@@ -347,7 +365,7 @@ function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onCo
       <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
         <div>{t.client_name}{t.project_name ? ` · ${t.project_name}` : ""}</div>
         <div className="flex justify-between"><span>{t.assignee_name || "Unassigned"}</span><span>{t.due_date ? formatDate(t.due_date) : "No deadline"}</span></div>
-        <div className="flex justify-between"><span>{t.logged_hours}h logged{t.estimated_hours ? ` / ${t.estimated_hours}h est` : ""}</span><button className="underline" onClick={onComments}>Comments</button></div>
+        <div className="flex justify-between"><span>{t.logged_hours}h logged{t.estimated_hours ? ` / ${t.estimated_hours}h est` : ""}</span><span className="font-semibold text-primary underline">Open · Comments</span></div>
       </div>
       {t.estimated_hours && Number(t.estimated_hours) > 0 && <div className="mt-2 h-1.5 rounded-full bg-slate-100"><div className="h-1.5 rounded-full bg-primary" style={{ width: `${Math.min(100, (Number(t.logged_hours) / Number(t.estimated_hours)) * 100)}%` }} /></div>}
     </div>

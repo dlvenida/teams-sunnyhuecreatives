@@ -170,7 +170,9 @@ def notify_reaction(db: Session, *, scope: str, comment, emoji: str, reactor_nam
     the comment author, the parent-comment author (for replies), everyone who
     commented on the task/project, the task assignee and creator — i.e. all
     users involved in the project, its comments and the task."""
-    from app.models import Project, ProjectComment, Task, TaskComment
+    from app.config import settings as app_settings
+    from app.models import ProjectComment, Task, TaskComment, User
+    from app.services.email import branded_email, send_email
     from app.services.notifications import push, va_user_id
 
     recipient_ids: list = [comment.author_user_id]
@@ -193,7 +195,6 @@ def notify_reaction(db: Session, *, scope: str, comment, emoji: str, reactor_nam
             parent = next((r for r in rows if r.id == comment.parent_id), None)
             if parent:
                 recipient_ids.append(parent.author_user_id)
-        # Users involved in the project = everyone assigned to its tasks
         project_tasks = db.query(Task).filter(Task.project_id == comment.project_id).all()
         for t in project_tasks:
             recipient_ids.append(va_user_id(db, t.assignee_va_id))
@@ -208,6 +209,28 @@ def notify_reaction(db: Session, *, scope: str, comment, emoji: str, reactor_nam
         f"Reacted {emoji} to: “{excerpt}”" if excerpt else f"Reacted {emoji} to a comment",
         link, exclude_user_id=exclude_user_id,
     )
+
+    # Cute branded email for the comment author (not the reactor)
+    author_id = comment.author_user_id
+    if author_id and author_id != exclude_user_id:
+        user = db.query(User).filter(User.id == author_id, User.is_active.is_(True)).first()
+        if user and user.email:
+            first = (user.display_name or user.email.split("@")[0]).split(" ")[0]
+            html = branded_email(
+                f"Hey {first}! Someone reacted {emoji}",
+                f"{reactor_name} reacted on {scope_title}",
+                (
+                    f"<p>Hey <strong>{first}</strong>! 💕</p>"
+                    f"<p><strong>{reactor_name}</strong> left a {emoji} on your comment in "
+                    f"<em>{scope_title}</em>.</p>"
+                    f"<p style='background:#fff7fa;border-radius:12px;padding:12px 14px;border-left:3px solid #ec4899;'>"
+                    f"{excerpt or 'Your comment'}</p>"
+                    f"<p>Keep the love going — open the task to reply!</p>"
+                ),
+                "Open the task ✨",
+                f"{app_settings.app_url.rstrip('/')}{link}",
+            )
+            send_email(user.email, f"{emoji} {reactor_name} reacted on your comment", html, template_key="reaction")
 
 
 def sort_comments(items: list[dict], sort: str) -> list[dict]:
@@ -226,11 +249,51 @@ def sort_comments(items: list[dict], sort: str) -> list[dict]:
 
 
 def notify_mentions(db: Session, mentions, *, scope_label: str, title: str, body: str, link: str, exclude_user_id) -> None:
+    from app.config import settings as app_settings
+    from app.models import User
+    from app.services.email import branded_email, send_email
     from app.services.notifications import push
+
     ids = []
     for m in mentions or []:
         try:
             ids.append(uuid.UUID(str(m.get("user_id"))))
         except Exception:
             continue
-    push(db, ids, "comment", f"🔔 You were mentioned in {scope_label}: {title}", body[:200], link, exclude_user_id=exclude_user_id)
+    push(
+        db,
+        ids,
+        "comment",
+        f"🔔 You were mentioned in {scope_label}: {title}",
+        body[:200],
+        link,
+        exclude_user_id=exclude_user_id,
+    )
+
+    for uid in ids:
+        if exclude_user_id and uid == exclude_user_id:
+            continue
+        user = db.query(User).filter(User.id == uid, User.is_active.is_(True)).first()
+        if not user or not user.email:
+            continue
+        first = (user.display_name or user.email.split("@")[0]).split(" ")[0]
+        html = branded_email(
+            f"Hey {first}, someone tagged you! 💕",
+            f"You were mentioned in {title}",
+            (
+                f"<p>Hey <strong>{first}</strong>! 🌸</p>"
+                f"<p>Someone tagged/mentioned you in a task — how sweet!</p>"
+                f"<p style='font-size:13px;color:#9d174d;'><strong>{title}</strong> · {scope_label}</p>"
+                f"<p style='background:#fff7fa;border-radius:12px;padding:12px 14px;border-left:3px solid #ec4899;'>"
+                f"{(body or '')[:280]}</p>"
+                f"<p>Hop in when you can — your team would love to hear from you!</p>"
+            ),
+            "Open the task ✨",
+            f"{app_settings.app_url.rstrip('/')}{link}",
+        )
+        send_email(
+            user.email,
+            f"💕 Hey {first}, someone tagged you in a task!",
+            html,
+            template_key="mention",
+        )

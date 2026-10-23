@@ -263,12 +263,19 @@ export function LoginPage() {
             <div className="space-y-2">
               <Label>6-digit PIN</Label>
               <div key={errorTick} className={error ? "animate-[shake_0.3s_ease-in-out]" : undefined}>
-                <PinInput value={pin} onChange={setPin} onComplete={handlePin} autoFocus={!!username} disabled={loading} />
+                <PinInput
+                  value={pin}
+                  onChange={setPin}
+                  onComplete={handlePin}
+                  autoFocus={!!username}
+                  disabled={loading}
+                  showKeypad
+                />
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 {username
-                  ? <>Quick login for <span className="font-semibold text-foreground">@{username}</span> — you'll be signed in as soon as the PIN is complete.</>
-                  : "Enter your username above, then your PIN — you'll be signed in right away."}
+                  ? <>Quick login for <span className="font-semibold text-foreground">@{username}</span> — tap the keys or press <span className="font-semibold text-foreground">#</span> when all six are filled.</>
+                  : "Enter your username above, then your PIN with the hash keypad — # confirms when ready."}
               </p>
             </div>
           )}

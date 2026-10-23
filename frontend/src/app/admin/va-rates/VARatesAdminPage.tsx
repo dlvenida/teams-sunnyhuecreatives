@@ -62,7 +62,7 @@ export function VARatesAdminPage() {
     <div className="space-y-5 animate-fade-in">
       <div>
         <h1 className="text-2xl font-extrabold tracking-tight">VA Rates</h1>
-        <p className="text-sm text-muted-foreground">Approve VA submissions or set/override rates directly (auto-approved).</p>
+        <p className="text-sm text-muted-foreground">One approved rate per VA per client. Approving or overriding replaces any previous approved rate for that pair.</p>
       </div>
 
       <Card>

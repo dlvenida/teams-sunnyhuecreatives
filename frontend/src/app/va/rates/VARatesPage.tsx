@@ -48,7 +48,7 @@ export function VARatesPage() {
     <div className="space-y-5 animate-fade-in">
       <div>
         <h1 className="text-2xl font-extrabold tracking-tight">My Rates</h1>
-        <p className="text-sm text-muted-foreground">Set your pay per client. Pending until Jane approves. Your previously approved rate stays active meanwhile.</p>
+        <p className="text-sm text-muted-foreground">One rate per client. You cannot have two active rates for the same client — a new submission replaces any pending request, and when approved it becomes your only active rate for that client.</p>
       </div>
 
       <Card>
@@ -60,6 +60,12 @@ export function VARatesPage() {
               <option value="">Select…</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
+            {form.client_id && rates.some((r) => r.client_id === form.client_id && r.is_active_approved) && (
+              <p className="mt-1 text-[11px] text-amber-700">You already have an approved rate for this client. Submitting will request a replacement (only one active rate is allowed).</p>
+            )}
+            {form.client_id && rates.some((r) => r.client_id === form.client_id && r.status === "pending") && (
+              <p className="mt-1 text-[11px] text-muted-foreground">A pending request for this client will be replaced by this submission.</p>
+            )}
           </div>
           <div>
             <Label>Pay type</Label>

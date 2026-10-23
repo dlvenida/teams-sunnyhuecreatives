@@ -1,4 +1,4 @@
-import type { Cadence, TaskItem, TaskPriority, TaskStatus } from "@/lib/types"
+import type { Cadence, TaskItem, TaskPriority, TaskRecurrence, TaskStatus } from "@/lib/types"
 
 export const TASK_STATUSES: { id: TaskStatus; label: string; color: string; bg: string }[] = [
   { id: "todo", label: "To Do", color: "#64748b", bg: "#f1f5f9" },
@@ -14,6 +14,22 @@ export const PRIORITY_META: Record<TaskPriority, { label: string; className: str
   high: { label: "High", className: "bg-orange-100 text-orange-700" },
   urgent: { label: "Urgent", className: "bg-red-100 text-red-700" },
 }
+
+export const RECURRENCE_OPTIONS: { id: TaskRecurrence; label: string }[] = [
+  { id: "none", label: "Does not repeat" },
+  { id: "daily", label: "Daily" },
+  { id: "weekly", label: "Weekly" },
+  { id: "weekdays", label: "Every Monday–Friday" },
+  { id: "biweekly", label: "Every 2 weeks" },
+  { id: "monthly", label: "Monthly" },
+  { id: "annually", label: "Annually" },
+  { id: "custom", label: "Custom schedule" },
+]
+
+export const WEEKDAY_OPTIONS = [
+  { id: 0, label: "Mon" }, { id: 1, label: "Tue" }, { id: 2, label: "Wed" },
+  { id: 3, label: "Thu" }, { id: 4, label: "Fri" }, { id: 5, label: "Sat" }, { id: 6, label: "Sun" },
+]
 
 export function isOverdue(t: TaskItem) {
   if (!t.due_date || t.status === "done") return false

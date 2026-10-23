@@ -9,16 +9,56 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin
-from app.models import Client, CommentAttachment, CommentReaction, Project, SubClient, Task, TaskComment, TaskPriority, TaskStatus, UserRole, VA, WorkLog
+from app.models import Client, CommentAttachment, CommentReaction, Project, SubClient, Task, TaskComment, TaskPriority, TaskRecurrence, TaskStatus, UserRole, VA, WorkLog
 from app.schemas import LinkAttachmentCreate, ReactionToggle, TaskCommentCreate, TaskCommentResponse, TaskCommentUpdate, TaskCreate, TaskResponse, TaskUpdate
 from app.services import comments as comment_svc
 from app.services.notifications import notify_task_assigned, notify_task_comment, notify_task_updated, push
+from app.services.task_recurrence import recurrence_label, spawn_next_occurrence
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+CUSTOM_UNITS = {"day", "week", "month", "year"}
+
+
+def _normalize_recurrence(data: dict) -> None:
+    """Validate / clean recurrence fields in-place on a create/update payload dict."""
+    rec = data.get("recurrence")
+    if rec is None:
+        return
+    if isinstance(rec, str):
+        rec = TaskRecurrence(rec)
+        data["recurrence"] = rec
+    if rec == TaskRecurrence.none:
+        data["recurrence_interval"] = 1
+        data["recurrence_unit"] = None
+        data["recurrence_weekdays"] = None
+        data["recurrence_until"] = None
+        return
+    interval = data.get("recurrence_interval")
+    if interval is not None and interval < 1:
+        raise HTTPException(400, "Recurrence interval must be at least 1")
+    if rec == TaskRecurrence.custom:
+        unit = (data.get("recurrence_unit") or "day").lower()
+        if unit not in CUSTOM_UNITS:
+            raise HTTPException(400, "Custom recurrence unit must be day, week, month, or year")
+        data["recurrence_unit"] = unit
+        days = data.get("recurrence_weekdays")
+        if unit == "week" and days is not None:
+            cleaned = sorted({int(d) for d in days if 0 <= int(d) <= 6})
+            if not cleaned:
+                raise HTTPException(400, "Pick at least one weekday for a custom weekly schedule")
+            data["recurrence_weekdays"] = cleaned
+    else:
+        data["recurrence_unit"] = None
+        if rec != TaskRecurrence.weekdays:
+            data["recurrence_weekdays"] = None
+        else:
+            data["recurrence_weekdays"] = [0, 1, 2, 3, 4]
 
 
 def _serialize(db: Session, t: Task) -> TaskResponse:
     logged = db.query(func.coalesce(func.sum(WorkLog.hours), 0)).filter(WorkLog.task_id == t.id).scalar() or Decimal("0")
+    rec = t.recurrence or TaskRecurrence.none
     return TaskResponse(
         id=t.id, title=t.title, description=t.description, client_id=t.client_id,
         client_name=t.client.name if t.client else None, sub_client_id=t.sub_client_id,
@@ -27,7 +67,21 @@ def _serialize(db: Session, t: Task) -> TaskResponse:
         assignee_va_id=t.assignee_va_id, assignee_name=t.assignee.name if t.assignee else None,
         status=t.status, priority=t.priority, start_date=t.start_date, due_date=t.due_date,
         estimated_hours=t.estimated_hours, logged_hours=Decimal(str(logged)), position=t.position or 0,
-        tags=t.tags or [], checklist=t.checklist or [], completed_at=t.completed_at,
+        tags=t.tags or [], checklist=t.checklist or [],
+        recurrence=rec,
+        recurrence_interval=t.recurrence_interval or 1,
+        recurrence_unit=t.recurrence_unit,
+        recurrence_weekdays=t.recurrence_weekdays,
+        recurrence_until=t.recurrence_until,
+        recurrence_label=recurrence_label(
+            rec,
+            interval=t.recurrence_interval or 1,
+            unit=t.recurrence_unit,
+            weekdays=t.recurrence_weekdays,
+        ),
+        series_id=t.series_id,
+        parent_task_id=t.parent_task_id,
+        completed_at=t.completed_at,
         created_at=t.created_at, updated_at=t.updated_at,
     )
 
@@ -96,16 +150,28 @@ def task_stats(current: Annotated[CurrentUser, Depends(get_current_user)], db: A
 def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
     _validate_links(db, body.client_id, body.sub_client_id, body.project_id, body.assignee_va_id)
     if body.due_date and body.start_date and body.due_date < body.start_date:
-        raise HTTPException(400, "Due date cannot be before start date")
+        raise HTTPException(400, "Deadline cannot be before start date")
+    if body.recurrence_until and body.due_date and body.recurrence_until < body.due_date:
+        raise HTTPException(400, "Repeat until cannot be before the deadline")
+    payload = body.model_dump(exclude={"assignee_va_id"})
+    _normalize_recurrence(payload)
     assignee = body.assignee_va_id
     if current.role == UserRole.va:
         assignee = assignee or current.va_id
         if assignee != current.va_id:
             raise HTTPException(403, "VAs can only assign tasks to themselves")
     max_pos = db.query(func.coalesce(func.max(Task.position), 0)).filter(Task.status == body.status).scalar() or 0
-    t = Task(**body.model_dump(exclude={"assignee_va_id"}), assignee_va_id=assignee, created_by=current.user.id, position=int(max_pos) + 1)
-    if t.status == TaskStatus.done: t.completed_at = datetime.now(timezone.utc)
-    db.add(t); db.commit(); db.refresh(t)
+    t = Task(**payload, assignee_va_id=assignee, created_by=current.user.id, position=int(max_pos) + 1)
+    if t.status == TaskStatus.done:
+        t.completed_at = datetime.now(timezone.utc)
+    db.add(t)
+    db.flush()
+    if t.recurrence and t.recurrence != TaskRecurrence.none and not t.series_id:
+        t.series_id = t.id
+    if t.status == TaskStatus.done:
+        spawn_next_occurrence(db, t)
+    db.commit()
+    db.refresh(t)
     t = _base_query(db).filter(Task.id == t.id).first()
     if t.assignee_va_id:
         first_in_project = False
@@ -133,15 +199,26 @@ def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser,
     if current.role == UserRole.va and body.assignee_va_id and body.assignee_va_id != current.va_id:
         raise HTTPException(403, "VAs cannot reassign tasks")
     data = body.model_dump(exclude_unset=True)
+    _normalize_recurrence(data)
     _validate_links(db, data.get("client_id", t.client_id), data.get("sub_client_id", t.sub_client_id), data.get("project_id", t.project_id), data.get("assignee_va_id", t.assignee_va_id))
     old_status = t.status
     old_assignee = t.assignee_va_id
-    for k, v in data.items(): setattr(t, k, v)
+    for k, v in data.items():
+        setattr(t, k, v)
     if t.due_date and t.start_date and t.due_date < t.start_date:
-        raise HTTPException(400, "Due date cannot be before start date")
-    if t.status == TaskStatus.done and old_status != TaskStatus.done: t.completed_at = datetime.now(timezone.utc)
-    if t.status != TaskStatus.done: t.completed_at = None
-    db.commit(); db.refresh(t)
+        raise HTTPException(400, "Deadline cannot be before start date")
+    if t.recurrence_until and t.due_date and t.recurrence_until < t.due_date:
+        raise HTTPException(400, "Repeat until cannot be before the deadline")
+    if t.recurrence and t.recurrence != TaskRecurrence.none and not t.series_id:
+        t.series_id = t.id
+    just_completed = t.status == TaskStatus.done and old_status != TaskStatus.done
+    if just_completed:
+        t.completed_at = datetime.now(timezone.utc)
+        spawn_next_occurrence(db, t)
+    if t.status != TaskStatus.done:
+        t.completed_at = None
+    db.commit()
+    db.refresh(t)
     t = _base_query(db).filter(Task.id == t.id).first()
     actor = current.user.display_name or current.user.email
     if t.assignee_va_id and t.assignee_va_id != old_assignee:
@@ -151,9 +228,12 @@ def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser,
         notify_task_assigned(db, t, first_in_project=first_in_project)
     elif t.assignee_va_id and (t.status != old_status or "priority" in data or "due_date" in data):
         changes = []
-        if t.status != old_status: changes.append(f"Status moved to {t.status.value.replace('_', ' ')}")
-        if "priority" in data: changes.append(f"Priority set to {t.priority.value}")
-        if "due_date" in data: changes.append(f"Due date set to {t.due_date or 'none'}")
+        if t.status != old_status:
+            changes.append(f"Status moved to {t.status.value.replace('_', ' ')}")
+        if "priority" in data:
+            changes.append(f"Priority set to {t.priority.value}")
+        if "due_date" in data:
+            changes.append(f"Deadline set to {t.due_date or 'none'}")
         notify_task_updated(db, t, "; ".join(changes) or "Task details updated", actor)
     return _serialize(db, t)
 

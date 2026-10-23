@@ -273,6 +273,8 @@ export interface Project {
   created_at?: string | null
 }
 
+export type TaskRecurrence = "none" | "daily" | "weekly" | "weekdays" | "biweekly" | "monthly" | "annually" | "custom"
+
 export interface TaskItem {
   id: string
   title: string
@@ -295,6 +297,14 @@ export interface TaskItem {
   position: number
   tags?: string[] | null
   checklist?: { text: string; done: boolean }[] | null
+  recurrence?: TaskRecurrence
+  recurrence_interval?: number
+  recurrence_unit?: string | null
+  recurrence_weekdays?: number[] | null
+  recurrence_until?: string | null
+  recurrence_label?: string | null
+  series_id?: string | null
+  parent_task_id?: string | null
   completed_at?: string | null
   created_at?: string | null
   updated_at?: string | null

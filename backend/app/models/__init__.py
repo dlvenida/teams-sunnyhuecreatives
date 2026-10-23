@@ -89,6 +89,17 @@ class TaskStatus(str, enum.Enum):
     blocked = "blocked"
 
 
+class TaskRecurrence(str, enum.Enum):
+    none = "none"
+    daily = "daily"
+    weekly = "weekly"
+    weekdays = "weekdays"  # Mon–Fri
+    biweekly = "biweekly"
+    monthly = "monthly"
+    annually = "annually"
+    custom = "custom"
+
+
 class TaskPriority(str, enum.Enum):
     low = "low"
     medium = "medium"
@@ -230,6 +241,17 @@ class Task(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     checklist: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    recurrence: Mapped[TaskRecurrence] = mapped_column(
+        Enum(TaskRecurrence, name="task_recurrence"), default=TaskRecurrence.none
+    )
+    recurrence_interval: Mapped[int] = mapped_column(Integer, default=1)
+    recurrence_unit: Mapped[str | None] = mapped_column(String(16), nullable=True)  # day|week|month|year for custom
+    recurrence_weekdays: Mapped[list | None] = mapped_column(JSONB, nullable=True)  # 0=Mon .. 6=Sun
+    recurrence_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    series_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

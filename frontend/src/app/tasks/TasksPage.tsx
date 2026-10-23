@@ -1,21 +1,27 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, getAuthUser } from "@/lib/api"
-import type { Cadence, Client, Project, TaskItem, TaskPriority, TaskStatus, VA } from "@/lib/types"
+import type { Cadence, Client, Project, TaskItem, TaskPriority, TaskRecurrence, TaskStatus, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import { formatDate } from "@/lib/utils"
-import { TASK_STATUSES, PRIORITY_META, groupByPeriod, isDueToday, isOverdue } from "@/components/tasks/task-utils"
+import { TASK_STATUSES, PRIORITY_META, RECURRENCE_OPTIONS, WEEKDAY_OPTIONS, groupByPeriod, isDueToday, isOverdue } from "@/components/tasks/task-utils"
 import { CommentThread } from "@/components/comments/CommentThread"
 import { DetailAttachments } from "@/components/comments/DetailAttachments"
-import { AlertTriangle, CalendarDays, Columns3, List, MessageSquare, Pencil, Plus, Search, Timer, Trash2, X } from "lucide-react"
+import { AlertTriangle, CalendarDays, Columns3, List, MessageSquare, Pencil, Plus, Repeat, Search, Timer, Trash2, X } from "lucide-react"
 import { Link, useSearchParams } from "react-router-dom"
 
 type ViewMode = "board" | "list" | "timeline"
 
-const emptyForm = { title: "", description: "", client_id: "", sub_client_id: "", project_id: "", assignee_va_id: "", status: "todo" as TaskStatus, priority: "medium" as TaskPriority, start_date: "", due_date: "", estimated_hours: "", tags: "" }
+const emptyForm = {
+  title: "", description: "", client_id: "", sub_client_id: "", project_id: "", assignee_va_id: "",
+  status: "todo" as TaskStatus, priority: "medium" as TaskPriority, start_date: "", due_date: "",
+  estimated_hours: "", tags: "",
+  recurrence: "none" as TaskRecurrence, recurrence_interval: "1", recurrence_unit: "week",
+  recurrence_weekdays: [0, 1, 2, 3, 4] as number[], recurrence_until: "",
+}
 
 export function TasksPage() {
   const qc = useQueryClient()
@@ -59,8 +65,28 @@ export function TasksPage() {
 
   const save = useMutation({
     mutationFn: () => {
-      const body = { title: form.title, description: form.description || null, client_id: form.client_id, sub_client_id: form.sub_client_id || null, project_id: form.project_id || null, assignee_va_id: form.assignee_va_id || null, status: form.status, priority: form.priority, start_date: form.start_date || null, due_date: form.due_date || null, estimated_hours: form.estimated_hours || null, tags: form.tags ? form.tags.split(",").map(s => s.trim()).filter(Boolean) : [] }
-      return modal?.mode === "edit" && modal.task ? apiFetch(`/tasks/${modal.task.id}`, { method: "PATCH", body: JSON.stringify(body) }) : apiFetch("/tasks", { method: "POST", body: JSON.stringify(body) })
+      const body = {
+        title: form.title,
+        description: form.description || null,
+        client_id: form.client_id,
+        sub_client_id: form.sub_client_id || null,
+        project_id: form.project_id || null,
+        assignee_va_id: form.assignee_va_id || null,
+        status: form.status,
+        priority: form.priority,
+        start_date: form.start_date || null,
+        due_date: form.due_date || null,
+        estimated_hours: form.estimated_hours || null,
+        tags: form.tags ? form.tags.split(",").map(s => s.trim()).filter(Boolean) : [],
+        recurrence: form.recurrence,
+        recurrence_interval: form.recurrence === "custom" ? Math.max(1, parseInt(form.recurrence_interval, 10) || 1) : 1,
+        recurrence_unit: form.recurrence === "custom" ? form.recurrence_unit : null,
+        recurrence_weekdays: form.recurrence === "custom" && form.recurrence_unit === "week" ? form.recurrence_weekdays : null,
+        recurrence_until: form.recurrence !== "none" && form.recurrence_until ? form.recurrence_until : null,
+      }
+      return modal?.mode === "edit" && modal.task
+        ? apiFetch(`/tasks/${modal.task.id}`, { method: "PATCH", body: JSON.stringify(body) })
+        : apiFetch("/tasks", { method: "POST", body: JSON.stringify(body) })
     },
     onSuccess: () => { invalidate(); setModal(null); setError("") },
     onError: (e: Error) => setError(e.message),
@@ -68,7 +94,36 @@ export function TasksPage() {
   const move = useMutation({ mutationFn: ({ id, status }: { id: string; status: TaskStatus }) => apiFetch(`/tasks/${id}/move`, { method: "POST", body: JSON.stringify({ status }) }), onSuccess: invalidate, onError: (e: Error) => setError(e.message) })
   const remove = useMutation({ mutationFn: (id: string) => apiFetch(`/tasks/${id}`, { method: "DELETE" }), onSuccess: invalidate })
   const openCreate = (status: TaskStatus = "todo") => { setForm({ ...emptyForm, status, client_id: clientId || "", project_id: projectId || "" }); setModal({ mode: "create" }); setError("") }
-  const openEdit = (t: TaskItem) => { setForm({ title: t.title, description: t.description || "", client_id: t.client_id, sub_client_id: t.sub_client_id || "", project_id: t.project_id || "", assignee_va_id: t.assignee_va_id || "", status: t.status, priority: t.priority, start_date: t.start_date || "", due_date: t.due_date || "", estimated_hours: t.estimated_hours || "", tags: (t.tags || []).join(", ") }); setModal({ mode: "edit", task: t }); setError("") }
+  const openEdit = (t: TaskItem) => {
+    setForm({
+      title: t.title,
+      description: t.description || "",
+      client_id: t.client_id,
+      sub_client_id: t.sub_client_id || "",
+      project_id: t.project_id || "",
+      assignee_va_id: t.assignee_va_id || "",
+      status: t.status,
+      priority: t.priority,
+      start_date: t.start_date || "",
+      due_date: t.due_date || "",
+      estimated_hours: t.estimated_hours || "",
+      tags: (t.tags || []).join(", "),
+      recurrence: (t.recurrence || "none") as TaskRecurrence,
+      recurrence_interval: String(t.recurrence_interval || 1),
+      recurrence_unit: t.recurrence_unit || "week",
+      recurrence_weekdays: t.recurrence_weekdays?.length ? t.recurrence_weekdays : [0, 1, 2, 3, 4],
+      recurrence_until: t.recurrence_until || "",
+    })
+    setModal({ mode: "edit", task: t })
+    setError("")
+  }
+  const toggleWeekday = (day: number) => {
+    setForm((prev) => {
+      const has = prev.recurrence_weekdays.includes(day)
+      const next = has ? prev.recurrence_weekdays.filter((d) => d !== day) : [...prev.recurrence_weekdays, day].sort()
+      return { ...prev, recurrence_weekdays: next }
+    })
+  }
   const filteredProjects = projects.filter(p => !form.client_id || p.client_id === form.client_id)
 
   return (
@@ -134,7 +189,7 @@ export function TasksPage() {
         </div>
       ) : view === "list" ? (
         <Card><CardContent className="p-0 overflow-x-auto"><table className="w-full text-xs">
-          <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Task</th><th className="p-3">Client / Project</th><th className="p-3">Assignee</th><th className="p-3">Status</th><th className="p-3">Priority</th><th className="p-3">Due</th><th className="p-3">Hours</th><th className="p-3"></th></tr></thead>
+          <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Task</th><th className="p-3">Client / Project</th><th className="p-3">Assignee</th><th className="p-3">Status</th><th className="p-3">Priority</th><th className="p-3">Deadline</th><th className="p-3">Repeat</th><th className="p-3">Hours</th><th className="p-3"></th></tr></thead>
           <tbody>{tasks.map(t => (
             <tr key={t.id} className="border-b hover:bg-muted/20">
               <td className="p-3"><button className="font-medium hover:underline text-left" onClick={() => openEdit(t)}>{t.title}</button>{isOverdue(t) && <span className="ml-2 text-red-600 inline-flex items-center gap-1"><AlertTriangle className="h-3 w-3" />overdue</span>}</td>
@@ -143,10 +198,11 @@ export function TasksPage() {
               <td className="p-3"><Select value={t.status} onChange={e => move.mutate({ id: t.id, status: e.target.value as TaskStatus })} className="h-7 w-auto text-[11px]">{TASK_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select></td>
               <td className="p-3"><span className={cn("rounded-full px-2 py-0.5", PRIORITY_META[t.priority].className)}>{PRIORITY_META[t.priority].label}</span></td>
               <td className="p-3">{t.due_date ? formatDate(t.due_date) : "—"}</td>
+              <td className="p-3">{t.recurrence_label || "—"}</td>
               <td className="p-3">{t.logged_hours} / {t.estimated_hours || "—"}</td>
               <td className="p-3 whitespace-nowrap"><Button size="sm" variant="outline" onClick={() => setCommentTask(t)}>Comments</Button>{isAdmin && <Button size="sm" variant="ghost" onClick={() => { if (confirm("Delete this task?")) remove.mutate(t.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></Button>}</td>
             </tr>
-          ))}{tasks.length === 0 && <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">No tasks match. Create one to get started.</td></tr>}</tbody>
+          ))}{tasks.length === 0 && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">No tasks match. Create one to get started.</td></tr>}</tbody>
         </table></CardContent></Card>
       ) : (
         <div className="space-y-4">
@@ -175,12 +231,66 @@ export function TasksPage() {
                 <div><Label>Priority</Label><Select value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value as TaskPriority })}>{Object.entries(PRIORITY_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select></div>
                 <div><Label>Est. hours</Label><Input type="number" step="0.5" value={form.estimated_hours} onChange={e => setForm({ ...form, estimated_hours: e.target.value })} /></div>
                 <div><Label>Start date</Label><Input type="date" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} /></div>
-                <div><Label>Due date</Label><Input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} /></div>
+                <div><Label>Deadline</Label><Input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} /></div>
+              </div>
+              <div className="rounded-xl border bg-muted/20 p-3 space-y-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold"><Repeat className="h-3.5 w-3.5 text-primary" /> Repeating task</div>
+                <div><Label>Repeat</Label>
+                  <Select value={form.recurrence} onChange={e => setForm({ ...form, recurrence: e.target.value as TaskRecurrence })}>
+                    {RECURRENCE_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </Select>
+                </div>
+                {form.recurrence === "custom" && (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div><Label>Every</Label><Input type="number" min={1} max={365} value={form.recurrence_interval} onChange={e => setForm({ ...form, recurrence_interval: e.target.value })} /></div>
+                    <div><Label>Unit</Label>
+                      <Select value={form.recurrence_unit} onChange={e => setForm({ ...form, recurrence_unit: e.target.value })}>
+                        <option value="day">Day(s)</option>
+                        <option value="week">Week(s)</option>
+                        <option value="month">Month(s)</option>
+                        <option value="year">Year(s)</option>
+                      </Select>
+                    </div>
+                    {form.recurrence_unit === "week" && (
+                      <div className="sm:col-span-2">
+                        <Label>On days</Label>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {WEEKDAY_OPTIONS.map(d => (
+                            <button
+                              key={d.id}
+                              type="button"
+                              onClick={() => toggleWeekday(d.id)}
+                              className={cn(
+                                "rounded-full border px-2.5 py-1 text-[11px] font-semibold",
+                                form.recurrence_weekdays.includes(d.id) ? "border-primary bg-primary text-white" : "bg-card text-muted-foreground",
+                              )}
+                            >{d.label}</button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {form.recurrence !== "none" && (
+                  <div>
+                    <Label>Repeat until (optional)</Label>
+                    <Input type="date" value={form.recurrence_until} onChange={e => setForm({ ...form, recurrence_until: e.target.value })} />
+                    <p className="mt-1 text-[11px] text-muted-foreground">When marked Done, the next occurrence is created automatically with the next deadline.</p>
+                  </div>
+                )}
               </div>
               <div><Label>Tags (comma separated)</Label><Input value={form.tags} onChange={e => setForm({ ...form, tags: e.target.value })} placeholder="design, urgent-client" /></div>
               {error && <p className="text-xs text-red-600">{error}</p>}
               <div className="flex gap-2 pt-1">
-                <Button variant="gold" className="flex-1" disabled={!form.title || !form.client_id || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Saving…" : modal.mode === "edit" ? "Save changes" : "Create task"}</Button>
+                <Button
+                  variant="gold"
+                  className="flex-1"
+                  disabled={
+                    !form.title || !form.client_id || save.isPending
+                    || (form.recurrence === "custom" && form.recurrence_unit === "week" && form.recurrence_weekdays.length === 0)
+                  }
+                  onClick={() => save.mutate()}
+                >{save.isPending ? "Saving…" : modal.mode === "edit" ? "Save changes" : "Create task"}</Button>
                 {modal.mode === "edit" && isAdmin && <Button variant="outline" onClick={() => { if (confirm("Delete this task?")) { remove.mutate(modal.task!.id); setModal(null) } }}>Delete</Button>}
               </div>
               {user?.role === "va" && <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Timer className="h-3 w-3" /> Tip: clock in on this task from Time Clock to auto-log your hours.</p>}
@@ -203,11 +313,13 @@ export function TasksPage() {
               </span>
             </div>
             {commentTask.description && <p className="mb-2 whitespace-pre-wrap text-xs text-muted-foreground">{commentTask.description}</p>}
-            <div className="mb-4 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4">
+            <div className="mb-4 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-3">
               {[[ "Client / Project", `${commentTask.client_name || ""}${commentTask.project_name ? " · " + commentTask.project_name : ""}`],
                  ["Assignee", commentTask.assignee_name || "Unassigned"],
                  ["Status / Priority", `${commentTask.status.replace("_", " ")} · ${commentTask.priority}`],
-                 ["Due / Hours", `${commentTask.due_date ? formatDate(commentTask.due_date) : "No due date"} · ${commentTask.logged_hours}/${commentTask.estimated_hours || "—"}h`]
+                 ["Deadline", commentTask.due_date ? formatDate(commentTask.due_date) : "No deadline"],
+                 ["Repeat", commentTask.recurrence_label || "Does not repeat"],
+                 ["Hours", `${commentTask.logged_hours}/${commentTask.estimated_hours || "—"}h`]
               ].map(([k, v]) => <div key={k} className="rounded-lg border bg-muted/20 p-2"><div className="text-muted-foreground">{k}</div><div className="mt-0.5 font-medium capitalize">{v}</div></div>)}
             </div>
             <div className="mb-4"><DetailAttachments scope="task" scopeId={commentTask.id} /></div>
@@ -227,13 +339,14 @@ function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onCo
       <button className="text-left w-full" onClick={onComments} title="Open Task View"><span className="text-xs font-semibold leading-snug hover:underline">{t.title}</span></button>
       <div className="mt-2 flex flex-wrap gap-1.5">
         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", PRIORITY_META[t.priority].className)}>{PRIORITY_META[t.priority].label}</span>
+        {t.recurrence_label && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700"><Repeat className="h-2.5 w-2.5" />{t.recurrence_label}</span>}
         {isOverdue(t) && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700">Overdue</span>}
         {isDueToday(t) && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">Due today</span>}
         {(t.tags || []).map(tag => <span key={tag} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">#{tag}</span>)}
       </div>
       <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
         <div>{t.client_name}{t.project_name ? ` · ${t.project_name}` : ""}</div>
-        <div className="flex justify-between"><span>{t.assignee_name || "Unassigned"}</span><span>{t.due_date ? formatDate(t.due_date) : "No due date"}</span></div>
+        <div className="flex justify-between"><span>{t.assignee_name || "Unassigned"}</span><span>{t.due_date ? formatDate(t.due_date) : "No deadline"}</span></div>
         <div className="flex justify-between"><span>{t.logged_hours}h logged{t.estimated_hours ? ` / ${t.estimated_hours}h est` : ""}</span><button className="underline" onClick={onComments}>Comments</button></div>
       </div>
       {t.estimated_hours && Number(t.estimated_hours) > 0 && <div className="mt-2 h-1.5 rounded-full bg-slate-100"><div className="h-1.5 rounded-full bg-primary" style={{ width: `${Math.min(100, (Number(t.logged_hours) / Number(t.estimated_hours)) * 100)}%` }} /></div>}

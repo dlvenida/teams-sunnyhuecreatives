@@ -48,6 +48,25 @@ def _load(db: Session, rate_id: UUID) -> VARate:
     return rate
 
 
+def _supersede_approved(db: Session, va_id: UUID, client_id: UUID, *, except_id: UUID | None, reviewer_id: UUID | None) -> None:
+    """Ensure at most one approved rate per VA+client (required by unique index)."""
+    q = db.query(VARate).filter(
+        VARate.va_id == va_id,
+        VARate.client_id == client_id,
+        VARate.status == RateStatus.approved,
+    )
+    if except_id:
+        q = q.filter(VARate.id != except_id)
+    q.update(
+        {
+            "status": RateStatus.rejected,
+            "reviewed_at": datetime.now(timezone.utc),
+            "reviewed_by": reviewer_id,
+        },
+        synchronize_session=False,
+    )
+
+
 @router.get("/mine", response_model=list[VARateResponse])
 def my_rates(current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
     rows = (
@@ -81,7 +100,7 @@ def submit_rate(
 ):
     if not db.query(Client).filter(Client.id == body.client_id, Client.is_active == True).first():
         raise HTTPException(404, "Client not found")
-    # Reject older pending for same pair so only one pending sits in queue
+    # One active request/rate per client: replace any pending; approved stays until this one is approved
     db.query(VARate).filter(
         VARate.va_id == current.va_id,
         VARate.client_id == body.client_id,
@@ -142,12 +161,13 @@ def admin_set_rate(
         raise HTTPException(404, "VA not found")
     if not db.query(Client).filter(Client.id == body.client_id).first():
         raise HTTPException(404, "Client not found")
-    # Auto-approve admin override; supersedes prior approved by becoming newest approved
+    # Auto-approve admin override — only one approved rate per VA+client
     db.query(VARate).filter(
         VARate.va_id == body.va_id,
         VARate.client_id == body.client_id,
         VARate.status == RateStatus.pending,
     ).update({"status": RateStatus.rejected, "reviewed_at": datetime.now(timezone.utc), "reviewed_by": current.user.id})
+    _supersede_approved(db, body.va_id, body.client_id, except_id=None, reviewer_id=current.user.id)
     rate = VARate(
         va_id=body.va_id,
         client_id=body.client_id,
@@ -185,7 +205,8 @@ def approve_rate(
     if rate.status != RateStatus.pending:
         raise HTTPException(400, "Only pending rates can be approved")
     now = datetime.now(timezone.utc)
-    # Keep prior approved rows in history; newest reviewed_at wins in get_approved_rate
+    # One approved rate per VA+client — prior approved becomes history (rejected)
+    _supersede_approved(db, rate.va_id, rate.client_id, except_id=rate.id, reviewer_id=current.user.id)
     rate.status = RateStatus.approved
     rate.reviewed_at = now
     rate.reviewed_by = current.user.id

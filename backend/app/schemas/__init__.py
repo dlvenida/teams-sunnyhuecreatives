@@ -17,6 +17,7 @@ from app.models import (
     ProjectStatus,
     RateStatus,
     TaskPriority,
+    TaskRecurrence,
     TaskStatus,
     UserRole,
     WorkLogStatus,
@@ -313,6 +314,11 @@ class TaskCreate(BaseModel):
     estimated_hours: Decimal | None = None
     tags: list[str] | None = None
     checklist: list[dict[str, Any]] | None = None
+    recurrence: TaskRecurrence = TaskRecurrence.none
+    recurrence_interval: int = Field(default=1, ge=1, le=365)
+    recurrence_unit: str | None = None  # day|week|month|year when custom
+    recurrence_weekdays: list[int] | None = None  # 0=Mon .. 6=Sun
+    recurrence_until: date | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -330,6 +336,11 @@ class TaskUpdate(BaseModel):
     position: int | None = None
     tags: list[str] | None = None
     checklist: list[dict[str, Any]] | None = None
+    recurrence: TaskRecurrence | None = None
+    recurrence_interval: int | None = Field(default=None, ge=1, le=365)
+    recurrence_unit: str | None = None
+    recurrence_weekdays: list[int] | None = None
+    recurrence_until: date | None = None
 
 
 class TaskResponse(BaseModel):
@@ -354,6 +365,14 @@ class TaskResponse(BaseModel):
     position: int = 0
     tags: list[str] | None = None
     checklist: list[dict[str, Any]] | None = None
+    recurrence: TaskRecurrence = TaskRecurrence.none
+    recurrence_interval: int = 1
+    recurrence_unit: str | None = None
+    recurrence_weekdays: list[int] | None = None
+    recurrence_until: date | None = None
+    recurrence_label: str | None = None
+    series_id: UUID | None = None
+    parent_task_id: UUID | None = None
     completed_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

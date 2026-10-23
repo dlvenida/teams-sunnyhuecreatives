@@ -109,6 +109,8 @@ def calculate_payroll(
                 project_name=e.project.name if e.project else None,
                 task_title=e.task.title if e.task else None,
                 source=e.source or "manual", status=str(e.status.value if hasattr(e.status, "value") else e.status),
+                start_time=e.start_time.strftime("%H:%M") if e.start_time else None,
+                end_time=e.end_time.strftime("%H:%M") if e.end_time else None,
             ) for e in data["entries"]
         ]
         va_pending = [l for l in pending if l.va_id == va_id]

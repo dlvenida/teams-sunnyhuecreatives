@@ -54,7 +54,7 @@ export function LogsPage() {
   const [sort, setSort] = useState("newest")
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<WorkLog | null>(null)
-  const [editForm, setEditForm] = useState({ description_plain: "", hours: "", va_rate: "", status: "" })
+  const [editForm, setEditForm] = useState({ description_plain: "", hours: "", va_rate: "", status: "", start_time: "", end_time: "" })
   const [viewingAtts, setViewingAtts] = useState<string | null>(null)
 
   const params = new URLSearchParams()
@@ -116,7 +116,17 @@ export function LogsPage() {
   const selectedHours = logs.filter(l => selected.has(l.id)).reduce((s, l) => s + Number(l.hours || 0), 0)
   const toggle = (id: string) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
-  const openEdit = (log: WorkLog) => { setEditing(log); setEditForm({ description_plain: log.description_plain, hours: log.hours, va_rate: log.va_rate, status: log.status }) }
+  const openEdit = (log: WorkLog) => {
+    setEditing(log)
+    setEditForm({
+      description_plain: log.description_plain,
+      hours: log.hours,
+      va_rate: log.va_rate,
+      status: log.status,
+      start_time: log.start_time?.slice(0, 5) || "09:00",
+      end_time: log.end_time?.slice(0, 5) || "17:00",
+    })
+  }
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -241,15 +251,27 @@ export function LogsPage() {
             <div className="space-y-3">
               <div><Label>Description</Label><Input value={editForm.description_plain} onChange={(e) => setEditForm({ ...editForm, description_plain: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-3">
+                <div><Label>Start</Label><Input type="time" value={editForm.start_time} onChange={(e) => setEditForm({ ...editForm, start_time: e.target.value })} /></div>
+                <div><Label>End</Label><Input type="time" value={editForm.end_time} onChange={(e) => setEditForm({ ...editForm, end_time: e.target.value })} /></div>
                 {showPricing && <div><Label>VA Rate</Label><Input type="number" step="0.01" value={editForm.va_rate} onChange={(e) => setEditForm({ ...editForm, va_rate: e.target.value })} /></div>}
                 <div><Label>Status</Label><Select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}><option value="submitted">Submitted</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="invoiced">Invoiced</option></Select></div>
               </div>
+              <p className="text-[11px] text-muted-foreground">Hours and pay recalculate from start/end and rate.</p>
               {(editing.attachment_count ?? 0) > 0 && (
                 <Button variant="outline" size="sm" onClick={() => setViewingAtts(editing.id)}>View attachments ({editing.attachment_count})</Button>
               )}
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-                <Button variant="gold" onClick={() => update.mutate({ id: editing.id, body: { description_plain: editForm.description_plain, ...(showPricing ? { va_rate: parseFloat(editForm.va_rate) } : {}), status: editForm.status } })}>Save</Button>
+                <Button variant="gold" onClick={() => update.mutate({
+                  id: editing.id,
+                  body: {
+                    description_plain: editForm.description_plain,
+                    start_time: editForm.start_time,
+                    end_time: editForm.end_time,
+                    ...(showPricing ? { va_rate: parseFloat(editForm.va_rate) } : {}),
+                    status: editForm.status,
+                  },
+                })}>Save</Button>
               </div>
             </div>
           </div>

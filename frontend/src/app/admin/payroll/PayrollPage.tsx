@@ -26,13 +26,16 @@ const n = (v?: string | number | null) => Number(v ?? 0)
 export function PayrollPage() {
   const qc = useQueryClient()
   const { showPricing } = useDisplaySettings()
+  // Payroll PDFs always include rate/pay — this is an internal timesheet, not a client-facing report
+  const pdfShowPricing = true
   const chartColor = useCssVar("--chart", "#ec4899")
-  const [period, setPeriod] = useState("this_week")
+  const [period, setPeriod] = useState("custom")
   const [vaId, setVaId] = useState("")
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
   const [openVa, setOpenVa] = useState<string>("")
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
+  const [editing, setEditing] = useState<{ id: string; description: string; start_time: string; end_time: string; va_rate: string; va_name: string; work_date: string } | null>(null)
 
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => apiFetch<Settings>("/settings") })
@@ -54,6 +57,23 @@ export function PayrollPage() {
     onSuccess: invalidate,
   })
   const voidRun = useMutation({ mutationFn: (id: string) => apiFetch(`/payroll/runs/${id}`, { method: "DELETE" }), onSuccess: invalidate })
+  const saveEntry = useMutation({
+    mutationFn: () =>
+      apiFetch(`/work-logs/${editing!.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          description_plain: editing!.description,
+          start_time: editing!.start_time,
+          end_time: editing!.end_time,
+          va_rate: parseFloat(editing!.va_rate),
+        }),
+      }),
+    onSuccess: () => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ["work-logs"] })
+      setEditing(null)
+    },
+  })
 
   const teamDaily = useMemo(() => {
     const map = new Map<string, number>()
@@ -72,12 +92,12 @@ export function PayrollPage() {
   const exportPdf = async (onlyVa?: string) => {
     if (!payroll || !settings) return
     const doc = onlyVa ? { ...payroll, vas: payroll.vas.filter(v => v.va_id === onlyVa) } : payroll
-    setPdfBlob(await generatePdfBlob(<PayrollDocument payroll={doc} settings={settings} showPricing={showPricing} />))
+    setPdfBlob(await generatePdfBlob(<PayrollDocument payroll={doc} settings={settings} showPricing={pdfShowPricing} />))
   }
   const exportCsv = () => {
     if (!payroll) return
-    const rows = [["VA", "Date", "Client", "Project", "Task", "Description", "Source", "Status", "Hours", ...(showPricing ? ["Rate", "Pay", "Currency"] : [])],
-      ...payroll.vas.flatMap(va => va.entries.map(e => [va.va_name, e.work_date, e.client_name, e.project_name ?? "", e.task_title ?? "", `"${(e.description || "").replace(/"/g, '""')}"`, e.source ?? "", e.status ?? "", e.hours, ...(showPricing ? [e.rate, e.pay, va.currency] : [])]))]
+    const rows = [["VA", "Date", "Client", "Project", "Task", "Description", "Source", "Status", "Hours", "Rate", "Pay", "Currency"],
+      ...payroll.vas.flatMap(va => va.entries.map(e => [va.va_name, e.work_date, e.client_name, e.project_name ?? "", e.task_title ?? "", `"${(e.description || "").replace(/"/g, '""')}"`, e.source ?? "", e.status ?? "", e.hours, e.rate, e.pay, va.currency]))]
     const blob = new Blob([rows.map(r => r.join(",")).join("\n")], { type: "text/csv" })
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "va-payroll.csv"; a.click(); URL.revokeObjectURL(a.href)
   }
@@ -87,7 +107,7 @@ export function PayrollPage() {
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
           <h1 className="font-display text-xl font-bold">VA Payroll</h1>
-          <p className="text-xs text-muted-foreground">Approved hours become pay — computed automatically. Review, mark paid, and keep the history.</p>
+          <p className="text-xs text-muted-foreground">Pick a VA and custom date range (e.g. Oct 1–15) to generate a timesheet with rates and totals. Edit entries inline, then export PDF.</p>
         </div>
         {payroll && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">{formatDate(payroll.period_start)} – {formatDate(payroll.period_end)}</p>}
       </div>
@@ -188,7 +208,7 @@ export function PayrollPage() {
             <CardHeader className="pb-2"><CardTitle>{va.va_name} — Entries ({va.entry_count})</CardTitle></CardHeader>
             <CardContent className="overflow-x-auto p-0">
               <table className="w-full text-xs">
-                <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">Client / Project</th><th className="p-3">Description</th><th className="p-3">Source</th><th className="p-3">Hours</th>{showPricing && <><th className="p-3">Rate</th><th className="p-3">Pay</th></>}</tr></thead>
+                <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">Client / Project</th><th className="p-3">Description</th><th className="p-3">Source</th><th className="p-3">Hours</th>{showPricing && <><th className="p-3">Rate</th><th className="p-3">Pay</th></>}<th className="p-3 text-right">Edit</th></tr></thead>
                 <tbody>{va.entries.map(e => (
                   <tr key={e.id} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="whitespace-nowrap p-3">{formatDate(e.work_date)}</td>
@@ -197,8 +217,19 @@ export function PayrollPage() {
                     <td className="p-3"><span className={cn("rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", e.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{e.source === "clock" ? "Clock" : "Manual"}</span></td>
                     <td className="p-3 font-bold">{e.hours}</td>
                     {showPricing && <><td className="p-3">{formatCurrency(e.rate, va.currency)}</td><td className="p-3 font-semibold">{formatCurrency(e.pay, va.currency)}</td></>}
+                    <td className="p-3 text-right">
+                      <Button size="sm" variant="ghost" onClick={() => setEditing({
+                        id: e.id,
+                        description: e.description || "",
+                        start_time: e.start_time?.slice(0, 5) || "09:00",
+                        end_time: e.end_time?.slice(0, 5) || "17:00",
+                        va_rate: String(e.rate ?? ""),
+                        va_name: va.va_name,
+                        work_date: e.work_date,
+                      })}>Edit</Button>
+                    </td>
                   </tr>))}
-                  {va.entries.length === 0 && <tr><td colSpan={showPricing ? 7 : 5} className="p-5 text-center text-muted-foreground">No approved entries — only pending work so far (see the ⚠ chip on the card).</td></tr>}
+                  {va.entries.length === 0 && <tr><td colSpan={showPricing ? 8 : 6} className="p-5 text-center text-muted-foreground">No approved entries — only pending work so far (see the ⚠ chip on the card).</td></tr>}
                 </tbody>
               </table>
             </CardContent>
@@ -227,6 +258,28 @@ export function PayrollPage() {
           </CardContent>
         </Card>
       </>)}
+
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setEditing(null)}>
+          <div className="w-full max-w-md rounded-2xl bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h2 className="mb-1 text-sm font-semibold">Edit payroll entry</h2>
+            <p className="mb-3 text-[11px] text-muted-foreground">{editing.va_name} · {formatDate(editing.work_date)}</p>
+            <div className="space-y-3">
+              <div><Label>Description</Label><Input value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Start</Label><Input type="time" value={editing.start_time} onChange={(e) => setEditing({ ...editing, start_time: e.target.value })} /></div>
+                <div><Label>End</Label><Input type="time" value={editing.end_time} onChange={(e) => setEditing({ ...editing, end_time: e.target.value })} /></div>
+              </div>
+              <div><Label>VA Rate</Label><Input type="number" step="0.01" value={editing.va_rate} onChange={(e) => setEditing({ ...editing, va_rate: e.target.value })} /></div>
+              <p className="text-[11px] text-muted-foreground">Hours and pay recalculate from start/end and rate.</p>
+              <div className="flex gap-2">
+                <Button variant="gold" className="flex-1" disabled={saveEntry.isPending || !editing.description} onClick={() => saveEntry.mutate()}>Save</Button>
+                <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <PdfPreviewModal blob={pdfBlob} filename="va-payroll.pdf" onClose={() => setPdfBlob(null)} />
     </div>

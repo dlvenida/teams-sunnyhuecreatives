@@ -182,6 +182,8 @@ export interface PayrollVA {
     task_title?: string | null
     source?: string
     status?: string
+    start_time?: string | null
+    end_time?: string | null
   }[]
   pending_hours?: string
   pending_count?: number
@@ -212,7 +214,7 @@ export interface ReportLineItem {
   va_name?: string | null; sub_client_name?: string | null; project_name?: string | null; task_title?: string | null
   source?: string; start_time?: string | null; end_time?: string | null
 }
-export interface ReportBreakdown { label: string; hours: string; entries: number }
+export interface ReportBreakdown { label: string; hours: string; entries: number; amount?: string | null; rate?: string | null }
 export interface ReportResponse {
   client_name: string
   period_label: string

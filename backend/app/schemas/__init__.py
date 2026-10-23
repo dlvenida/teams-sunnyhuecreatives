@@ -838,6 +838,8 @@ class PayrollEntry(BaseModel):
     task_title: str | None = None
     source: str = "manual"
     status: str = "approved"
+    start_time: str | None = None
+    end_time: str | None = None
 
 
 class PayrollBreakdown(BaseModel):
@@ -913,9 +915,11 @@ class PayrollRunResponse(BaseModel):
 
 class ReportRequest(BaseModel):
     client_id: UUID
-    year: int
-    month: int
-    cutoff: int = Field(ge=15, le=30)
+    year: int | None = None
+    month: int | None = None
+    cutoff: int | None = Field(default=30, ge=15, le=30)
+    date_from: date | None = None
+    date_to: date | None = None
     show_rate: bool = False
 
 
@@ -938,6 +942,8 @@ class ReportBreakdown(BaseModel):
     label: str
     hours: Decimal
     entries: int = 0
+    amount: Decimal | None = None
+    rate: Decimal | None = None
 
 
 class ReportDay(BaseModel):

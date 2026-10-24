@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, getAuthUser } from "@/lib/api"
 import type { AppUser, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
@@ -32,6 +32,9 @@ const emptyForm: UserForm = { name: "", email: "", password: "", currency: "PHP"
 
 export function UsersPage() {
   const qc = useQueryClient()
+  const me = getAuthUser()
+  const isAdmin = me?.role === "admin"
+  const isAuditor = me?.role === "auditor"
   const [roleTab, setRoleTab] = useState<"va" | "auditor" | "admin">("va")
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active")
@@ -44,6 +47,7 @@ export function UsersPage() {
   const [error, setError] = useState("")
   const [viewingUserId, setViewingUserId] = useState("")
   const switchToUser = async (userId?: string | null, role?: string) => {
+    if (!isAdmin) { alert("Only administrators can switch into another user’s view."); return }
     if (!userId) { alert("This user has no login account to switch into."); return }
     if (role === "admin") { alert("Cannot switch into another administrator account."); return }
     try {
@@ -206,11 +210,17 @@ export function UsersPage() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-xl font-bold">Users</h1>
-          <p className="text-xs text-muted-foreground">Administrator runs the app · Auditor monitors VA activity (read-only) · Virtual Assistants do the work.</p>
+          <p className="text-xs text-muted-foreground">
+            {isAuditor
+              ? "View all team profiles — money, rates, and pay are hidden for auditors."
+              : "Administrator runs the app · Auditor monitors activity (no money) · Virtual Assistants do the work."}
+          </p>
         </div>
-        <Button variant="gold" size="sm" onClick={openCreate}>
-          <Plus className="h-3.5 w-3.5" /> New {roleTab === "va" ? "Virtual Assistant" : roleTab === "auditor" ? "Auditor" : "Administrator"}
-        </Button>
+        {isAdmin && (
+          <Button variant="gold" size="sm" onClick={openCreate}>
+            <Plus className="h-3.5 w-3.5" /> New {roleTab === "va" ? "Virtual Assistant" : roleTab === "auditor" ? "Auditor" : "Administrator"}
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -267,18 +277,18 @@ export function UsersPage() {
                 <td className="p-3"><Badge variant={u.is_active ? "success" : "default"}>{u.is_active ? "Active" : "Archived"}</Badge></td>
                 <td className="p-3"><div className="flex justify-end gap-1">
                   <Button variant="ghost" size="sm" title="View profile, clients, tasks, projects, timeline, logs & history" onClick={() => setViewingUserId(u.id)}><Eye className="h-3.5 w-3.5" /></Button>
-                  {u.role !== "admin" && u.is_active && <Button variant="ghost" size="sm" title="Switch to their view (see what they see)" onClick={() => void switchToUser(u.id, u.role)}><SwitchCamera className="h-3.5 w-3.5 text-primary" /></Button>}
-                  {u.is_active ? (
+                  {isAdmin && u.role !== "admin" && u.is_active && <Button variant="ghost" size="sm" title="Switch to their view (see what they see)" onClick={() => void switchToUser(u.id, u.role)}><SwitchCamera className="h-3.5 w-3.5 text-primary" /></Button>}
+                  {isAdmin && (u.is_active ? (
                     <Button variant="ghost" size="sm" title="Archive" onClick={() => toggleAppUser.mutate({ id: u.id, is_active: false })}><Archive className="h-3.5 w-3.5" /></Button>
                   ) : (
                     <Button variant="ghost" size="sm" title="Restore" onClick={() => toggleAppUser.mutate({ id: u.id, is_active: true })}><ArchiveRestore className="h-3.5 w-3.5" /></Button>
-                  )}
+                  ))}
                 </div></td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="border-t bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">{roleTab === "auditor" ? "Auditors can review tasks, projects, time logs, attachments, and team reports — with all money hidden. They can propose new clients for admin approval. They cannot see payroll, rates, invoices, or analytics." : "Administrators have full access to every page, including payroll, invoices, and settings."}</p>
+        <p className="border-t bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">{roleTab === "auditor" ? "Auditors see everything admins see except money: profiles, tasks, projects, logs, payroll hours, reports (hours only), analytics, and client VA roles — never rates, pay, invoices, or billing amounts." : "Administrators have full access to every page, including payroll money, invoices, rates, and settings."}</p>
       </div>
       ) : (
       <div className="overflow-x-auto rounded-xl border bg-card">
@@ -287,7 +297,7 @@ export function UsersPage() {
             <tr className="border-b bg-muted/40 text-left text-muted-foreground">
               <th className="p-3 font-medium">Name</th>
               <th className="p-3 font-medium">Email</th>
-              <th className="p-3 font-medium">Currency</th>
+              {isAdmin && <th className="p-3 font-medium">Currency</th>}
               <th className="p-3 font-medium">Status</th>
               <th className="p-3 font-medium text-right">Actions</th>
             </tr>
@@ -295,7 +305,7 @@ export function UsersPage() {
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan={5} className="p-6 text-center text-muted-foreground">
+                <td colSpan={isAdmin ? 5 : 4} className="p-6 text-center text-muted-foreground">
                   No users found
                 </td>
               </tr>
@@ -304,9 +314,11 @@ export function UsersPage() {
                 <tr key={u.id} className="border-b last:border-0 hover:bg-muted/30">
                   <td className="p-3 font-medium">{u.name}</td>
                   <td className="p-3 text-primary">{u.email}</td>
-                  <td className="p-3">
-                    <Badge variant={u.currency === "PHP" ? "php" : "usd"}>{u.currency}</Badge>
-                  </td>
+                  {isAdmin && (
+                    <td className="p-3">
+                      <Badge variant={u.currency === "PHP" ? "php" : "usd"}>{u.currency}</Badge>
+                    </td>
+                  )}
                   <td className="p-3">
                     <Badge variant={u.is_active ? "success" : "default"}>
                       {u.is_active ? "Active" : "Archived"}
@@ -317,13 +329,15 @@ export function UsersPage() {
                       <Button variant="ghost" size="sm" title="View profile, clients, tasks, projects, timeline, logs & history" onClick={() => u.user_id && setViewingUserId(u.user_id)}>
                         <Eye className="h-3.5 w-3.5" />
                       </Button>
-                      {u.is_active && <Button variant="ghost" size="sm" title="Switch to their view (see what they see)" onClick={() => void switchToUser(u.user_id, "va")}>
+                      {isAdmin && u.is_active && <Button variant="ghost" size="sm" title="Switch to their view (see what they see)" onClick={() => void switchToUser(u.user_id, "va")}>
                         <SwitchCamera className="h-3.5 w-3.5 text-primary" />
                       </Button>}
-                      <Button variant="ghost" size="sm" title="Edit profile" onClick={() => openEdit(u)}>
-                        <UserCircle className="h-3.5 w-3.5" />
-                      </Button>
-                      {u.is_active ? (
+                      {isAdmin && (
+                        <Button variant="ghost" size="sm" title="Edit profile" onClick={() => openEdit(u)}>
+                          <UserCircle className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                      {isAdmin && (u.is_active ? (
                         <Button variant="ghost" size="sm" title="Archive" onClick={() => archiveUser(u)}>
                           <Archive className="h-3.5 w-3.5" />
                         </Button>
@@ -331,15 +345,17 @@ export function UsersPage() {
                         <Button variant="ghost" size="sm" title="Restore" onClick={() => restoreUser(u)}>
                           <ArchiveRestore className="h-3.5 w-3.5" />
                         </Button>
+                      ))}
+                      {isAdmin && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          title="Delete & delegate"
+                          onClick={() => { setDelegateTarget(u); setDelegateTo(""); setError(""); setDelegateSummary("") }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                        </Button>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        title="Delete & delegate"
-                        onClick={() => { setDelegateTarget(u); setDelegateTo(""); setError(""); setDelegateSummary("") }}
-                      >
-                        <Trash2 className="h-3.5 w-3.5 text-red-600" />
-                      </Button>
                     </div>
                   </td>
                 </tr>

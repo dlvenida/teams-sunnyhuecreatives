@@ -19,6 +19,9 @@ export function ProjectsPage() {
   const [searchParams] = useSearchParams()
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
+  const isVA = user?.role === "va"
+  const canCreate = isAdmin || isVA
+  const canManage = isAdmin
   const deepProjectId = searchParams.get("project")
   const deepCommentId = searchParams.get("comment")
   const [search, setSearch] = useState("")
@@ -32,7 +35,9 @@ export function ProjectsPage() {
 
   const qs = `${clientId ? `&client_id=${clientId}` : ""}`
   const { data: projects = [], isLoading } = useQuery({ queryKey: ["projects", clientId], queryFn: () => apiFetch<Project[]>(`/projects?include_archived=true${qs}`) })
-  const { data: clients = [] } = useQuery({ queryKey: [isAdmin ? "clients" : "va-clients"], queryFn: () => apiFetch<Client[]>(isAdmin ? "/clients?active_only=true" : "/va/clients") })
+  const clientsKey = isVA ? "va-clients" : "clients"
+  const clientsPath = isVA ? "/va/clients" : "/clients?active_only=true"
+  const { data: clients = [] } = useQuery({ queryKey: [clientsKey], queryFn: () => apiFetch<Client[]>(clientsPath) })
 
   useEffect(() => {
     if (!deepProjectId || !projects.length) return
@@ -60,8 +65,15 @@ export function ProjectsPage() {
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h1 className="text-base font-semibold tracking-tight">Projects</h1><p className="text-xs text-muted-foreground">One board per client project · cadence sets the reporting rhythm</p></div>
-        {isAdmin && <Button variant="gold" size="sm" onClick={() => { setForm(empty); setModal({ mode: "create" }); setError("") }}><Plus className="h-3.5 w-3.5" /> New Project</Button>}
+        <div>
+          <h1 className="text-base font-semibold tracking-tight">Projects</h1>
+          <p className="text-xs text-muted-foreground">
+            {isVA
+              ? "Create and open client projects — they appear in Log Time and Time Clock dropdowns"
+              : "One board per client project · cadence sets the reporting rhythm"}
+          </p>
+        </div>
+        {canCreate && <Button variant="gold" size="sm" onClick={() => { setForm(empty); setModal({ mode: "create" }); setError("") }}><Plus className="h-3.5 w-3.5" /> New Project</Button>}
       </div>
       <div className="flex flex-wrap gap-2">
         <div className="relative min-w-[180px] flex-1"><Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" /><Input className="pl-8" placeholder="Search projects…" value={search} onChange={e => setSearch(e.target.value)} /></div>
@@ -87,15 +99,15 @@ export function ProjectsPage() {
                     <span className="text-[11px] text-muted-foreground">{p.total_hours}h logged</span>
                     <span className="flex items-center gap-2">
                       <button className="text-xs text-primary underline" onClick={() => setDetail(p)}>Tasks · Discussion · Meet-ups →</button>
-                      {isAdmin && <button title="Edit project" onClick={() => openEdit(p)}><Pencil className="h-3.5 w-3.5 text-muted-foreground" /></button>}
-                      {isAdmin && <button onClick={() => { if (confirm("Delete project? Tasks will be kept unlinked.")) remove.mutate(p.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></button>}
+                      {canManage && <button title="Edit project" onClick={() => openEdit(p)}><Pencil className="h-3.5 w-3.5 text-muted-foreground" /></button>}
+                      {canManage && <button onClick={() => { if (confirm("Delete project? Tasks will be kept unlinked.")) remove.mutate(p.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></button>}
                     </span>
                   </div>
                 </CardContent>
               </Card>
             )
           })}
-          {filtered.length === 0 && <p className="text-sm text-muted-foreground">No projects yet.{isAdmin ? " Create one to group tasks per client." : ""}</p>}
+          {filtered.length === 0 && <p className="text-sm text-muted-foreground">No projects yet.{canCreate ? " Create one to group tasks per client." : ""}</p>}
         </div>
       )}
       {detail && (
@@ -111,16 +123,18 @@ export function ProjectsPage() {
           <div className="w-full max-w-md rounded-xl bg-card p-5 shadow-xl" onClick={e => e.stopPropagation()}>
             <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold">{modal.mode === "edit" ? "Edit Project" : "New Project"}</h2><button onClick={() => setModal(null)}><X className="h-4 w-4" /></button></div>
             <div className="space-y-3">
-              <div><Label>Name *</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
+              <div><Label>Name *</Label><Input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Q4 Social Content" /></div>
               <div><Label>Client *</Label><Select value={form.client_id} onChange={e => setForm({ ...form, client_id: e.target.value })}><option value="">Select client</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
-              <div><Label>Description</Label><Textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><Label>Cadence</Label><Select value={form.cadence} onChange={e => setForm({ ...form, cadence: e.target.value as Cadence })}><option value="weekly">Weekly</option><option value="biweekly">Bi-weekly</option><option value="monthly">Monthly</option></Select></div>
-                <div><Label>Status</Label><Select value={form.status} onChange={e => setForm({ ...form, status: e.target.value as ProjectStatus })}><option value="active">Active</option><option value="on_hold">On Hold</option><option value="completed">Completed</option><option value="archived">Archived</option></Select></div>
-                <div><Label>Start</Label><Input type="date" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} /></div>
-                <div><Label>Due</Label><Input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} /></div>
-                <div><Label>Color</Label><Input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} className="h-9 p-1" /></div>
-              </div>
+              <div><Label>Short description</Label><Textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What this project covers…" /></div>
+              {canManage && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Cadence</Label><Select value={form.cadence} onChange={e => setForm({ ...form, cadence: e.target.value as Cadence })}><option value="weekly">Weekly</option><option value="biweekly">Bi-weekly</option><option value="monthly">Monthly</option></Select></div>
+                  <div><Label>Status</Label><Select value={form.status} onChange={e => setForm({ ...form, status: e.target.value as ProjectStatus })}><option value="active">Active</option><option value="on_hold">On Hold</option><option value="completed">Completed</option><option value="archived">Archived</option></Select></div>
+                  <div><Label>Start</Label><Input type="date" value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} /></div>
+                  <div><Label>Due</Label><Input type="date" value={form.due_date} onChange={e => setForm({ ...form, due_date: e.target.value })} /></div>
+                  <div><Label>Color</Label><Input type="color" value={form.color} onChange={e => setForm({ ...form, color: e.target.value })} className="h-9 p-1" /></div>
+                </div>
+              )}
               {error && <p className="text-xs text-red-600">{error}</p>}
               <Button variant="gold" className="w-full" disabled={!form.name || !form.client_id || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Saving…" : "Save project"}</Button>
             </div>

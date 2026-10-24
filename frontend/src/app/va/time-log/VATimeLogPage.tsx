@@ -3,12 +3,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
 import type { Client, Project, SubClient, TaskItem, WorkLog } from "@/lib/types"
 import { Button } from "@/components/ui/button"
-import { Input, Label, Select } from "@/components/ui/input"
+import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/ui/badge"
 import { RichTextEditor } from "@/components/lexical/RichTextEditor"
 import { calculateHoursFromTimes, formatCurrency } from "@/lib/utils"
-import { Paperclip, X } from "lucide-react"
+import { Paperclip, Plus, X } from "lucide-react"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
 
 interface ApprovedRate {
@@ -59,6 +59,9 @@ export function VATimeLogPage() {
   const [descriptionPlain, setDescriptionPlain] = useState("")
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [error, setError] = useState("")
+  const [projectModal, setProjectModal] = useState(false)
+  const [newProject, setNewProject] = useState({ name: "", description: "", client_id: "" })
+  const [projectError, setProjectError] = useState("")
 
   const { data: clients = [] } = useQuery({ queryKey: ["va-clients"], queryFn: () => apiFetch<Client[]>("/va/clients") })
   const { data: subClients = [] } = useQuery({
@@ -74,6 +77,26 @@ export function VATimeLogPage() {
   const { data: logs = [] } = useQuery({ queryKey: ["va-logs"], queryFn: () => apiFetch<WorkLog[]>("/va/work-logs") })
   const { data: myTasks = [] } = useQuery({ queryKey: ["tasks-mine"], queryFn: () => apiFetch<TaskItem[]>("/tasks?mine=true") })
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false") })
+
+  const createProject = useMutation({
+    mutationFn: () =>
+      apiFetch<Project>("/projects", {
+        method: "POST",
+        body: JSON.stringify({
+          name: newProject.name.trim(),
+          description: newProject.description.trim() || null,
+          client_id: newProject.client_id,
+        }),
+      }),
+    onSuccess: (p) => {
+      qc.invalidateQueries({ queryKey: ["projects"] })
+      setForm((f) => ({ ...f, client_id: p.client_id, project_id: p.id }))
+      setProjectModal(false)
+      setNewProject({ name: "", description: "", client_id: "" })
+      setProjectError("")
+    },
+    onError: (e: Error) => setProjectError(e.message),
+  })
 
   const hours = calculateHoursFromTimes(form.start_time, form.end_time)
   const rateAmt = approvedRate ? parseFloat(approvedRate.amount) : null
@@ -173,7 +196,31 @@ export function VATimeLogPage() {
             <div><Label>Date</Label><Input type="date" value={form.work_date} onChange={(e) => setForm({ ...form, work_date: e.target.value })} /></div>
             <div><Label>Client</Label><Select value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value, sub_client_id: "" })}><option value="">Select client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
             {subClients.length > 0 && <div><Label>Sub-client</Label><Select value={form.sub_client_id} onChange={(e) => setForm({ ...form, sub_client_id: e.target.value })}><option value="">None</option>{subClients.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>}
-            <div><Label>Project</Label><Select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })}><option value="">No project</option>{projects.filter((p) => !form.client_id || p.client_id === form.client_id).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></div>
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <Label>Project</Label>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
+                  onClick={() => {
+                    setProjectError("")
+                    setNewProject({ name: "", description: "", client_id: form.client_id || "" })
+                    setProjectModal(true)
+                  }}
+                >
+                  <Plus className="h-3 w-3" /> New project
+                </button>
+              </div>
+              <Select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })}>
+                <option value="">No project</option>
+                {projects.filter((p) => !form.client_id || p.client_id === form.client_id).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </Select>
+              {projects.filter((p) => !form.client_id || p.client_id === form.client_id).length === 0 && (
+                <p className="mt-1 text-[11px] text-muted-foreground">No projects yet — create one so you can select it when logging time.</p>
+              )}
+            </div>
             <div>
               <Label>My Task</Label>
               <Select
@@ -298,6 +345,47 @@ export function VATimeLogPage() {
       )}
 
       {viewingLog && <LogAttachmentsViewer logId={viewingLog.id} onClose={() => setViewingLog(null)} />}
+
+      {projectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setProjectModal(false)}>
+          <div className="w-full max-w-md rounded-2xl bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">New project</h2>
+              <button type="button" onClick={() => setProjectModal(false)} aria-label="Close"><X className="h-4 w-4" /></button>
+            </div>
+            <p className="mb-3 text-[11px] text-muted-foreground">Create a project for a client. It will appear in this Project dropdown so you can select it when logging time.</p>
+            <div className="space-y-3">
+              <div>
+                <Label>Client *</Label>
+                <Select value={newProject.client_id} onChange={(e) => setNewProject({ ...newProject, client_id: e.target.value })}>
+                  <option value="">Select client</option>
+                  {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </Select>
+              </div>
+              <div>
+                <Label>Project name *</Label>
+                <Input value={newProject.name} onChange={(e) => setNewProject({ ...newProject, name: e.target.value })} placeholder="e.g. Weekly newsletter" />
+              </div>
+              <div>
+                <Label>Short description</Label>
+                <Textarea value={newProject.description} onChange={(e) => setNewProject({ ...newProject, description: e.target.value })} placeholder="What this project covers…" />
+              </div>
+              {projectError && <p className="text-[11px] text-red-600">{projectError}</p>}
+              <div className="flex gap-2">
+                <Button
+                  variant="gold"
+                  className="flex-1"
+                  disabled={!newProject.name.trim() || !newProject.client_id || createProject.isPending}
+                  onClick={() => createProject.mutate()}
+                >
+                  {createProject.isPending ? "Creating…" : "Create project"}
+                </Button>
+                <Button variant="outline" onClick={() => setProjectModal(false)}>Cancel</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -69,17 +69,17 @@ export default function App() {
                 <Route path="/admin/tasks" element={<TasksPage />} />
                 <Route path="/admin/projects" element={<ProjectsPage />} />
                 <Route path="/admin/time-clock" element={<TimeClockPage />} />
+                <Route path="/admin/reports" element={<ReportsPage />} />
+                <Route path="/admin/analytics" element={<AnalyticsPage />} />
+                <Route path="/admin/users" element={<UsersPage />} />
                 <Route path="/admin/profile" element={<ProfilePage />} />
               </Route>
             </Route>
 
             <Route element={<ProtectedRoute role="admin" />}>
               <Route element={<AppShell />}>
-                <Route path="/admin/analytics" element={<AnalyticsPage />} />
                 <Route path="/admin/va-rates" element={<VARatesAdminPage />} />
-                <Route path="/admin/reports" element={<ReportsPage />} />
                 <Route path="/admin/invoices" element={<InvoicesPage />} />
-                <Route path="/admin/users" element={<UsersPage />} />
                 <Route path="/admin/settings" element={<SettingsPage />} />
                 <Route path="/admin/booking" element={<BookingPage />} />
               </Route>

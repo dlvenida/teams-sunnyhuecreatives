@@ -165,3 +165,49 @@ def send_va_submission_notification(va_name: str, client_name: str, hours: str, 
         "Review in All Logs", f"{settings.app_url}/admin/logs",
     )
     return send_email(_resend_config()[2], f"New submission from {va_name} — {client_name}", html_body, template_key="log_submitted")
+
+
+def send_timesheet_submitted_notification(
+    va_name: str,
+    period_start: str,
+    period_end: str,
+    hours: str,
+    entry_count: int,
+) -> bool:
+    """Email admins when a VA officially submits a timesheet for payroll review."""
+    from app.models import User, UserRole
+    from app.database import SessionLocal
+
+    html_body = branded_email(
+        f"Timesheet waiting for review — {va_name}",
+        f"{va_name} submitted {hours} hrs for {period_start} – {period_end}",
+        (
+            f"<p><strong>{va_name}</strong> submitted their timesheet and it’s waiting for your approval.</p>"
+            + detail_rows([
+                ("VA", va_name),
+                ("Period", f"{period_start} – {period_end}"),
+                ("Hours", hours),
+                ("Entries", str(entry_count)),
+            ])
+            + "<p>Open VA Payroll → Timesheet Review to approve before generating the payroll PDF.</p>"
+        ),
+        "Review timesheet",
+        f"{settings.app_url}/admin/payroll",
+    )
+    subject = f"📋 Timesheet submitted by {va_name} — awaiting approval"
+    # Prefer notifying every active admin; fall back to Resend “from/to” inbox.
+    sent_any = False
+    try:
+        db = SessionLocal()
+        try:
+            admins = db.query(User).filter(User.role == UserRole.admin, User.is_active.is_(True)).all()
+            for admin in admins:
+                if admin.email and send_email(admin.email, subject, html_body, template_key="timesheet_submitted"):
+                    sent_any = True
+        finally:
+            db.close()
+    except Exception:
+        pass
+    if not sent_any:
+        return send_email(_resend_config()[2], subject, html_body, template_key="timesheet_submitted")
+    return True

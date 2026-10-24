@@ -50,24 +50,46 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
     return apiFetch<CommentAttachment>(`${base}/comments/attachments${qs ? `?${qs}` : ""}`, { method: "POST", body: fd })
   }
 
+  const [postError, setPostError] = useState("")
   const post = useMutation({
     mutationFn: async () => {
+      setPostError("")
+      // Treat unfinished guide previews as plain images so Post always works.
+      const ready = staged.map(s => ({ ...s, mode: s.mode || ("plain" as const) }))
       const used = mentions.filter(m => body.includes("@" + m.name))
       if (editing) {
-        // Attach any previewed/drawn images straight onto the comment being edited.
-        for (const s of staged) await uploadOne(s.blob, s.name, { comment_id: editing.id, ...(s.annotated ? { is_annotation: "true" } : {}) })
-        return apiFetch(`${base}/comments/${editing.id}`, { method: "PATCH", body: JSON.stringify({ body: body.trim() || "📎 Image", mentions: used }) })
+        for (const s of ready) {
+          await uploadOne(s.blob, s.name, {
+            comment_id: editing.id,
+            ...(s.annotated ? { is_annotation: "true" } : {}),
+          })
+        }
+        return apiFetch(`${base}/comments/${editing.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ body: body.trim() || "📎 Attachment", mentions: used }),
+        })
       }
-      // Only NOW — on Post — are the previewed images actually attached/uploaded (→ AVIF → bucket).
       const ids: string[] = []
-      for (const s of staged) { const att = await uploadOne(s.blob, s.name, s.annotated ? { is_annotation: "true" } : {}); ids.push(att.id) }
-      return apiFetch(`${base}/comments`, { method: "POST", body: JSON.stringify({ body: body.trim() || "📎 Image", parent_id: replyTo?.id || null, mentions: used, attachment_ids: ids }) })
+      for (const s of ready) {
+        const att = await uploadOne(s.blob, s.name, s.annotated ? { is_annotation: "true" } : {})
+        ids.push(att.id)
+      }
+      return apiFetch(`${base}/comments`, {
+        method: "POST",
+        body: JSON.stringify({
+          body: body.trim() || "📎 Attachment",
+          parent_id: replyTo?.id || null,
+          mentions: used,
+          attachment_ids: ids,
+        }),
+      })
     },
     onSuccess: () => {
-      setBody(""); setMentions([])
+      setBody(""); setMentions([]); setPostError("")
       staged.forEach(s => URL.revokeObjectURL(s.preview)); setStaged([])
-      setReplyTo(null); setEditing(null); invalidate()
+      setReplyTo(null); setEditing(null); setAnnotateLocal(null); invalidate()
     },
+    onError: (err: Error) => setPostError(err.message || "Could not post comment. Please try again."),
   })
   const react = useMutation({ mutationFn: ({ id, emoji }: { id: string; emoji: string }) => apiFetch(`${base}/comments/${id}/reactions`, { method: "POST", body: JSON.stringify({ emoji }) }), onSuccess: invalidate })
   const pin = useMutation({ mutationFn: (id: string) => apiFetch(`${base}/comments/${id}/pin`, { method: "POST" }), onSuccess: invalidate })
@@ -163,16 +185,31 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
 
             {c.attachments.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2">
-                {c.attachments.map(a => (
-                  <figure key={a.id} className="w-36">
-                    <AuthImage path={a.url} alt={a.original_name} className="h-24 w-36 cursor-zoom-in rounded-lg border object-cover" onClick={() => setAnnotate({ att: a, commentId: c.id })} />
-                    <figcaption className="mt-1 text-[9px] leading-tight text-muted-foreground">
-                      {a.is_annotation ? "✏️ Annotated · " : ""}{a.width}×{a.height} · {a.format.toUpperCase()} {formatBytes(a.size_bytes)}
-                      {a.original_size !== a.size_bytes && <> (was {formatBytes(a.original_size)})</>}
-                      <button className="ml-1 font-medium text-red-600 underline" onClick={() => setAnnotate({ att: a, commentId: c.id })}>✏️ Draw on it (red pen · box · text)</button>
-                    </figcaption>
-                  </figure>
-                ))}
+                {c.attachments.map(a => {
+                  const isImg = a.kind === "image" || !!(a.width && a.height)
+                  return (
+                    <figure key={a.id} className="w-36">
+                      {isImg ? (
+                        <AuthImage path={a.url} alt={a.original_name} className="h-24 w-36 cursor-zoom-in rounded-lg border object-cover" onClick={() => setAnnotate({ att: a, commentId: c.id })} />
+                      ) : (
+                        <a href={a.url} target="_blank" rel="noreferrer" className="flex h-24 w-36 items-center justify-center rounded-lg border bg-muted/40 px-2 text-center text-[10px] font-medium text-primary underline">
+                          {a.original_name || "Open file"}
+                        </a>
+                      )}
+                      <figcaption className="mt-1 text-[9px] leading-tight text-muted-foreground">
+                        {a.is_annotation ? "✏️ Annotated · " : ""}
+                        {a.width && a.height ? `${a.width}×${a.height} · ` : ""}
+                        {(a.format || "file").toUpperCase()} {formatBytes(a.size_bytes)}
+                        {a.original_size !== a.size_bytes && <> (was {formatBytes(a.original_size)})</>}
+                        {isImg && (
+                          <button className="ml-1 font-medium text-red-600 underline" onClick={() => setAnnotate({ att: a, commentId: c.id })}>
+                            ✏️ Draw on it
+                          </button>
+                        )}
+                      </figcaption>
+                    </figure>
+                  )
+                })}
               </div>
             )}
 
@@ -228,7 +265,7 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
         <div className="relative">
           <Textarea ref={taRef} value={body} onChange={e => onType(e.target.value)} rows={3}
             placeholder={`Comment… type @ to tag a teammate, e.g. @${team[0]?.name || "Name"}`}
-            onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && body.trim()) post.mutate() }} />
+            onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && (body.trim() || staged.length)) post.mutate() }} />
           {mentionMatches.length > 0 && (
             <div className="absolute bottom-full left-0 z-30 mb-1 w-64 overflow-hidden rounded-lg border bg-card shadow-xl">
               {mentionMatches.map(m => (
@@ -273,17 +310,34 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
           </div>
         )}
         {uploadNote && <p className="mt-1 text-[10px] text-amber-600">{uploadNote}</p>}
+        {postError && <p className="mt-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1.5 text-[11px] text-red-700">{postError}</p>}
 
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          <input ref={fileRef} type="file" multiple hidden
+          <input ref={fileRef} type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" hidden
             onChange={e => { if (e.target.files) stageFiles(e.target.files, nextWithGuide.current).catch(err => setUploadNote(err.message)); nextWithGuide.current = false; e.target.value = "" }} />
-          <Button size="sm" variant="outline" className="whitespace-nowrap" onClick={() => { nextWithGuide.current = false; fileRef.current?.click() }}><ImagePlus className="h-3.5 w-3.5" /> Attach file</Button>
-          <Button size="sm" variant="outline" className="whitespace-nowrap border-red-200 text-red-600 hover:bg-red-50" onClick={() => { nextWithGuide.current = true; fileRef.current?.click() }}><Pencil className="h-3.5 w-3.5" /> Attach image with guide</Button>
-          <Button variant="gold" size="sm" className="ml-auto" disabled={(!body.trim() && staged.length === 0) || post.isPending} onClick={() => post.mutate()}>
-            {post.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />} {post.isPending && staged.length ? "Attaching image…" : editing ? "Save edit" : replyTo ? "Reply" : staged.length ? `Post comment + attach ${staged.length} image${staged.length > 1 ? "s" : ""}` : "Post comment"}
+          <Button type="button" size="sm" variant="outline" className="whitespace-nowrap" onClick={() => { nextWithGuide.current = false; fileRef.current?.click() }}><ImagePlus className="h-3.5 w-3.5" /> Attach file</Button>
+          <Button type="button" size="sm" variant="outline" className="whitespace-nowrap border-red-200 text-red-600 hover:bg-red-50" onClick={() => { nextWithGuide.current = true; fileRef.current?.click() }}><Pencil className="h-3.5 w-3.5" /> Attach image with guide</Button>
+          <Button
+            type="button"
+            variant="gold"
+            size="sm"
+            className="ml-auto"
+            disabled={(!body.trim() && staged.length === 0) || post.isPending}
+            onClick={() => post.mutate()}
+          >
+            {post.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+            {post.isPending && staged.length
+              ? "Uploading & posting…"
+              : editing
+                ? "Save edit"
+                : replyTo
+                  ? "Reply"
+                  : staged.length
+                    ? `Post comment + attach ${staged.length}`
+                    : "Post comment"}
           </Button>
         </div>
-        <p className="mt-1 text-[10px] text-muted-foreground">Ctrl/⌘ + Enter to post · Mentioned teammates and the {scope === "task" ? "task assignee" : "project team"} get notified.</p>
+        <p className="mt-1 text-[10px] text-muted-foreground">Ctrl/⌘ + Enter to post · Attachments upload when you post · @mentions still notify even with files.</p>
       </div>
 
       {annotate && annotateUrl && (
@@ -291,8 +345,16 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
           onClose={() => setAnnotate(null)} onSave={b => saveAnnotation.mutate(b)} />
       )}
       {localTarget && (
-        <ImageAnnotator imageUrl={localTarget.preview} title={`${localTarget.name} (preview — not attached yet)`}
-          onClose={() => setAnnotateLocal(null)} onSave={saveLocalAnnotation} />
+        <ImageAnnotator
+          imageUrl={localTarget.preview}
+          title={`${localTarget.name} (preview — not attached yet)`}
+          onClose={() => {
+            // Closing without drawing still lets the image post as a plain attachment.
+            setStaged(s => s.map(x => (x.key === localTarget.key && !x.mode ? { ...x, mode: "plain" as const } : x)))
+            setAnnotateLocal(null)
+          }}
+          onSave={saveLocalAnnotation}
+        />
       )}
     </div>
   )

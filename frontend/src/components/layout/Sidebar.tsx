@@ -6,7 +6,7 @@ import type { UserProfile } from "@/lib/profile"
 import { cn } from "@/lib/utils"
 import type { NavItem } from "@/lib/navigation"
 import { Button } from "@/components/ui/button"
-import { ChevronLeft, ChevronRight, ChevronsUpDown, LogOut, Sparkles, X } from "lucide-react"
+import { ChevronsUpDown, LogOut, Sparkles, X } from "lucide-react"
 
 function getInitials(name?: string) {
   if (!name) return "?"
@@ -15,10 +15,14 @@ function getInitials(name?: string) {
 
 export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem[]; mobileOpen?: boolean; onClose?: () => void }) {
   const user = getAuthUser()
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("sidebar-collapsed") === "1")
   const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const { data: profile } = useQuery({ queryKey: ["profile"], queryFn: () => apiFetch<UserProfile>("/profile/me"), staleTime: 60_000 })
   const profilePath = user?.role === "va" ? "/va/profile" : "/admin/profile"
+
+  useEffect(() => {
+    // Always show icon + text labels — never collapse to icon-only.
+    localStorage.removeItem("sidebar-collapsed")
+  }, [])
 
   useEffect(() => {
     if (profile && user && profile.display_name && profile.display_name !== user.name) {
@@ -37,7 +41,6 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
 
   const displayName = profile?.display_name || user?.name || "User"
   const subLine = profile?.job_title || profile?.email || (user?.role === "admin" ? "Admin" : "Virtual Assistant")
-  const toggle = () => { const v = !collapsed; setCollapsed(v); localStorage.setItem("sidebar-collapsed", v ? "1" : "0") }
 
   const sections: [string, NavItem[]][] = []
   for (const item of items) {
@@ -47,36 +50,38 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
   }
 
   const content = (
-    <div className={cn("flex h-full flex-col bg-card", collapsed && !mobileOpen ? "w-[68px]" : "w-60")}>
+    <div className="flex h-full w-60 flex-col bg-card">
       <div className="flex items-center gap-2.5 px-4 py-4">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-lg" style={{ boxShadow: "0 8px 20px -6px var(--primary)" }}>
           <Sparkles className="h-4.5 w-4.5" />
         </div>
-        {(!collapsed || mobileOpen) && (
-          <div className="min-w-0 flex-1">
-            <p className="gradient-text truncate text-[15px] font-extrabold tracking-tight">Teams.SHC</p>
-            <p className="text-[10px] capitalize text-muted-foreground">{user?.role === "admin" ? "Admin workspace" : user?.role === "auditor" ? "Auditor workspace" : "VA workspace"}</p>
-          </div>
-        )}
-        {mobileOpen ? <button className="lg:hidden" onClick={onClose} aria-label="Close menu"><X className="h-5 w-5" /></button> : (
-          <button className="hidden lg:block text-muted-foreground hover:text-foreground" onClick={toggle} aria-label="Collapse sidebar">{collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}</button>
-        )}
+        <div className="min-w-0 flex-1">
+          <p className="gradient-text truncate text-[15px] font-extrabold tracking-tight">Teams.SHC</p>
+          <p className="text-[10px] capitalize text-muted-foreground">{user?.role === "admin" ? "Admin workspace" : user?.role === "auditor" ? "Auditor workspace" : "VA workspace"}</p>
+        </div>
+        {mobileOpen && <button className="lg:hidden" onClick={onClose} aria-label="Close menu"><X className="h-5 w-5" /></button>}
       </div>
 
       <nav className="flex-1 space-y-4 overflow-y-auto px-2.5 pb-3">
         {sections.map(([section, navItems]) => (
           <div key={section}>
-            {(!collapsed || mobileOpen) && <p className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground/80">{section}</p>}
+            <p className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground/80">{section}</p>
             <div className="space-y-0.5">
               {navItems.map(({ to, label, icon: Icon, color }) => (
-                <NavLink key={to} to={to} onClick={onClose} title={collapsed && !mobileOpen ? label : undefined}
-                  className={({ isActive }) => cn("group flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-medium transition-all",
-                    isActive ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:bg-muted hover:text-foreground hover:translate-x-0.5")}>
+                <NavLink key={to} to={to} onClick={onClose}
+                  className={({ isActive }) => cn(
+                    "group flex items-center gap-2.5 rounded-2xl px-2.5 py-2 text-[13px] font-medium transition-all",
+                    isActive ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:bg-muted hover:text-foreground hover:translate-x-0.5",
+                  )}
+                >
                   {({ isActive }) => (<>
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg transition-transform group-hover:scale-110" style={isActive ? { background: "rgb(255 255 255 / .22)" } : { background: `${color || "#ec4899"}1f`, color: color || "var(--primary)" }}>
-                      <Icon className="h-3.5 w-3.5" />
+                    <span
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl transition-transform group-hover:scale-110"
+                      style={isActive ? { background: "rgb(255 255 255 / .22)" } : { background: `${color || "#ec4899"}22`, color: color || "var(--primary)" }}
+                    >
+                      <Icon className="h-4 w-4 stroke-[1.75]" />
                     </span>
-                    {(!collapsed || mobileOpen) && <span className="truncate">{label}</span>}
+                    <span className="truncate">{label}</span>
                   </>)}
                 </NavLink>
               ))}
@@ -91,26 +96,26 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
             {photoUrl ? <img src={photoUrl} alt={displayName} className="h-10 w-10 rounded-full object-cover ring-2 ring-primary/30" /> : <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-xs font-extrabold text-primary-foreground ring-2 ring-primary/30">{getInitials(displayName)}</span>}
             <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-card bg-green-500" />
           </span>
-          {(!collapsed || mobileOpen) && (<>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-bold leading-tight">{displayName}</span>
-              <span className="block truncate text-[10px] leading-tight text-muted-foreground">{subLine}</span>
-              <span className="mt-1 inline-flex items-center gap-1">
-                <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-primary-foreground">{profile?.role || user?.role || "member"}</span>
-                {profile?.status_message && <span className="max-w-[90px] truncate text-[9px] text-muted-foreground">{profile.status_message}</span>}
-              </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-bold leading-tight">{displayName}</span>
+            <span className="block truncate text-[10px] leading-tight text-muted-foreground">{subLine}</span>
+            <span className="mt-1 inline-flex items-center gap-1">
+              <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-primary-foreground">{profile?.role || user?.role || "member"}</span>
+              {profile?.status_message && <span className="max-w-[90px] truncate text-[9px] text-muted-foreground">{profile.status_message}</span>}
             </span>
-            <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:scale-110" />
-          </>)}
+          </span>
+          <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:scale-110" />
         </NavLink>
-        <Button variant="outline" size="sm" className={cn("h-8 w-full text-xs rounded-xl", collapsed && !mobileOpen && "px-0")} onClick={logout}><LogOut className="h-3.5 w-3.5" />{(!collapsed || mobileOpen) && " Logout"}</Button>
+        <Button variant="outline" size="sm" className="h-8 w-full rounded-xl text-xs" onClick={logout}>
+          <LogOut className="h-3.5 w-3.5" /> Logout
+        </Button>
       </div>
     </div>
   )
 
   return (
     <>
-      <aside className={cn("sticky top-0 z-30 hidden h-screen shrink-0 border-r border-border/70 shadow-sm lg:block", collapsed ? "w-[68px]" : "w-60")}>{content}</aside>
+      <aside className="sticky top-0 z-30 hidden h-screen w-60 shrink-0 border-r border-border/70 shadow-sm lg:block">{content}</aside>
       {mobileOpen && <div className="fixed inset-0 z-50 flex lg:hidden"><div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} /><div className="relative shadow-2xl">{content}</div></div>}
     </>
   )

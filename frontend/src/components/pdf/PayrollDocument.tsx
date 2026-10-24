@@ -1,6 +1,6 @@
 import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer"
 import type { PayrollResponse, Settings } from "@/lib/types"
-import { formatCurrency, formatInvoiceDate, formatInvoiceTotal } from "@/lib/utils"
+import { formatCurrency, formatInvoiceDate, formatPdfCurrency, usdToPhp } from "@/lib/utils"
 import { PDF_FONT } from "@/lib/pdfFonts"
 
 const COLORS = {
@@ -46,7 +46,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 22,
   },
-  bannerAmount: { fontSize: 22, fontFamily: "Times-Bold", color: COLORS.white },
+  /** NotoSans required — Times-Bold turns ₱ into ± */
+  bannerAmount: { fontSize: 24, fontFamily: PDF_FONT, fontWeight: 700, color: COLORS.white },
+  bannerUsd: { fontSize: 11, fontFamily: PDF_FONT, color: "rgba(255,255,255,0.9)", marginTop: 4 },
   bannerDue: { fontSize: 11, color: COLORS.white, marginTop: 2 },
   bannerPeriodLabel: { fontSize: 9, color: "rgba(255,255,255,0.85)", textAlign: "right" },
   bannerPeriod: { fontSize: 12, color: COLORS.white, marginTop: 3, textAlign: "right" },
@@ -63,11 +65,12 @@ const styles = StyleSheet.create({
   tableRow: { flexDirection: "row", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.rowBorder, alignItems: "flex-start" },
   rowTitle: { fontSize: 11, color: COLORS.ink, marginBottom: 3 },
   rowSub: { fontSize: 8, color: COLORS.muted, lineHeight: 1.35 },
-  rowRate: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
-  rowAmt: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  rowRate: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
+  rowAmt: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
   totalBlock: { alignItems: "flex-end", marginTop: 18, marginBottom: 20 },
   totalLabel: { fontSize: 8, color: COLORS.muted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 },
-  totalValue: { fontFamily: "Times-Bold", fontSize: 22, color: COLORS.ink },
+  totalValue: { fontFamily: PDF_FONT, fontWeight: 700, fontSize: 22, color: COLORS.ink },
+  totalUsd: { fontFamily: PDF_FONT, fontSize: 11, color: COLORS.muted, marginTop: 4 },
   payBox: {
     backgroundColor: COLORS.payBg,
     borderLeftWidth: 3,
@@ -80,7 +83,6 @@ const styles = StyleSheet.create({
   payTitle: { fontSize: 10, color: COLORS.ink, marginBottom: 4 },
   payBody: { fontSize: 9, color: COLORS.muted, lineHeight: 1.45 },
   footer: { fontSize: 8, color: COLORS.muted, textAlign: "center", marginTop: 8 },
-  vaBreak: { marginTop: 28 },
 })
 
 export function PayrollDocument({
@@ -108,26 +110,60 @@ export function PayrollDocument({
   return (
     <Document>
       {payroll.vas.map((va) => {
-        const total = showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`
-        const phpTotal =
-          showPricing && usdPhpRate && va.currency === "USD"
-            ? formatCurrency(parseFloat(String(va.total_pay)) * usdPhpRate, "PHP")
+        const payNum = parseFloat(String(va.total_pay))
+        const isUsd = va.currency === "USD"
+        const phpFromRate = isUsd ? usdToPhp(payNum, usdPhpRate) : null
+        // Peso is what the VA receives — always the main highlight when we can show it
+        const primaryPhp =
+          showPricing && !isUsd
+            ? formatPdfCurrency(va.total_pay, "PHP")
+            : showPricing && phpFromRate != null
+              ? formatPdfCurrency(phpFromRate, "PHP")
+              : null
+        const secondaryUsd =
+          showPricing && isUsd
+            ? `${formatPdfCurrency(va.total_pay, "USD")} USD`
             : null
+        const hoursFallback = `${va.total_hours} hrs`
         const first = va.va_name.split(" ")[0]
         const lines =
           (va.by_client ?? []).length > 0
-            ? (va.by_client ?? []).map((c) => ({
-                title: `${c.label} · VA services`,
-                sub: period,
-                rate: showPricing ? formatCurrency(c.pay, va.currency) : "—",
-                amount: showPricing ? formatCurrency(c.pay, va.currency) : `${c.hours} hrs`,
-              }))
-            : va.entries.map((e) => ({
-                title: e.client_name || "Services",
-                sub: period,
-                rate: showPricing ? formatCurrency(e.rate, va.currency) : "—",
-                amount: showPricing ? formatCurrency(e.pay, va.currency) : `${e.hours} hrs`,
-              }))
+            ? (va.by_client ?? []).map((c) => {
+                const cPay = parseFloat(String(c.pay))
+                const cPhp = isUsd && usdPhpRate ? usdToPhp(cPay, usdPhpRate) : null
+                return {
+                  title: `${c.label} · VA services`,
+                  sub: period,
+                  rate: showPricing
+                    ? cPhp != null
+                      ? formatPdfCurrency(cPhp, "PHP")
+                      : formatCurrency(c.pay, va.currency)
+                    : "—",
+                  amount: showPricing
+                    ? cPhp != null
+                      ? formatPdfCurrency(cPhp, "PHP")
+                      : formatCurrency(c.pay, va.currency)
+                    : `${c.hours} hrs`,
+                }
+              })
+            : va.entries.map((e) => {
+                const ePay = parseFloat(String(e.pay))
+                const ePhp = isUsd && usdPhpRate ? usdToPhp(ePay, usdPhpRate) : null
+                return {
+                  title: e.client_name || "Services",
+                  sub: period,
+                  rate: showPricing
+                    ? ePhp != null
+                      ? formatPdfCurrency(ePhp, "PHP")
+                      : formatCurrency(e.rate, va.currency)
+                    : "—",
+                  amount: showPricing
+                    ? ePhp != null
+                      ? formatPdfCurrency(ePhp, "PHP")
+                      : formatCurrency(e.pay, va.currency)
+                    : `${e.hours} hrs`,
+                }
+              })
 
         return (
           <Page key={va.va_id} size="A4" style={styles.page}>
@@ -153,13 +189,30 @@ export function PayrollDocument({
 
             <View style={styles.banner}>
               <View>
-                <Text style={styles.bannerAmount}>{total}</Text>
-                <Text style={styles.bannerDue}>earned this period</Text>
-                {phpTotal ? (
-                  <Text style={styles.bannerDue}>
-                    ≈ {phpTotal} at 1 USD = {usdPhpRate!.toFixed(2)} PHP
-                  </Text>
-                ) : null}
+                {showPricing ? (
+                  primaryPhp ? (
+                    <>
+                      <Text style={styles.bannerAmount}>{primaryPhp}</Text>
+                      <Text style={styles.bannerDue}>you receive this period</Text>
+                      {secondaryUsd ? (
+                        <Text style={styles.bannerUsd}>
+                          {secondaryUsd}
+                          {usdPhpRate ? ` · rate 1 USD = ${Number(usdPhpRate).toFixed(2)} PHP` : ""}
+                        </Text>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <Text style={styles.bannerAmount}>{secondaryUsd || formatCurrency(va.total_pay, va.currency)}</Text>
+                      <Text style={styles.bannerDue}>earned this period</Text>
+                    </>
+                  )
+                ) : (
+                  <>
+                    <Text style={styles.bannerAmount}>{hoursFallback}</Text>
+                    <Text style={styles.bannerDue}>worked this period</Text>
+                  </>
+                )}
               </View>
               <View>
                 <Text style={styles.bannerPeriodLabel}>Service period</Text>
@@ -203,16 +256,14 @@ export function PayrollDocument({
             ))}
 
             <View style={styles.totalBlock}>
-              <Text style={styles.totalLabel}>Total due</Text>
+              <Text style={styles.totalLabel}>Total you receive</Text>
               <Text style={styles.totalValue}>
                 {showPricing
-                  ? formatInvoiceTotal(va.total_pay).replace("USD", va.currency)
-                  : `${va.total_hours} hrs`}
+                  ? primaryPhp || secondaryUsd || formatCurrency(va.total_pay, va.currency)
+                  : hoursFallback}
               </Text>
-              {phpTotal ? (
-                <Text style={{ fontSize: 11, color: COLORS.muted, marginTop: 4 }}>
-                  Philippine peso equivalent: {phpTotal}
-                </Text>
+              {showPricing && primaryPhp && secondaryUsd ? (
+                <Text style={styles.totalUsd}>{secondaryUsd}</Text>
               ) : null}
             </View>
 

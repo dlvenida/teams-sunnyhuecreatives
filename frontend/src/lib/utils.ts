@@ -12,6 +12,19 @@ export function formatCurrency(amount: number | string, currency = "USD") {
   return `$${num.toFixed(2)}`
 }
 
+/** PDF-safe currency: always uses the real ₱ character (must be rendered with NotoSans, not Times/Helvetica). */
+export function formatPdfCurrency(amount: number | string, currency: "PHP" | "USD" | string = "USD") {
+  return formatCurrency(amount, currency === "PHP" ? "PHP" : "USD")
+}
+
+/** PHP amount from USD pay + exchange rate (1 USD = rate PHP). */
+export function usdToPhp(amountUsd: number | string, rate: number | string | null | undefined) {
+  const usd = typeof amountUsd === "string" ? parseFloat(amountUsd) : amountUsd
+  const r = typeof rate === "string" ? parseFloat(rate) : Number(rate)
+  if (Number.isNaN(usd) || !r || Number.isNaN(r) || r <= 0) return null
+  return Math.round(usd * r * 100) / 100
+}
+
 /** Slug for payroll PDF downloads: `Arby-Oct1-Oct15-2026.pdf` */
 export function payrollPdfFilename(vaName: string, dateFrom: string, dateTo: string) {
   const slug = (vaName || "VA")

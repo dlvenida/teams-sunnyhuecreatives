@@ -9,7 +9,16 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, require_va
-from app.models import Client, SubClient, TimesheetStatus, TimesheetSubmission, VA, WorkLog, WorkLogStatus
+from app.models import (
+    Client,
+    PayrollRun,
+    SubClient,
+    TimesheetStatus,
+    TimesheetSubmission,
+    VA,
+    WorkLog,
+    WorkLogStatus,
+)
 from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionResponse, TimesheetSubmitRequest, VAWorkLogUpdate
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
@@ -319,6 +328,137 @@ def my_earnings(
         "entries": entries,
         "date_from": str(date_from) if date_from else None,
         "date_to": str(date_to) if date_to else None,
+    }
+
+
+@router.get("/payroll-history")
+def my_payroll_history(
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+    year: int | None = None,
+):
+    """Full-year payroll history for the logged-in VA, grouped by month for the UI.
+
+    Paid rows come from payroll runs. Unpaid rows are timesheets that have been
+    submitted/reviewed but not yet marked paid for that period.
+    """
+    y = year or date.today().year
+    year_start = date(y, 1, 1)
+    year_end = date(y, 12, 31)
+
+    runs = (
+        db.query(PayrollRun)
+        .filter(
+            PayrollRun.va_id == current.va_id,
+            PayrollRun.period_end >= year_start,
+            PayrollRun.period_start <= year_end,
+        )
+        .order_by(PayrollRun.period_end.desc(), PayrollRun.paid_at.desc())
+        .all()
+    )
+    paid_keys = {(r.period_start, r.period_end) for r in runs}
+
+    sheets = (
+        db.query(TimesheetSubmission)
+        .filter(
+            TimesheetSubmission.va_id == current.va_id,
+            TimesheetSubmission.period_end >= year_start,
+            TimesheetSubmission.period_start <= year_end,
+        )
+        .order_by(TimesheetSubmission.period_end.desc())
+        .all()
+    )
+
+    entries: list[dict] = []
+    for r in runs:
+        pay = Decimal(str(r.total_pay))
+        currency = (r.currency or "USD").upper()
+        rate = Decimal(str(r.usd_php_rate)) if r.usd_php_rate and r.usd_php_rate > 0 else None
+        if currency == "PHP":
+            php_amount = pay
+            usd_amount = None
+        elif rate:
+            php_amount = (pay * rate).quantize(Decimal("0.01"))
+            usd_amount = pay
+        else:
+            php_amount = None
+            usd_amount = pay if currency == "USD" else None
+        entries.append({
+            "id": str(r.id),
+            "kind": "paid",
+            "status": "paid",
+            "period_start": str(r.period_start),
+            "period_end": str(r.period_end),
+            "paid_at": r.paid_at.isoformat() if r.paid_at else None,
+            "total_hours": str(r.total_hours),
+            "total_pay": str(r.total_pay),
+            "currency": currency,
+            "usd_php_rate": str(rate) if rate else None,
+            "php_amount": str(php_amount) if php_amount is not None else None,
+            "usd_amount": str(usd_amount) if usd_amount is not None else None,
+            "method": r.method,
+            "month_key": f"{r.period_end.year}-{r.period_end.month:02d}",
+            "month_label": r.period_end.strftime("%B %Y"),
+        })
+
+    for s in sheets:
+        if (s.period_start, s.period_end) in paid_keys:
+            continue
+        status_val = s.status.value if hasattr(s.status, "value") else str(s.status)
+        sheet_hours = (
+            db.query(WorkLog)
+            .filter(
+                WorkLog.va_id == current.va_id,
+                WorkLog.work_date >= s.period_start,
+                WorkLog.work_date <= s.period_end,
+                WorkLog.status.in_(BILLABLE + [WorkLogStatus.submitted]),
+            )
+            .all()
+        )
+        hours_sum = sum((l.hours for l in sheet_hours), Decimal("0"))
+        entries.append({
+            "id": str(s.id),
+            "kind": "timesheet",
+            "status": "unpaid",
+            "timesheet_status": status_val,
+            "period_start": str(s.period_start),
+            "period_end": str(s.period_end),
+            "paid_at": None,
+            "total_hours": str(hours_sum),
+            "total_pay": None,
+            "currency": None,
+            "usd_php_rate": None,
+            "php_amount": None,
+            "usd_amount": None,
+            "method": None,
+            "month_key": f"{s.period_end.year}-{s.period_end.month:02d}",
+            "month_label": s.period_end.strftime("%B %Y"),
+        })
+
+    # Sort newest period first
+    entries.sort(key=lambda e: (e["period_end"], e["period_start"]), reverse=True)
+
+    months: dict[str, dict] = {}
+    for e in entries:
+        bucket = months.setdefault(
+            e["month_key"],
+            {"month_key": e["month_key"], "month_label": e["month_label"], "entries": []},
+        )
+        bucket["entries"].append(e)
+
+    month_list = sorted(months.values(), key=lambda m: m["month_key"], reverse=True)
+
+    return {
+        "year": y,
+        "months": month_list,
+        "total_paid_php": str(
+            sum(
+                (Decimal(e["php_amount"]) for e in entries if e["status"] == "paid" and e.get("php_amount")),
+                Decimal("0"),
+            )
+        ),
+        "paid_count": len([e for e in entries if e["status"] == "paid"]),
+        "unpaid_count": len([e for e in entries if e["status"] == "unpaid"]),
     }
 
 

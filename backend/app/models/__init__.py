@@ -119,6 +119,13 @@ class TaskPriority(str, enum.Enum):
     urgent = "urgent"
 
 
+class CorrectionRequestStatus(str, enum.Enum):
+    pending = "pending"
+    resolved = "resolved"
+    cancelled = "cancelled"
+    declined = "declined"
+
+
 class ClockStatus(str, enum.Enum):
     running = "running"
     paused = "paused"
@@ -406,6 +413,10 @@ class TimeClockEntry(Base):
     adjustment_count: Mapped[int] = mapped_column(Integer, default=0)
     last_adjusted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_adjustment_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    original_clock_in: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    original_clock_out: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_adjusted_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_adjusted_by_role: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     va: Mapped["VA"] = relationship()
@@ -670,6 +681,37 @@ class TimeClockAdjustment(Base):
     before: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     after: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     work_log_synced: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    entry: Mapped["TimeClockEntry"] = relationship()
+    va: Mapped["VA"] = relationship()
+
+
+class TimeClockCorrectionRequest(Base):
+    """VA asks admin/auditor to revise a clock entry (wrong in/out/date)."""
+    __tablename__ = "time_clock_correction_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("time_clock_entries.id", ondelete="CASCADE"), index=True
+    )
+    va_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"), index=True
+    )
+    requested_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    proposed_clock_in: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proposed_clock_out: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proposed_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default=CorrectionRequestStatus.pending.value)
+    resolved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolved_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     entry: Mapped["TimeClockEntry"] = relationship()

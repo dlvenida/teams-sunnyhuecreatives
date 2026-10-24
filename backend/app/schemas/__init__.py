@@ -258,6 +258,9 @@ class ProfileResponse(BaseModel):
     emergency_contact_phone: str | None = None
     emergency_contact_relationship: str | None = None
     hire_date: date | None = None
+    tenure_years: int | None = None
+    tenure_months: int | None = None
+    tenure_label: str | None = None
     date_of_birth: date | None = None
     linkedin_url: str | None = None
     portfolio_url: str | None = None
@@ -560,13 +563,18 @@ class TimeClockResponse(BaseModel):
     adjustment_count: int = 0
     last_adjusted_at: datetime | None = None
     last_adjustment_reason: str | None = None
+    original_clock_in: datetime | None = None
+    original_clock_out: datetime | None = None
+    last_adjusted_by_name: str | None = None
+    last_adjusted_by_role: str | None = None
+    pending_correction_request_id: UUID | None = None
     created_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 
 
 class ClockAdjustRequest(BaseModel):
-    """VA (anytime) / admin adjustment of a clock entry. Reason is required for the audit log."""
+    """Admin/auditor adjustment of a clock entry on behalf of a VA. Reason required for audit."""
     clock_in: datetime | None = None
     clock_out: datetime | None = None
     notes: str | None = None
@@ -574,6 +582,37 @@ class ClockAdjustRequest(BaseModel):
     project_id: UUID | None = None
     task_id: UUID | None = None
     reason: str = Field(min_length=3, max_length=1000)
+    correction_request_id: UUID | None = None
+
+
+class ClockCorrectionRequestCreate(BaseModel):
+    """VA asks staff to revise wrong clock-in, clock-out, or date."""
+    proposed_clock_in: datetime | None = None
+    proposed_clock_out: datetime | None = None
+    proposed_notes: str | None = None
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class ClockCorrectionRequestResponse(BaseModel):
+    id: UUID
+    entry_id: UUID
+    va_id: UUID
+    va_name: str | None = None
+    task_title: str | None = None
+    client_name: str | None = None
+    current_clock_in: datetime | None = None
+    current_clock_out: datetime | None = None
+    proposed_clock_in: datetime | None = None
+    proposed_clock_out: datetime | None = None
+    proposed_notes: str | None = None
+    reason: str
+    status: str
+    resolved_by_name: str | None = None
+    resolved_at: datetime | None = None
+    resolution_note: str | None = None
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
 
 
 class TimeClockAdjustmentResponse(BaseModel):

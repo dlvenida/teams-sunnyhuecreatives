@@ -22,6 +22,7 @@ from app.schemas import (
 )
 from app.services import storage
 from app.services.email import send_email_verification
+from app.services.tenure import tenure_label, tenure_parts
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -57,6 +58,7 @@ def _display_name(user: User, va: VA | None) -> str:
 
 
 def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
+    parts = tenure_parts(user.hire_date)
     return ProfileResponse(
         id=user.id,
         email=user.email,
@@ -78,6 +80,9 @@ def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
         job_title=user.job_title, bio=user.bio, timezone=user.timezone, skills=user.skills or [],
         emergency_contact_name=user.emergency_contact_name, emergency_contact_phone=user.emergency_contact_phone,
         emergency_contact_relationship=user.emergency_contact_relationship, hire_date=user.hire_date,
+        tenure_years=parts[0] if parts else None,
+        tenure_months=parts[1] if parts else None,
+        tenure_label=tenure_label(user.hire_date),
         date_of_birth=user.date_of_birth, linkedin_url=user.linkedin_url, portfolio_url=user.portfolio_url,
         status_message=user.status_message, created_at=user.created_at,
     )

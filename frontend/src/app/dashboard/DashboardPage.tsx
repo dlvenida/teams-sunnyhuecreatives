@@ -351,6 +351,13 @@ export function DashboardPage() {
         <p className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.14em] text-primary"><GreetIcon className="h-4 w-4" /> {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
         <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
           <h1 className="break-words font-extrabold leading-[1.05] tracking-tight" style={{ fontSize: "clamp(1.65rem, 7vw, 2.9rem)" }}>{greetLabel}, <span className="gradient-text">{firstName}</span> <span className={cn("inline-block", emojiClass)} aria-hidden="true">{emoji}</span><span className="emoji-wave inline-block" aria-hidden="true">👋</span></h1>
+          {isVA && (profile?.job_title || profile?.tenure_label) && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {profile.job_title && <span className="font-semibold text-foreground">{profile.job_title}</span>}
+              {profile.job_title && profile.tenure_label ? " · " : ""}
+              {profile.tenure_label}
+            </p>
+          )}
           <div className="flex flex-wrap gap-4 pb-1 text-center sm:gap-8">
             {[{ label: "Due today", v: c.due_today, icon: CalendarDays }, { label: "Overdue", v: c.overdue, icon: AlertTriangle }, { label: "Done this week", v: c.done_this_week, icon: CheckCircle2 }].map(s => (
               <div key={s.label}>

@@ -8,11 +8,33 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor, require_va
-from app.models import ActivityLog, ClockStatus, Project, SystemSetting, Task, TaskComment, TaskStatus, TimeClockAdjustment, TimeClockEntry, UserRole, WorkLog, WorkLogStatus
-from app.schemas import ClockAdjustRequest, ClockInRequest, ClockOutRequest, TimeClockAdjustmentResponse, TimeClockResponse
+from app.deps import CurrentUser, get_current_user, require_admin_or_auditor, require_va
+from app.models import (
+    ActivityLog,
+    ClockStatus,
+    CorrectionRequestStatus,
+    Project,
+    SystemSetting,
+    Task,
+    TaskComment,
+    TaskStatus,
+    TimeClockAdjustment,
+    TimeClockCorrectionRequest,
+    TimeClockEntry,
+    WorkLog,
+    WorkLogStatus,
+)
+from app.schemas import (
+    ClockAdjustRequest,
+    ClockCorrectionRequestCreate,
+    ClockCorrectionRequestResponse,
+    ClockInRequest,
+    ClockOutRequest,
+    TimeClockAdjustmentResponse,
+    TimeClockResponse,
+)
 from app.services.calculations import calculate_pay
-from app.services.notifications import admin_user_ids, push
+from app.services.notifications import admin_and_auditor_user_ids, admin_user_ids, push
 
 router = APIRouter(prefix="/time-clock", tags=["time-clock"])
 DEFAULT_TZ = "Asia/Manila"
@@ -36,7 +58,20 @@ def _worked_seconds(entry: TimeClockEntry, now: datetime | None = None) -> int:
     return max(secs, 0)
 
 
-def _serialize(entry: TimeClockEntry) -> TimeClockResponse:
+def _pending_correction_id(db: Session, entry_id) -> UUID | None:
+    row = (
+        db.query(TimeClockCorrectionRequest.id)
+        .filter(
+            TimeClockCorrectionRequest.entry_id == entry_id,
+            TimeClockCorrectionRequest.status == CorrectionRequestStatus.pending.value,
+        )
+        .first()
+    )
+    return row[0] if row else None
+
+
+def _serialize(entry: TimeClockEntry, db: Session | None = None) -> TimeClockResponse:
+    pending_id = _pending_correction_id(db, entry.id) if db is not None else None
     return TimeClockResponse(
         id=entry.id, va_id=entry.va_id, va_name=entry.va.name if entry.va else None,
         task_id=entry.task_id, task_title=entry.task.title if entry.task else None,
@@ -48,7 +83,35 @@ def _serialize(entry: TimeClockEntry) -> TimeClockResponse:
         is_adjusted=bool(getattr(entry, "is_adjusted", False)), adjustment_count=int(getattr(entry, "adjustment_count", 0) or 0),
         last_adjusted_at=_as_utc(entry.last_adjusted_at) if getattr(entry, "last_adjusted_at", None) else None,
         last_adjustment_reason=getattr(entry, "last_adjustment_reason", None),
+        original_clock_in=_as_utc(getattr(entry, "original_clock_in", None)),
+        original_clock_out=_as_utc(getattr(entry, "original_clock_out", None)),
+        last_adjusted_by_name=getattr(entry, "last_adjusted_by_name", None),
+        last_adjusted_by_role=getattr(entry, "last_adjusted_by_role", None),
+        pending_correction_request_id=pending_id,
         created_at=entry.created_at,
+    )
+
+
+def _serialize_correction(req: TimeClockCorrectionRequest) -> ClockCorrectionRequestResponse:
+    entry = req.entry
+    return ClockCorrectionRequestResponse(
+        id=req.id,
+        entry_id=req.entry_id,
+        va_id=req.va_id,
+        va_name=req.va.name if req.va else None,
+        task_title=entry.task.title if entry and entry.task else None,
+        client_name=entry.client.name if entry and entry.client else None,
+        current_clock_in=_as_utc(entry.clock_in) if entry else None,
+        current_clock_out=_as_utc(entry.clock_out) if entry else None,
+        proposed_clock_in=_as_utc(req.proposed_clock_in),
+        proposed_clock_out=_as_utc(req.proposed_clock_out),
+        proposed_notes=req.proposed_notes,
+        reason=req.reason,
+        status=req.status,
+        resolved_by_name=req.resolved_by_name,
+        resolved_at=_as_utc(req.resolved_at) if req.resolved_at else None,
+        resolution_note=req.resolution_note,
+        created_at=req.created_at,
     )
 
 
@@ -245,7 +308,7 @@ def my_history(current: Annotated[CurrentUser, Depends(require_va)], db: Annotat
         .limit(min(limit, 200))
         .all()
     )
-    return [_serialize(e) for e in entries]
+    return [_serialize(e, db) for e in entries]
 
 
 def _snapshot(entry: TimeClockEntry) -> dict:
@@ -258,27 +321,167 @@ def _snapshot(entry: TimeClockEntry) -> dict:
     }
 
 
-@router.patch("/{entry_id}/adjust", response_model=TimeClockResponse)
-def adjust_entry(entry_id: UUID, body: ClockAdjustRequest, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
-    """Adjust a clock entry ANYTIME (VA owner, or admin on their behalf).
+@router.post("/{entry_id}/correction-request", response_model=ClockCorrectionRequestResponse, status_code=status.HTTP_201_CREATED)
+def request_correction(
+    entry_id: UUID,
+    body: ClockCorrectionRequestCreate,
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """VA requests that admin/auditor revise a mistaken clock-in, clock-out, or date."""
+    entry = _load(db, entry_id)
+    if not entry or entry.va_id != current.va_id:
+        raise HTTPException(404, "Clock entry not found")
+    if entry.status != ClockStatus.completed:
+        raise HTTPException(400, "Only completed sessions can be revised — clock out first")
+    existing = (
+        db.query(TimeClockCorrectionRequest)
+        .filter(
+            TimeClockCorrectionRequest.entry_id == entry_id,
+            TimeClockCorrectionRequest.status == CorrectionRequestStatus.pending.value,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(400, "You already have a pending revision request for this entry")
 
-    Recalculates duration, syncs the linked work log (an approved log goes back
-    to submitted for re-approval; invoiced logs are blocked), writes a
-    TimeClockAdjustment audit row + an ActivityLog row admins can see, and
-    notifies administrators.
+    proposed_in = _as_utc(body.proposed_clock_in) if body.proposed_clock_in else None
+    proposed_out = _as_utc(body.proposed_clock_out) if body.proposed_clock_out else None
+    if proposed_in and proposed_out and proposed_out <= proposed_in:
+        raise HTTPException(400, "Proposed clock-out must be after clock-in")
+
+    req = TimeClockCorrectionRequest(
+        entry_id=entry.id,
+        va_id=entry.va_id,
+        requested_by_user_id=current.user.id,
+        proposed_clock_in=proposed_in,
+        proposed_clock_out=proposed_out,
+        proposed_notes=body.proposed_notes,
+        reason=body.reason.strip(),
+        status=CorrectionRequestStatus.pending.value,
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    req = (
+        db.query(TimeClockCorrectionRequest)
+        .options(
+            joinedload(TimeClockCorrectionRequest.va),
+            joinedload(TimeClockCorrectionRequest.entry).joinedload(TimeClockEntry.task),
+            joinedload(TimeClockCorrectionRequest.entry).joinedload(TimeClockEntry.client),
+        )
+        .filter(TimeClockCorrectionRequest.id == req.id)
+        .first()
+    )
+    va_name = req.va.name if req.va else "VA"
+    push(
+        db,
+        admin_and_auditor_user_ids(db),
+        "clock",
+        f"🕒 {va_name} requested a time clock revision",
+        f"{body.reason.strip()[:140]} · {req.entry.client.name if req.entry and req.entry.client else 'General'}",
+        "/admin/time-clock",
+    )
+    return _serialize_correction(req)
+
+
+@router.get("/correction-requests", response_model=list[ClockCorrectionRequestResponse])
+def list_correction_requests(
+    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+    status_filter: str | None = None,
+    limit: int = 100,
+):
+    q = (
+        db.query(TimeClockCorrectionRequest)
+        .options(
+            joinedload(TimeClockCorrectionRequest.va),
+            joinedload(TimeClockCorrectionRequest.entry).joinedload(TimeClockEntry.task),
+            joinedload(TimeClockCorrectionRequest.entry).joinedload(TimeClockEntry.client),
+        )
+    )
+    if status_filter:
+        q = q.filter(TimeClockCorrectionRequest.status == status_filter)
+    rows = q.order_by(TimeClockCorrectionRequest.created_at.desc()).limit(min(limit, 300)).all()
+    return [_serialize_correction(r) for r in rows]
+
+
+@router.get("/my-correction-requests", response_model=list[ClockCorrectionRequestResponse])
+def my_correction_requests(
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = 50,
+):
+    rows = (
+        db.query(TimeClockCorrectionRequest)
+        .options(
+            joinedload(TimeClockCorrectionRequest.va),
+            joinedload(TimeClockCorrectionRequest.entry).joinedload(TimeClockEntry.task),
+            joinedload(TimeClockCorrectionRequest.entry).joinedload(TimeClockEntry.client),
+        )
+        .filter(TimeClockCorrectionRequest.va_id == current.va_id)
+        .order_by(TimeClockCorrectionRequest.created_at.desc())
+        .limit(min(limit, 100))
+        .all()
+    )
+    return [_serialize_correction(r) for r in rows]
+
+
+@router.post("/correction-requests/{request_id}/cancel", response_model=ClockCorrectionRequestResponse)
+def cancel_correction_request(
+    request_id: UUID,
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    req = db.query(TimeClockCorrectionRequest).filter(TimeClockCorrectionRequest.id == request_id).first()
+    if not req or req.va_id != current.va_id:
+        raise HTTPException(404, "Revision request not found")
+    if req.status != CorrectionRequestStatus.pending.value:
+        raise HTTPException(400, "Only pending requests can be cancelled")
+    req.status = CorrectionRequestStatus.cancelled.value
+    req.resolved_at = datetime.now(timezone.utc)
+    req.resolved_by_name = "Cancelled by VA"
+    req.resolution_note = "Cancelled by the VA"
+    db.commit()
+    req = (
+        db.query(TimeClockCorrectionRequest)
+        .options(
+            joinedload(TimeClockCorrectionRequest.va),
+            joinedload(TimeClockCorrectionRequest.entry).joinedload(TimeClockEntry.task),
+            joinedload(TimeClockCorrectionRequest.entry).joinedload(TimeClockEntry.client),
+        )
+        .filter(TimeClockCorrectionRequest.id == request_id)
+        .first()
+    )
+    return _serialize_correction(req)
+
+
+@router.patch("/{entry_id}/adjust", response_model=TimeClockResponse)
+def adjust_entry(
+    entry_id: UUID,
+    body: ClockAdjustRequest,
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Admin or auditor edits a clock entry on behalf of a VA after a revision request (or anytime).
+
+    Freezes the original times on first edit, recalculates duration, syncs the linked work log,
+    writes a TimeClockAdjustment audit row, and notifies the VA.
     """
     entry = db.query(TimeClockEntry).filter(TimeClockEntry.id == entry_id).first()
     if not entry:
         raise HTTPException(404, "Clock entry not found")
-    is_owner_va = current.va_id is not None and entry.va_id == current.va_id
-    if not (is_owner_va or current.role == UserRole.admin):
-        raise HTTPException(403, "You can only adjust your own clock entries")
 
     linked_log = db.query(WorkLog).filter(WorkLog.id == entry.work_log_id).first() if entry.work_log_id else None
     if linked_log and linked_log.status == WorkLogStatus.invoiced:
-        raise HTTPException(400, "This session is already invoiced — ask an administrator to adjust it")
+        raise HTTPException(400, "This session is already invoiced — it cannot be adjusted")
 
     before = _snapshot(entry)
+    # Freeze original times on first edit so the VA/admin can still see what was recorded
+    if not entry.original_clock_in:
+        entry.original_clock_in = entry.clock_in
+        entry.original_clock_out = entry.clock_out
+
     new_in = _as_utc(body.clock_in) if body.clock_in else _as_utc(entry.clock_in)
     new_out = _as_utc(body.clock_out) if body.clock_out is not None else _as_utc(entry.clock_out)
     if new_out and new_in and new_out <= new_in:
@@ -300,10 +503,14 @@ def adjust_entry(entry_id: UUID, body: ClockAdjustRequest, current: Annotated[Cu
         entry.project_id = body.project_id
     if body.task_id is not None:
         entry.task_id = body.task_id
+
+    actor_name = current.user.display_name or current.user.email.split("@")[0]
     entry.is_adjusted = True
     entry.adjustment_count = int(entry.adjustment_count or 0) + 1
     entry.last_adjusted_at = now
     entry.last_adjustment_reason = body.reason.strip()
+    entry.last_adjusted_by_name = actor_name
+    entry.last_adjusted_by_role = current.user.role.value
 
     # Sync the linked work log so payroll/reports stay correct
     work_log_synced = False
@@ -331,18 +538,26 @@ def adjust_entry(entry_id: UUID, body: ClockAdjustRequest, current: Annotated[Cu
         work_log_synced = True
 
     after = _snapshot(entry)
-    actor_name = current.user.display_name or current.user.email.split("@")[0]
-    if current.va_id:
-        from app.models import VA as _VA
-        va_obj = db.query(_VA).filter(_VA.id == current.va_id).first()
-        if va_obj:
-            actor_name = va_obj.name
     adjustment = TimeClockAdjustment(
         entry_id=entry.id, va_id=entry.va_id, adjusted_by_user_id=current.user.id,
         adjusted_by_name=actor_name, adjusted_by_role=current.user.role.value,
         reason=body.reason.strip(), before=before, after=after, work_log_synced=work_log_synced,
     )
     db.add(adjustment)
+
+    # Resolve matching / pending revision request(s) for this entry
+    pending_q = db.query(TimeClockCorrectionRequest).filter(
+        TimeClockCorrectionRequest.entry_id == entry.id,
+        TimeClockCorrectionRequest.status == CorrectionRequestStatus.pending.value,
+    )
+    if body.correction_request_id:
+        pending_q = pending_q.filter(TimeClockCorrectionRequest.id == body.correction_request_id)
+    for req in pending_q.all():
+        req.status = CorrectionRequestStatus.resolved.value
+        req.resolved_by_user_id = current.user.id
+        req.resolved_by_name = actor_name
+        req.resolved_at = now
+        req.resolution_note = body.reason.strip()
 
     def _fmt(v):
         return v[11:16] + " " + v[:10] if v else "—"
@@ -356,11 +571,17 @@ def adjust_entry(entry_id: UUID, body: ClockAdjustRequest, current: Annotated[Cu
                        action="adjust", description=desc, path=f"/time-clock/{entry.id}/adjust", method="PATCH"))
     db.commit()
     loaded = _load(db, entry.id)
-    va_name = loaded.va.name if loaded and loaded.va else actor_name
-    push(db, admin_user_ids(db), "clock", f"🕒 {va_name} adjusted a time clock entry",
-         f"{desc} · {loaded.client.name if loaded and loaded.client else 'General'}", "/admin/time-clock",
-         exclude_user_id=current.user.id if current.role != UserRole.admin else None)
-    return _serialize(loaded)
+    # Notify the VA that staff edited their entry
+    from app.models import VA as _VA
+    va_obj = db.query(_VA).filter(_VA.id == entry.va_id).first()
+    if va_obj and va_obj.user_id:
+        push(
+            db, [va_obj.user_id], "clock",
+            f"Your time clock entry was updated by {actor_name}",
+            f"{desc}",
+            "/va/time-clock",
+        )
+    return _serialize(loaded, db)
 
 
 @router.get("/adjustments", response_model=list[TimeClockAdjustmentResponse])
@@ -383,7 +604,7 @@ def list_all(_: Annotated[CurrentUser, Depends(require_admin_or_auditor)], db: A
     q = db.query(TimeClockEntry).options(joinedload(TimeClockEntry.va), joinedload(TimeClockEntry.task), joinedload(TimeClockEntry.client), joinedload(TimeClockEntry.project))
     if va_id:
         q = q.filter(TimeClockEntry.va_id == va_id)
-    return [_serialize(e) for e in q.order_by(TimeClockEntry.clock_in.desc()).limit(min(limit, 300)).all()]
+    return [_serialize(e, db) for e in q.order_by(TimeClockEntry.clock_in.desc()).limit(min(limit, 300)).all()]
 
 
 @router.get("/live", response_model=list[TimeClockResponse])
@@ -395,4 +616,4 @@ def live_team(_: Annotated[CurrentUser, Depends(require_admin_or_auditor)], db: 
         .order_by(TimeClockEntry.clock_in.asc())
         .all()
     )
-    return [_serialize(e) for e in entries]
+    return [_serialize(e, db) for e in entries]

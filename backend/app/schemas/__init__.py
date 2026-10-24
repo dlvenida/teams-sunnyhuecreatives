@@ -784,6 +784,7 @@ class InvoiceGenerateRequest(BaseModel):
     package_id: UUID | None = None
     included_hours: Decimal | None = None
     overage_rate: Decimal | None = None
+    service_description: str | None = None  # client-facing text on generated line items
 
 
 class InvoiceLineItemUpdate(BaseModel):

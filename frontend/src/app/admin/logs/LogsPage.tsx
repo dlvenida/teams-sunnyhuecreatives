@@ -211,7 +211,11 @@ export function LogsPage() {
                     <td className="whitespace-nowrap p-3 text-xs font-medium">{formatDate(log.work_date)}</td>
                     <td className="p-3"><span className="flex items-center gap-2"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-extrabold text-primary">{initials(log.va_name ?? "?")}</span><span className="whitespace-nowrap text-xs font-semibold">{log.va_name}</span></span></td>
                     <td className="p-3 text-xs"><span className="font-medium">{log.client_name}</span>{log.sub_client_name && <span className="text-muted-foreground"> / {log.sub_client_name}</span>}{log.project_name && <span className="block text-[11px] text-muted-foreground">{log.project_name}</span>}</td>
-                    <td className="max-w-xs p-3 text-xs"><span className="line-clamp-2">{log.description_plain}</span>{log.task_title && <span className="block text-[11px] text-muted-foreground">Task: {log.task_title}</span>}</td>
+                    <td className="max-w-xs p-3 text-xs">
+                      <span className="line-clamp-2">{log.description_plain}</span>
+                      {log.notes && <span className="mt-1 block line-clamp-2 text-[11px] text-amber-800">💬 {log.notes}</span>}
+                      {log.task_title && <span className="block text-[11px] text-muted-foreground">Task: {log.task_title}</span>}
+                    </td>
                     <td className="whitespace-nowrap p-3 text-xs text-muted-foreground">
                       {log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} → ${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}
                       <span className={cn("ml-1.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", log.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{log.source === "clock" ? <><Clock3 className="h-2.5 w-2.5" /> Clock</> : <><Hand className="h-2.5 w-2.5" /> Manual</>}</span>
@@ -219,16 +223,16 @@ export function LogsPage() {
                     <td className="p-3 text-xs font-extrabold">{Number(log.hours).toFixed(2)}</td>
                     {showPricing && <td className="whitespace-nowrap p-3 text-xs">{formatCurrency(log.va_pay)}</td>}
                     <td className="p-3"><span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-bold", STATUS_META[log.status]?.pill)}>{STATUS_META[log.status]?.label ?? log.status}</span></td>
-                    <td className="p-3">{!readOnly && <div className="flex justify-end gap-1">
-                      {log.status === "submitted" && <><Button size="sm" variant="success" title="Approve" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" title="Reject" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></>}
-                      <Button size="sm" variant="ghost" title="Edit" onClick={() => openEdit(log)}><Pencil className="h-3 w-3" /></Button>
-                      {!isAuditor && log.status !== "invoiced" && <Button size="sm" variant="ghost" title="Delete" onClick={() => { if (confirm("Delete this log?")) remove.mutate(log.id) }}><Trash2 className="h-3 w-3" /></Button>}
+                    <td className="p-3"><div className="flex justify-end gap-1">
+                      {!readOnly && log.status === "submitted" && <><Button size="sm" variant="success" title="Approve" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" title="Reject" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></>}
+                      {!readOnly && <Button size="sm" variant="ghost" title="Edit" onClick={() => openEdit(log)}><Pencil className="h-3 w-3" /></Button>}
+                      {!readOnly && !isAuditor && log.status !== "invoiced" && <Button size="sm" variant="ghost" title="Delete" onClick={() => { if (confirm("Delete this log?")) remove.mutate(log.id) }}><Trash2 className="h-3 w-3" /></Button>}
                       {(log.attachment_count ?? 0) > 0 && (
                         <Button size="sm" variant="ghost" title="View attachments" onClick={() => setViewingAtts(log.id)}>
                           <Paperclip className="h-3 w-3" />{log.attachment_count}
                         </Button>
                       )}
-                    </div>}</td>
+                    </div></td>
                   </tr>
                 ))}
               </tbody>
@@ -250,6 +254,11 @@ export function LogsPage() {
             <p className="mb-4 text-xs text-muted-foreground">{editing.va_name} · {editing.client_name} · {formatDate(editing.work_date)} · {Number(editing.hours).toFixed(2)} hrs</p>
             <div className="space-y-3">
               <div><Label>Description</Label><Input value={editForm.description_plain} onChange={(e) => setEditForm({ ...editForm, description_plain: e.target.value })} /></div>
+              {editing.notes && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  <span className="font-bold">VA comments: </span>{editing.notes}
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div><Label>Start</Label><Input type="time" value={editForm.start_time} onChange={(e) => setEditForm({ ...editForm, start_time: e.target.value })} /></div>
                 <div><Label>End</Label><Input type="time" value={editForm.end_time} onChange={(e) => setEditForm({ ...editForm, end_time: e.target.value })} /></div>
@@ -257,9 +266,9 @@ export function LogsPage() {
                 <div><Label>Status</Label><Select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}><option value="submitted">Submitted</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="invoiced">Invoiced</option></Select></div>
               </div>
               <p className="text-[11px] text-muted-foreground">Hours and pay recalculate from start/end and rate.</p>
-              {(editing.attachment_count ?? 0) > 0 && (
-                <Button variant="outline" size="sm" onClick={() => setViewingAtts(editing.id)}>View attachments ({editing.attachment_count})</Button>
-              )}
+              <Button variant="outline" size="sm" onClick={() => setViewingAtts(editing.id)}>
+                View attachments ({editing.attachment_count ?? 0})
+              </Button>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
                 <Button variant="gold" onClick={() => update.mutate({

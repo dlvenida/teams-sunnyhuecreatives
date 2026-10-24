@@ -229,8 +229,17 @@ def my_earnings(
         .order_by(WorkLog.work_date.desc())
         .all()
     )
-    va = db.query(VA).filter(VA.id == current.va_id).first()
+    va = (
+        db.query(VA)
+        .options(joinedload(VA.user))
+        .filter(VA.id == current.va_id)
+        .first()
+    )
     currency = va.currency.value if va else "USD"
+    full_name = (
+        (va.user.display_name.strip() if va and va.user and va.user.display_name else "")
+        or (va.name if va else None)
+    )
 
     def period_stats(start: date | None, end: date | None):
         subset = [l for l in logs if (start is None or l.work_date >= start) and (end is None or l.work_date <= end)]
@@ -294,7 +303,7 @@ def my_earnings(
 
     return {
         "currency": currency,
-        "va_name": va.name if va else None,
+        "va_name": full_name,
         "company_name": company_name,
         "this_week": period_stats(week_start, week_end),
         "this_month": period_stats(month_start, month_end),

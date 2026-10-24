@@ -158,18 +158,18 @@ export function PayrollDocument({
             <View style={styles.parties}>
               <View style={styles.partyCol}>
                 <Text style={styles.partyTitle}>Billed to</Text>
-                <Text style={styles.partyLabel}>Team member</Text>
-                <Text style={styles.partyValue}>{va.va_name}</Text>
-              </View>
-              <View style={styles.partyCol}>
-                <Text style={styles.partyTitle}>Paid to</Text>
                 <Text style={styles.partyLabel}>Name</Text>
-                <Text style={styles.partyValue}>{settings.principal_name}</Text>
+                <Text style={styles.partyValue}>{settings.principal_name || "Jane Laurine Venida"}</Text>
                 <Text style={styles.partyLabel}>Business</Text>
                 <Text style={styles.partyValue}>
                   {settings.company_name}
-                  {settings.location ? `\n${settings.location}` : ""}
+                  {settings.location ? `\n${settings.location}` : "\nDumaguete City, Philippines"}
                 </Text>
+              </View>
+              <View style={styles.partyCol}>
+                <Text style={styles.partyTitle}>Paid to</Text>
+                <Text style={styles.partyLabel}>Team member</Text>
+                <Text style={styles.partyValue}>{va.va_name}</Text>
               </View>
             </View>
 

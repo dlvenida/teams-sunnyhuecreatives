@@ -69,6 +69,7 @@ export const AUDITOR_NAV: NavItem[] = [
   { to: "/admin/projects", label: "Projects", icon: FolderKanban, keywords: ["project", "discussion", "meet-ups", "meetups"], section: "Workspace", color: "#06b6d4" },
   { to: "/admin/time-clock", label: "Time Clock", icon: Timer, keywords: ["clock", "live", "team time"], section: "Workspace", color: "#22c55e" },
   { to: "/admin/logs", label: "All Logs", icon: FileText, keywords: ["work logs", "entries", "review"], section: "Operations", color: "#f59e0b" },
+  { to: "/admin/payroll", label: "VA Payroll", icon: DollarSign, keywords: ["pay", "salary", "timesheet", "review"], section: "Operations", color: "#10b981" },
   { to: "/admin/user-reports", label: "Team Reports", icon: Flag, keywords: ["report", "flag", "issue", "va report", "inbox"], section: "Operations", color: "#f87ca6" },
   { to: "/admin/clients", label: "Clients", icon: Building2, keywords: ["client list", "view client"], section: "Manage", color: "#a855f7" },
   { to: "/notifications", label: "Notifications", icon: Bell, keywords: ["alerts", "comments", "updates", "unread"], section: "System", color: "#f87ca6" },

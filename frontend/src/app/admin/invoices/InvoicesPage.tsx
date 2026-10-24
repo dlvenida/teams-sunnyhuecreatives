@@ -52,6 +52,7 @@ export function InvoicesPage() {
     payment_method: "wise" as "wise" | "paypal" | "bank_transfer",
     bank_details: "",
     payment_terms_days: 7,
+    service_description: "",
   })
   const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null)
   const [detail, setDetail] = useState<Invoice | null>(null)
@@ -187,6 +188,7 @@ export function InvoicesPage() {
           package_id: form.package_id || null,
           included_hours: form.included_hours ? parseFloat(form.included_hours) : null,
           overage_rate: form.overage_rate ? parseFloat(form.overage_rate) : null,
+          service_description: form.service_description.trim() || null,
         }),
       }),
     onSuccess: (inv) => {
@@ -447,6 +449,18 @@ export function InvoicesPage() {
               <Textarea value={form.bank_details} onChange={(e) => setForm({ ...form, bank_details: e.target.value })} placeholder="Account name, bank, routing..." rows={2} />
             </div>
           )}
+          <div className="sm:col-span-2 lg:col-span-4">
+            <Label>Service description (appears on the client PDF)</Label>
+            <Textarea
+              value={form.service_description}
+              onChange={(e) => setForm({ ...form, service_description: e.target.value })}
+              placeholder={"e.g. Social Media VA Services — Melaleuca & Elite Vitality\nOctober 1–15, 2026"}
+              rows={3}
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Type exactly what the client should see. Leave blank to use the default service title + period.
+            </p>
+          </div>
         </div>
 
         {previewEnabled && (

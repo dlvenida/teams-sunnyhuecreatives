@@ -316,8 +316,30 @@ def generate_invoice(
         log.status = WorkLogStatus.invoiced
         log.invoice_id = invoice.id
 
-    # Client-facing lines: service description + period only (no timesheet / hour logs).
-    if billing_type == BillingType.hourly:
+    custom = (body.service_description or "").strip()
+
+    def _client_desc(default_title: str) -> str:
+        if not custom:
+            return f"{default_title}\n{period_label}"
+        if "\n" in custom:
+            return custom
+        return f"{custom}\n{period_label}"
+
+    # Client-facing lines: service description only (no timesheet / hour logs).
+    # When admin provides a custom description, use one line with the period total.
+    if custom:
+        db.add(
+            InvoiceLineItem(
+                invoice_id=invoice.id,
+                work_log_id=None,
+                line_date=period_end,
+                description=_client_desc("Social Media VA Services"),
+                hours=total_hours,
+                rate=rate,
+                amount=amount,
+            )
+        )
+    elif billing_type == BillingType.hourly:
         if logs:
             groups: dict[UUID | None, list[WorkLog]] = {}
             for log in logs:
@@ -336,7 +358,7 @@ def generate_invoice(
                         invoice_id=invoice.id,
                         work_log_id=None,
                         line_date=period_end,
-                        description=f"{label} · Social Media VA Services\n{period_label}",
+                        description=_client_desc(f"{label} · Social Media VA Services"),
                         hours=group_hours,
                         rate=rate,
                         amount=group_amount,
@@ -348,7 +370,7 @@ def generate_invoice(
                     invoice_id=invoice.id,
                     work_log_id=None,
                     line_date=period_end,
-                    description=f"Social Media VA Services\n{period_label}",
+                    description=_client_desc("Social Media VA Services"),
                     hours=Decimal("0"),
                     rate=rate,
                     amount=Decimal("0.00"),
@@ -361,7 +383,7 @@ def generate_invoice(
                 invoice_id=invoice.id,
                 work_log_id=None,
                 line_date=period_end,
-                description=f"Engagement package\n{period_label}",
+                description=_client_desc("Engagement package"),
                 hours=total_hours,
                 rate=rate,
                 amount=amount,
@@ -375,7 +397,7 @@ def generate_invoice(
                 invoice_id=invoice.id,
                 work_log_id=None,
                 line_date=period_end,
-                description=f"Retainer package\n{period_label}",
+                description=_client_desc("Retainer package"),
                 hours=package_hours,
                 rate=rate,
                 amount=rate,
@@ -387,7 +409,7 @@ def generate_invoice(
                     invoice_id=invoice.id,
                     work_log_id=None,
                     line_date=period_end,
-                    description=f"Additional services\n{period_label}",
+                    description=_client_desc("Additional services"),
                     hours=overage_hrs,
                     rate=overage_rate or Decimal("0"),
                     amount=overage_amt or Decimal("0"),

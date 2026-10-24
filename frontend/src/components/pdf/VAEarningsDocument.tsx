@@ -171,11 +171,6 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
         <View style={styles.parties}>
           <View style={styles.partyCol}>
             <Text style={styles.partyTitle}>Billed to</Text>
-            <Text style={styles.partyLabel}>Team member</Text>
-            <Text style={styles.partyValue}>{vaName}</Text>
-          </View>
-          <View style={styles.partyCol}>
-            <Text style={styles.partyTitle}>Paid to</Text>
             <Text style={styles.partyLabel}>Name</Text>
             <Text style={styles.partyValue}>{data.principal_name || "Jane Laurine Venida"}</Text>
             <Text style={styles.partyLabel}>Business</Text>
@@ -184,6 +179,11 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
               {"\n"}
               {data.location || "Dumaguete City, Philippines"}
             </Text>
+          </View>
+          <View style={styles.partyCol}>
+            <Text style={styles.partyTitle}>Paid to</Text>
+            <Text style={styles.partyLabel}>Team member</Text>
+            <Text style={styles.partyValue}>{vaName}</Text>
           </View>
         </View>
 

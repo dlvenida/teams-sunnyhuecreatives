@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_admin_or_auditor, get_current_user
-from app.models import UserRole, WorkLog, WorkLogAttachment, WorkLogStatus
+from app.models import UserRole, VA, WorkLog, WorkLogAttachment, WorkLogStatus
 from app.schemas import WorkLogAttachmentResponse, WorkLogResponse, WorkLogUpdate
 from app.services import storage
 from app.services.calculations import calculate_hours, calculate_pay
@@ -25,12 +25,19 @@ router = APIRouter(prefix="/work-logs", tags=["work-logs"])
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 
+def _va_full_name(va: VA | None) -> str | None:
+    if not va:
+        return None
+    display = (va.user.display_name.strip() if getattr(va, "user", None) and va.user.display_name else "")
+    return display or va.name
+
+
 def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
     return WorkLogResponse(
         id=log.id,
         work_date=log.work_date,
         va_id=log.va_id,
-        va_name=log.va.name if log.va else None,
+        va_name=_va_full_name(log.va),
         client_id=log.client_id,
         client_name=log.client.name if log.client else None,
         sub_client_id=log.sub_client_id,
@@ -78,7 +85,7 @@ def _query_logs(
     q = (
         db.query(WorkLog)
         .options(
-            joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client),
+            joinedload(WorkLog.va).joinedload(VA.user), joinedload(WorkLog.client), joinedload(WorkLog.sub_client),
             joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments),
         )
         .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
@@ -127,7 +134,7 @@ def _get_log(db: Session, log_id: UUID) -> WorkLog:
     log = (
         db.query(WorkLog)
         .options(
-            joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client),
+            joinedload(WorkLog.va).joinedload(VA.user), joinedload(WorkLog.client), joinedload(WorkLog.sub_client),
             joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments),
         )
         .filter(WorkLog.id == log_id)

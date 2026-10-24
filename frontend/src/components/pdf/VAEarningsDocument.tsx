@@ -1,5 +1,5 @@
 import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer"
-import { formatCurrency, formatInvoiceDate, formatInvoiceTotal } from "@/lib/utils"
+import { formatCurrency, formatInvoiceDate, formatPdfCurrency } from "@/lib/utils"
 import { PDF_FONT } from "@/lib/pdfFonts"
 
 const COLORS = {
@@ -45,7 +45,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 22,
   },
-  bannerAmount: { fontSize: 22, fontFamily: "Times-Bold", color: COLORS.white },
+  bannerAmount: { fontSize: 24, fontFamily: PDF_FONT, fontWeight: 700, color: COLORS.white },
   bannerDue: { fontSize: 11, color: COLORS.white, marginTop: 2 },
   bannerPeriodLabel: { fontSize: 9, color: "rgba(255,255,255,0.85)", textAlign: "right" },
   bannerPeriod: { fontSize: 12, color: COLORS.white, marginTop: 3, textAlign: "right" },
@@ -62,11 +62,11 @@ const styles = StyleSheet.create({
   tableRow: { flexDirection: "row", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.rowBorder, alignItems: "flex-start" },
   rowTitle: { fontSize: 11, color: COLORS.ink, marginBottom: 3 },
   rowSub: { fontSize: 8, color: COLORS.muted, lineHeight: 1.35 },
-  rowRate: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
-  rowAmt: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  rowRate: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
+  rowAmt: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
   totalBlock: { alignItems: "flex-end", marginTop: 18, marginBottom: 20 },
   totalLabel: { fontSize: 8, color: COLORS.muted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 },
-  totalValue: { fontFamily: "Times-Bold", fontSize: 22, color: COLORS.ink },
+  totalValue: { fontFamily: PDF_FONT, fontWeight: 700, fontSize: 22, color: COLORS.ink },
   payBox: {
     backgroundColor: COLORS.payBg,
     borderLeftWidth: 3,
@@ -159,8 +159,10 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
 
         <View style={styles.banner}>
           <View>
-            <Text style={styles.bannerAmount}>{formatCurrency(total, currency)}</Text>
-            <Text style={styles.bannerDue}>earned this period</Text>
+            <Text style={styles.bannerAmount}>{formatPdfCurrency(total, currency)}</Text>
+            <Text style={styles.bannerDue}>
+              {currency === "PHP" ? "you receive this period" : "earned this period"}
+            </Text>
           </View>
           <View>
             <Text style={styles.bannerPeriodLabel}>Service period</Text>
@@ -209,8 +211,12 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
         )}
 
         <View style={styles.totalBlock}>
-          <Text style={styles.totalLabel}>Total due</Text>
-          <Text style={styles.totalValue}>{formatInvoiceTotal(total).replace("USD", currency)}</Text>
+          <Text style={styles.totalLabel}>{currency === "PHP" ? "Total you receive" : "Total due"}</Text>
+          <Text style={styles.totalValue}>
+            {currency === "PHP"
+              ? formatPdfCurrency(total, "PHP")
+              : `${formatPdfCurrency(total, "USD")} USD`}
+          </Text>
         </View>
 
         <View style={styles.payBox}>

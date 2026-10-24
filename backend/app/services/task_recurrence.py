@@ -1,11 +1,18 @@
-"""Compute next due dates and spawn the next task in a recurring series."""
+"""Compute next due dates and spawn the next task in a recurring series.
+
+Rules:
+- Next occurrence is created when the current task is marked Done.
+- If the current open task is overdue, we do NOT spawn a duplicate — wait until Done.
+- Spawning advances the due date until it is today or in the future (late completions).
+- Cycle continues until recurrence is set to none or recurrence_until is passed.
+"""
 from __future__ import annotations
 
 import calendar
 import uuid
 from datetime import date, timedelta
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models import Task, TaskRecurrence, TaskStatus
@@ -85,30 +92,85 @@ def next_due_date(
     return None
 
 
+def next_future_due_date(
+    from_date: date,
+    recurrence: TaskRecurrence | str,
+    *,
+    interval: int = 1,
+    unit: str | None = None,
+    weekdays: list[int] | None = None,
+    until: date | None = None,
+    not_before: date | None = None,
+) -> date | None:
+    """Advance the schedule until the due date is on/after `not_before` (default: today)."""
+    floor = not_before or date.today()
+    cursor = from_date
+    nxt = next_due_date(
+        cursor, recurrence, interval=interval, unit=unit, weekdays=weekdays,
+    )
+    guard = 0
+    while nxt and nxt < floor and guard < 500:
+        cursor = nxt
+        nxt = next_due_date(
+            cursor, recurrence, interval=interval, unit=unit, weekdays=weekdays,
+        )
+        guard += 1
+    if nxt and until and nxt > until:
+        return None
+    return nxt
+
+
+def _series_id(task: Task):
+    return task.series_id or task.id
+
+
+def _has_open_successor(db: Session, series, after_task_id) -> bool:
+    """True if an open (not done) task already exists in this series after this one."""
+    q = db.query(Task).filter(
+        or_(Task.series_id == series, Task.id == series),
+        Task.status != TaskStatus.done,
+        Task.id != after_task_id,
+    )
+    return q.first() is not None
+
+
 def spawn_next_occurrence(db: Session, done_task: Task) -> Task | None:
-    """If `done_task` is recurring, create the next open occurrence and return it."""
+    """If `done_task` is recurring and Done, create the next open occurrence and return it.
+
+    Does nothing if recurrence is off, end date passed, or an open successor already exists
+    (prevents duplicates while an overdue copy is still unfinished).
+    """
     if not done_task.recurrence or done_task.recurrence == TaskRecurrence.none:
+        return None
+    if done_task.status != TaskStatus.done:
+        # Never auto-spawn a twin while the current task is still open / overdue
+        return None
+
+    series = _series_id(done_task)
+    if not done_task.series_id:
+        done_task.series_id = series
+
+    if _has_open_successor(db, series, done_task.id):
         return None
 
     base = done_task.due_date or date.today()
-    nxt = next_due_date(
+    nxt = next_future_due_date(
         base,
         done_task.recurrence,
         interval=done_task.recurrence_interval or 1,
         unit=done_task.recurrence_unit,
         weekdays=done_task.recurrence_weekdays,
+        until=done_task.recurrence_until,
+        not_before=date.today(),
     )
     if not nxt:
         return None
-    if done_task.recurrence_until and nxt > done_task.recurrence_until:
-        return None
 
     # Avoid duplicate open tasks already spawned for this due date in the series
-    series = done_task.series_id or done_task.id
     existing = (
         db.query(Task)
         .filter(
-            Task.series_id == series,
+            or_(Task.series_id == series, Task.id == series),
             Task.due_date == nxt,
             Task.status != TaskStatus.done,
         )
@@ -119,7 +181,7 @@ def spawn_next_occurrence(db: Session, done_task: Task) -> Task | None:
 
     span_days = 0
     if done_task.start_date and done_task.due_date:
-        span_days = (done_task.due_date - done_task.start_date).days
+        span_days = max(0, (done_task.due_date - done_task.start_date).days)
     next_start = nxt - timedelta(days=span_days) if span_days > 0 else None
 
     max_pos = db.query(func.coalesce(func.max(Task.position), 0)).filter(Task.status == TaskStatus.todo).scalar() or 0
@@ -148,11 +210,58 @@ def spawn_next_occurrence(db: Session, done_task: Task) -> Task | None:
         series_id=series,
         parent_task_id=done_task.id,
     )
-    # Ensure the completed task carries the series id for future lookups
-    if not done_task.series_id:
-        done_task.series_id = series
     db.add(child)
     return child
+
+
+def recover_missing_occurrences(db: Session, limit: int = 50) -> list[Task]:
+    """Create next tasks for Done recurring parents that never got a successor (recovery)."""
+    done_recurring = (
+        db.query(Task)
+        .filter(
+            Task.status == TaskStatus.done,
+            Task.recurrence != TaskRecurrence.none,
+            Task.recurrence.isnot(None),
+        )
+        .order_by(Task.completed_at.desc().nullslast())
+        .limit(200)
+        .all()
+    )
+    spawned: list[Task] = []
+    seen_series: set = set()
+    for t in done_recurring:
+        sid = _series_id(t)
+        if sid in seen_series:
+            continue
+        # Only recover from the latest done task in the series
+        if _has_open_successor(db, sid, t.id):
+            seen_series.add(sid)
+            continue
+        child = spawn_next_occurrence(db, t)
+        seen_series.add(sid)
+        if child:
+            spawned.append(child)
+            if len(spawned) >= limit:
+                break
+    return spawned
+
+
+def overdue_recurring_tasks(db: Session, limit: int = 20) -> list[Task]:
+    """Open repeating tasks past their deadline — warn admin; do not auto-spawn next."""
+    today = date.today()
+    return (
+        db.query(Task)
+        .filter(
+            Task.status != TaskStatus.done,
+            Task.recurrence != TaskRecurrence.none,
+            Task.recurrence.isnot(None),
+            Task.due_date.isnot(None),
+            Task.due_date < today,
+        )
+        .order_by(Task.due_date.asc())
+        .limit(limit)
+        .all()
+    )
 
 
 def recurrence_label(

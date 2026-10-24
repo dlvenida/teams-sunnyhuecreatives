@@ -252,9 +252,13 @@ def run_action(body: ActionRequest, actor: Annotated[str, Depends(require_agent)
         if body.action in ("move_task", "assign_task"):
             task = db.query(Task).filter(Task.id == UUID(p["task_id"])).first()
             if not task: raise HTTPException(404, "Task not found")
+            old_status = task.status
             if "status" in p: task.status = TaskStatus(p["status"])
             if "assignee_va_id" in p: task.assignee_va_id = UUID(p["assignee_va_id"]) if p["assignee_va_id"] else None
             if task.status == TaskStatus.done and not task.completed_at: task.completed_at = datetime.now(timezone.utc)
+            if task.status == TaskStatus.done and old_status != TaskStatus.done:
+                from app.services.task_recurrence import spawn_next_occurrence
+                spawn_next_occurrence(db, task)
             db.commit()
             _audit(db, actor, body.action, "task", str(task.id), p, task.status.value)
             return {"ok": True, "task_id": str(task.id), "status": task.status.value}
@@ -279,6 +283,7 @@ def run_action(body: ActionRequest, actor: Annotated[str, Depends(require_agent)
             if not task: raise HTTPException(404, "Task not found")
             for field in ("title", "description"):
                 if field in p: setattr(task, field, p[field])
+            old_status = task.status
             if "status" in p:
                 task.status = TaskStatus(p["status"])
                 if task.status == TaskStatus.done and not task.completed_at: task.completed_at = datetime.now(timezone.utc)
@@ -291,6 +296,9 @@ def run_action(body: ActionRequest, actor: Annotated[str, Depends(require_agent)
             if "estimated_hours" in p:
                 from decimal import Decimal as _D
                 task.estimated_hours = _D(str(p["estimated_hours"])) if p["estimated_hours"] is not None else None
+            if task.status == TaskStatus.done and old_status != TaskStatus.done:
+                from app.services.task_recurrence import spawn_next_occurrence
+                spawn_next_occurrence(db, task)
             db.commit()
             _audit(db, actor, body.action, "task", str(task.id), p, task.title)
             return {"ok": True, "task_id": str(task.id), "title": task.title, "status": task.status.value}

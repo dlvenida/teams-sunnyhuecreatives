@@ -13,7 +13,11 @@ from app.models import Client, CommentAttachment, CommentReaction, Project, SubC
 from app.schemas import LinkAttachmentCreate, ReactionToggle, TaskCommentCreate, TaskCommentResponse, TaskCommentUpdate, TaskCreate, TaskResponse, TaskUpdate
 from app.services import comments as comment_svc
 from app.services.notifications import notify_task_assigned, notify_task_comment, notify_task_updated, push
-from app.services.task_recurrence import recurrence_label, spawn_next_occurrence
+from app.services.task_recurrence import (
+    recover_missing_occurrences,
+    recurrence_label,
+    spawn_next_occurrence,
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -111,6 +115,30 @@ def _validate_links(db: Session, client_id, sub_client_id, project_id, assignee_
         raise HTTPException(404, "Assignee VA not found")
 
 
+def _spawn_and_notify(db: Session, done_task: Task) -> Task | None:
+    """Create the next repeating task and notify the assignee."""
+    child = spawn_next_occurrence(db, done_task)
+    if not child:
+        return None
+    db.flush()
+    child_full = _base_query(db).filter(Task.id == child.id).first() or child
+    if child_full.assignee_va_id:
+        try:
+            notify_task_assigned(db, child_full, first_in_project=False)
+        except Exception:
+            pass
+    if done_task.created_by:
+        push(
+            db,
+            [done_task.created_by],
+            "task",
+            f"🔁 Next repeat created: {child_full.title}",
+            f"Due {child_full.due_date} · same client, assignee, and schedule",
+            f"/tasks?task={child_full.id}",
+        )
+    return child_full
+
+
 @router.get("", response_model=list[TaskResponse])
 def list_tasks(
     current: Annotated[CurrentUser, Depends(get_current_user)],
@@ -120,6 +148,25 @@ def list_tasks(
     search: str | None = None, due_from: date | None = None, due_to: date | None = None, overdue: bool = False,
     mine: bool = False,
 ):
+    # Recover Done repeating tasks that never got a next copy
+    try:
+        spawned = recover_missing_occurrences(db)
+        if spawned:
+            db.commit()
+            for child in spawned:
+                if child.assignee_va_id:
+                    full = _base_query(db).filter(Task.id == child.id).first()
+                    if full:
+                        try:
+                            notify_task_assigned(db, full, first_in_project=False)
+                        except Exception:
+                            pass
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
     q = _visible(_base_query(db), current)
     if mine and current.va_id: q = q.filter(Task.assignee_va_id == current.va_id)
     if client_id: q = q.filter(Task.client_id == client_id)
@@ -169,7 +216,7 @@ def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_cu
     if t.recurrence and t.recurrence != TaskRecurrence.none and not t.series_id:
         t.series_id = t.id
     if t.status == TaskStatus.done:
-        spawn_next_occurrence(db, t)
+        _spawn_and_notify(db, t)
     db.commit()
     db.refresh(t)
     t = _base_query(db).filter(Task.id == t.id).first()
@@ -212,15 +259,26 @@ def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser,
     if t.recurrence and t.recurrence != TaskRecurrence.none and not t.series_id:
         t.series_id = t.id
     just_completed = t.status == TaskStatus.done and old_status != TaskStatus.done
+    spawned = None
     if just_completed:
         t.completed_at = datetime.now(timezone.utc)
-        spawn_next_occurrence(db, t)
+        spawned = _spawn_and_notify(db, t)
     if t.status != TaskStatus.done:
         t.completed_at = None
     db.commit()
     db.refresh(t)
     t = _base_query(db).filter(Task.id == t.id).first()
     actor = current.user.display_name or current.user.email
+    if spawned and just_completed:
+        # Surface a friendly update so the VA knows the next cycle is on the board
+        try:
+            notify_task_updated(
+                db, t,
+                f"Marked done — next repeat is due {spawned.due_date}",
+                actor,
+            )
+        except Exception:
+            pass
     if t.assignee_va_id and t.assignee_va_id != old_assignee:
         first_in_project = False
         if t.project_id:

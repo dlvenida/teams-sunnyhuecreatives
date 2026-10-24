@@ -77,6 +77,26 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
     attention, prepare = [], []
     for t in overdue[:5]:
         attention.append({"type": "overdue_task", "severity": "high", "title": f"Overdue: {t.title}", "detail": f"{t.client.name if t.client else ''} · due {t.due_date}", "link": "/admin/tasks" if is_admin else "/va/tasks"})
+    # Repeating tasks that missed their deadline — next copy waits until Done
+    from app.services.task_recurrence import recurrence_label as _recurrence_label
+    overdue_repeating = [
+        t for t in overdue
+        if t.recurrence and getattr(t.recurrence, "value", t.recurrence) not in (None, "none")
+    ]
+    for t in overdue_repeating[:5]:
+        rlabel = _recurrence_label(
+            t.recurrence,
+            interval=t.recurrence_interval or 1,
+            unit=t.recurrence_unit,
+            weekdays=t.recurrence_weekdays,
+        ) or "repeating"
+        attention.append({
+            "type": "overdue_repeat",
+            "severity": "high",
+            "title": f"Repeating task not completed on time: {t.title}",
+            "detail": f"{t.client.name if t.client else ''} · due {t.due_date} · {rlabel} — finish this before the next one is created",
+            "link": "/admin/tasks" if is_admin else "/va/tasks",
+        })
     for t in blocked[:5]:
         attention.append({"type": "blocked_task", "severity": "high", "title": f"Blocked: {t.title}", "detail": t.client.name if t.client else "", "link": "/admin/tasks" if is_admin else "/va/tasks"})
     for t in unassigned[:5]:

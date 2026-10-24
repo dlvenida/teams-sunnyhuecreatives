@@ -262,6 +262,9 @@ export function TasksPage() {
               </div>
               <div className="rounded-xl border bg-muted/20 p-3 space-y-3">
                 <div className="flex items-center gap-1.5 text-xs font-semibold"><Repeat className="h-3.5 w-3.5 text-primary" /> Repeating task</div>
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  When you mark this task <b>Done</b>, Sunny Hue automatically creates the next copy with the same name, client, project, assignee, priority, hours, and repeat setting — only the deadline moves forward. It keeps going until you set Repeat to “Does not repeat.” If this task is overdue, the next copy waits until you finish it.
+                </p>
                 <div><Label>Repeat</Label>
                   <Select value={form.recurrence} onChange={e => setForm({ ...form, recurrence: e.target.value as TaskRecurrence })}>
                     {RECURRENCE_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
@@ -300,9 +303,9 @@ export function TasksPage() {
                 )}
                 {form.recurrence !== "none" && (
                   <div>
-                    <Label>Repeat until (optional)</Label>
+                    <Label>Stop repeating after (optional)</Label>
                     <Input type="date" value={form.recurrence_until} onChange={e => setForm({ ...form, recurrence_until: e.target.value })} />
-                    <p className="mt-1 text-[11px] text-muted-foreground">When marked Done, the next occurrence is created automatically with the next deadline.</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">Leave blank to keep auto-creating forever. Set a date to stop after that deadline.</p>
                   </div>
                 )}
               </div>
@@ -345,7 +348,7 @@ export function TasksPage() {
                  ["Assignee", commentTask.assignee_name || "Unassigned"],
                  ["Status / Priority", `${commentTask.status.replace("_", " ")} · ${commentTask.priority}`],
                  ["Deadline", commentTask.due_date ? formatDate(commentTask.due_date) : "No deadline"],
-                 ["Repeat", commentTask.recurrence_label || "Does not repeat"],
+                 ["Repeat", commentTask.recurrence_label ? `${commentTask.recurrence_label} · next copy auto-created when Done` : "Does not repeat"],
                  ["Hours", `${commentTask.logged_hours}/${commentTask.estimated_hours || "—"}h`]
               ].map(([k, v]) => <div key={k} className="rounded-lg border bg-muted/20 p-2"><div className="text-muted-foreground">{k}</div><div className="mt-0.5 font-medium capitalize">{v}</div></div>)}
             </div>
@@ -385,6 +388,11 @@ function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onCo
       <div className="mt-2 flex flex-wrap gap-1.5">
         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", PRIORITY_META[t.priority].className)}>{PRIORITY_META[t.priority].label}</span>
         {t.recurrence_label && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700"><Repeat className="h-2.5 w-2.5" />{t.recurrence_label}</span>}
+        {isOverdue(t) && t.recurrence_label && (
+          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800" title="Finish this task before the next repeat is created">
+            Repeat waiting
+          </span>
+        )}
         {isOverdue(t) && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700">Overdue</span>}
         {isDueToday(t) && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">Due today</span>}
         {(t.tags || []).map(tag => <span key={tag} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-600">#{tag}</span>)}

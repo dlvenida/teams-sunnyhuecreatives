@@ -48,7 +48,12 @@ def list_projects(
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
-def create_project(body: ProjectCreate, current: Annotated[CurrentUser, Depends(require_admin)], db: Annotated[Session, Depends(get_db)]):
+def create_project(body: ProjectCreate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    """Admin or VA can create a project (name + description + client). Auditor is view-only."""
+    if current.role == UserRole.auditor:
+        raise HTTPException(403, "Auditors can view projects but cannot create them")
+    if current.role not in (UserRole.admin, UserRole.va):
+        raise HTTPException(403, "Only administrators and VAs can create projects")
     if not db.query(Client).filter(Client.id == body.client_id).first():
         raise HTTPException(404, "Client not found")
     if body.sub_client_id and not db.query(SubClient).filter(SubClient.id == body.sub_client_id, SubClient.client_id == body.client_id).first():

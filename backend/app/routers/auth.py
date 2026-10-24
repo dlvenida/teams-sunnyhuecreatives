@@ -14,7 +14,7 @@ from app.auth import (
     verify_password,
 )
 from app.database import get_db
-from app.deps import CurrentUser, get_current_user, require_admin
+from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
 from app.models import ActivityLog, Project, Task, TaskStatus, TimeClockEntry, User, UserRole, VA, WorkLog, WorkLogStatus
 from app.schemas import (
     AppUserResponse,
@@ -226,7 +226,7 @@ def _app_user(db: Session, u: User) -> AppUserResponse:
 
 @router.get("/users", response_model=list[AppUserResponse])
 def list_app_users(
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
     """All app users across roles: Administrator, Auditor, Virtual Assistant."""
@@ -237,17 +237,18 @@ def list_app_users(
 @router.get("/users/{user_id}/detail")
 def user_detail(
     user_id: UUID,
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """Admin-only 360° view of one user: profile, assigned clients/tasks/projects,
-    timeline, time logs and activity history. Works for VA, auditor and admin."""
+    """360° view of one user: profile, assigned clients/tasks/projects,
+    timeline, time logs and activity history. Money fields are hidden for auditors."""
     from decimal import Decimal
 
     from app.routers.tasks import _serialize as serialize_task
     from app.routers.timeclock import _serialize as serialize_clock
     from app.routers.work_logs import _serialize_log
 
+    redact = current.role == UserRole.auditor
     u = db.query(User).filter(User.id == user_id).first()
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -284,7 +285,8 @@ def user_detail(
             "is_active": bool(client_obj.is_active) if client_obj else True,
             "open_tasks": len([t for t in c_tasks if t.status != TaskStatus.done]),
             "done_tasks": len([t for t in c_tasks if t.status == TaskStatus.done]),
-            "total_tasks": len(c_tasks), "hours": str(_hours(c_logs)), "va_pay": str(_pay(c_logs)),
+            "total_tasks": len(c_tasks), "hours": str(_hours(c_logs)),
+            "va_pay": None if redact else str(_pay(c_logs)),
             "logs": len(all_c_logs),
             "last_log_date": str(max((l.work_date for l in all_c_logs), default=None)) if all_c_logs else None,
         })
@@ -336,18 +338,18 @@ def user_detail(
         "profile": {
             "user_id": str(u.id), "va_id": str(va.id) if va else None,
             "name": name, "email": u.email, "role": u.role.value, "is_active": bool(u.is_active),
-            "currency": va.currency.value if va and hasattr(va.currency, "value") else (str(va.currency) if va else None),
+            "currency": None if redact else (va.currency.value if va and hasattr(va.currency, "value") else (str(va.currency) if va else None)),
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "display_name": u.display_name, "phone": u.phone, "address": u.address,
             "job_title": u.job_title, "bio": u.bio, "timezone": u.timezone, "skills": u.skills or [],
             "hire_date": str(u.hire_date) if u.hire_date else None,
             "status_message": u.status_message, "linkedin_url": u.linkedin_url, "portfolio_url": u.portfolio_url,
-            "wise_email": u.wise_email, "has_profile_photo": bool(u.profile_photo_path),
+            "wise_email": None if redact else u.wise_email, "has_profile_photo": bool(u.profile_photo_path),
             "reviewer_name": (va.reviewer.display_name or va.reviewer.email) if va and getattr(va, "reviewer", None) else None,
             "reviewing": reviewing,
         },
         "stats": {
-            "total_hours": str(_hours(billable)), "total_va_pay": str(_pay(billable)),
+            "total_hours": str(_hours(billable)), "total_va_pay": None if redact else str(_pay(billable)),
             "hours_this_week": str(_hours([l for l in billable if l.work_date >= week_start])),
             "pending_hours": str(_hours([l for l in logs if l.status == WorkLogStatus.submitted])),
             "logs_count": len(logs), "pending_count": len([l for l in logs if l.status == WorkLogStatus.submitted]),
@@ -362,7 +364,7 @@ def user_detail(
         "assigned_clients": assigned_clients,
         "assigned_projects": assigned_projects,
         "tasks": [serialize_task(db, t).model_dump(mode="json") for t in tasks],
-        "time_logs": [_serialize_log(l).model_dump(mode="json") for l in logs[:100]],
+        "time_logs": [_serialize_log(l, redact_money=redact).model_dump(mode="json") for l in logs[:100]],
         "clock_history": [serialize_clock(c).model_dump(mode="json") for c in clocks[:100]],
         "timeline": timeline[:80],
         "history": [{"id": str(h.id), "action": h.action, "description": h.description, "path": h.path, "method": h.method, "created_at": h.created_at.isoformat() if h.created_at else None} for h in history],

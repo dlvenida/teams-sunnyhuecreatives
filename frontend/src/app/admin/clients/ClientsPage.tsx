@@ -46,7 +46,8 @@ export function ClientsPage() {
   const authUser = getAuthUser()
   const isAuditor = authUser?.role === "auditor"
   const isAdmin = authUser?.role === "admin"
-  const readOnly = isAuditor // auditor cannot edit/archive/delete; can propose new clients
+  const canEditTeamRoles = isAdmin || isAuditor
+  const readOnly = isAuditor // auditor cannot edit/archive/delete clients; can propose + edit VA roles
   const qc = useQueryClient()
   const { showPricing } = useDisplaySettings()
   const [tab, setTab] = useState<Tab>("clients")
@@ -76,7 +77,7 @@ export function ClientsPage() {
   const { data: allVas = [] } = useQuery({
     queryKey: ["vas"],
     queryFn: () => apiFetch<VA[]>("/vas"),
-    enabled: isAdmin && !!viewingId,
+    enabled: canEditTeamRoles && !!viewingId,
   })
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ["client-detail", viewingId],
@@ -638,7 +639,7 @@ export function ClientsPage() {
                               <th className="p-2.5 font-medium">Role for this client</th>
                               <th className="p-2.5 font-medium">Open tasks</th>
                               <th className="p-2.5 font-medium">Hours</th>
-                              {isAdmin && <th className="p-2.5 font-medium text-right">Actions</th>}
+                              {canEditTeamRoles && <th className="p-2.5 font-medium text-right">Actions</th>}
                             </tr>
                           </thead>
                           <tbody>
@@ -679,7 +680,7 @@ export function ClientsPage() {
                                 </td>
                                 <td className="p-2.5">{m.open_tasks ?? 0}</td>
                                 <td className="p-2.5">{m.hours != null ? `${Number(m.hours).toFixed(1)}` : "—"}</td>
-                                {isAdmin && (
+                                {canEditTeamRoles && (
                                   <td className="p-2.5 text-right">
                                     {editingTeamRole?.va_id !== m.va_id && (
                                       <div className="flex justify-end gap-1">
@@ -706,7 +707,7 @@ export function ClientsPage() {
                         </table>
                       </div>
                     )}
-                    {isAdmin && (
+                    {canEditTeamRoles && (
                       <div className="mt-3 grid gap-2 rounded-xl border border-dashed border-primary/25 bg-primary/[0.03] p-3 sm:grid-cols-[1fr_1fr_auto]">
                         <div>
                           <Label className="text-[10px]">Add VA</Label>
@@ -753,7 +754,7 @@ export function ClientsPage() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {isAdmin && <Link to={`/admin/reports`}><Button size="sm" variant="gold">Open Report</Button></Link>}
+                    <Link to={`/admin/reports`}><Button size="sm" variant="gold">Open Report</Button></Link>
                     <Link to={`/admin/tasks?client=${detail.client.id}`}><Button size="sm" variant="outline">View in Task Board</Button></Link>
                     {isAdmin && <Link to={`/admin/invoices?client=${detail.client.id}`}><Button size="sm" variant="outline">Create Invoice</Button></Link>}
                   </div>

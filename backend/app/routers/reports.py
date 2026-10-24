@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, require_admin
-from app.models import Client, Invoice, Task, TaskStatus, WorkLog, WorkLogStatus
+from app.deps import CurrentUser, require_admin_or_auditor
+from app.models import Client, Invoice, Task, TaskStatus, UserRole, WorkLog, WorkLogStatus
 from app.schemas import (
     ReportBreakdown,
     ReportClientSummary,
@@ -84,7 +84,7 @@ def _client_line_amount(client: Client, hours: Decimal) -> tuple[Decimal | None,
 
 @router.get("/clients", response_model=ReportClientsResponse)
 def report_clients(
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
     year: int | None = None,
     month: int | None = None,
@@ -93,8 +93,9 @@ def report_clients(
     date_to: date | None = None,
     show_rate: bool = False,
 ):
-    """Every client with their report stats for the period — powers the client list."""
-    show_rate = show_rate and not pricing_hidden(db)
+    """Every client with their report stats for the period — powers the client list.
+    Auditors always get hours-only (no rates/amounts)."""
+    show_rate = show_rate and not pricing_hidden(db) and current.role != UserRole.auditor
     period_start, period_end, period_label = _resolve_period(
         year=year, month=month, cutoff=cutoff, date_from=date_from, date_to=date_to
     )
@@ -175,10 +176,10 @@ def report_clients(
 @router.post("/generate", response_model=ReportResponse)
 def generate_report(
     body: ReportRequest,
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    show_rate = body.show_rate and not pricing_hidden(db)
+    show_rate = body.show_rate and not pricing_hidden(db) and current.role != UserRole.auditor
     client = db.query(Client).filter(Client.id == body.client_id).first()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")

@@ -1,11 +1,12 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
-import { apiFetch, homeForRole, startImpersonation } from "@/lib/api"
+import { apiFetch, getAuthUser, homeForRole, startImpersonation } from "@/lib/api"
 import type { UserDetail } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn, formatCurrency, formatDate } from "@/lib/utils"
+import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { TASK_STATUSES, PRIORITY_META } from "@/components/tasks/task-utils"
 import { Building2, Clock, Eye, FolderKanban, History, KanbanSquare, Loader2, UserCircle, X } from "lucide-react"
 
@@ -13,6 +14,8 @@ type Tab = "profile" | "clients" | "tasks" | "projects" | "timeline" | "logs" | 
 const TABS: [Tab, string][] = [["profile", "Profile"], ["clients", "Assigned Clients"], ["tasks", "Assigned Tasks"], ["projects", "Assigned Projects"], ["timeline", "Timeline"], ["logs", "Time Logs"], ["history", "History"]]
 
 export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose: () => void }) {
+  const { showPricing } = useDisplaySettings()
+  const isAdmin = getAuthUser()?.role === "admin"
   const [tab, setTab] = useState<Tab>("profile")
   const [switchError, setSwitchError] = useState("")
   const [switching, setSwitching] = useState(false)
@@ -55,7 +58,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                 </div>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {p.role !== "admin" && (
+                {isAdmin && p.role !== "admin" && (
                   <Button size="sm" variant="gold" disabled={switching} onClick={() => void switchTo()}>
                     <Eye className="h-3.5 w-3.5" /> {switching ? "Switching…" : "Switch to their view"}
                   </Button>
@@ -76,7 +79,12 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
           <div className="space-y-4 px-5 py-4">
             {tab === "profile" && (<>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {[["Total Hours", `${s.total_hours} hrs`, `${s.hours_this_week} hrs this week`], ["VA Earned", formatCurrency(s.total_va_pay, (p.currency as "PHP" | "USD") || "USD"), `${s.pending_hours} hrs pending`], ["Tasks", `${s.tasks_open} open`, `${s.tasks_done} done · ${s.tasks_overdue} overdue`], ["Clock", `${s.clock_hours} hrs`, `${s.clock_sessions} sessions`]].map(([t, v, sub]) => (
+                {[
+                  ["Total Hours", `${s.total_hours} hrs`, `${s.hours_this_week} hrs this week`],
+                  ...(showPricing ? [["VA Earned", formatCurrency(s.total_va_pay, (p.currency as "PHP" | "USD") || "USD"), `${s.pending_hours} hrs pending`] as const] : [["Pending hours", `${s.pending_hours} hrs`, "Awaiting approval"] as const]),
+                  ["Tasks", `${s.tasks_open} open`, `${s.tasks_done} done · ${s.tasks_overdue} overdue`],
+                  ["Clock", `${s.clock_hours} hrs`, `${s.clock_sessions} sessions`],
+                ].map(([t, v, sub]) => (
                   <div key={t} className="rounded-2xl border p-3"><p className="text-[11px] font-semibold text-muted-foreground">{t}</p><p className="mt-1 text-lg font-extrabold leading-none">{v}</p><p className="mt-1 text-[11px] text-muted-foreground">{sub}</p></div>
                 ))}
               </div>
@@ -84,7 +92,14 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                 <div className="rounded-2xl border p-4 text-xs">
                   <p className="mb-2 flex items-center gap-1.5 font-bold"><UserCircle className="h-4 w-4 text-primary" /> Profile</p>
                   <dl className="space-y-1.5">
-                    {[["Name", p.name], ["Email", p.email], ["Role", p.role], ["Currency", p.currency || "—"], ["Job title", p.job_title || "—"], ["Phone", p.phone || "—"], ["Timezone", p.timezone || "—"], ["Hire date", p.hire_date ? formatDate(p.hire_date) : "—"], ["Status", p.status_message || "—"], ["Reviewer", p.reviewer_name || "—"], ["Wise", p.wise_email || "—"]].map(([k, v]) => (
+                    {([
+                      ["Name", p.name], ["Email", p.email], ["Role", p.role],
+                      ...(showPricing ? [["Currency", p.currency || "—"] as const] : []),
+                      ["Job title", p.job_title || "—"], ["Phone", p.phone || "—"], ["Timezone", p.timezone || "—"],
+                      ["Hire date", p.hire_date ? formatDate(p.hire_date) : "—"], ["Status", p.status_message || "—"],
+                      ["Reviewer", p.reviewer_name || "—"],
+                      ...(showPricing ? [["Wise", p.wise_email || "—"] as const] : []),
+                    ]).map(([k, v]) => (
                       <div key={k} className="flex justify-between gap-3"><dt className="text-muted-foreground">{k}</dt><dd className="text-right font-semibold capitalize-first">{v}</dd></div>
                     ))}
                   </dl>
@@ -110,7 +125,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                 {detail.assigned_clients.map((c) => (
                   <div key={c.client_id} className="rounded-xl border p-3 text-xs">
                     <p className="flex items-center gap-1.5 font-bold"><Building2 className="h-3.5 w-3.5 text-primary" /> {c.name} {!c.is_active && <span className="text-muted-foreground">(archived)</span>}</p>
-                    <p className="mt-1 text-muted-foreground">{c.hours} hrs · {formatCurrency(c.va_pay, (p.currency as "PHP" | "USD") || "USD")} earned · {c.open_tasks} open / {c.done_tasks} done tasks · {c.logs} logs{c.last_log_date ? ` · last ${formatDate(c.last_log_date)}` : ""}</p>
+                    <p className="mt-1 text-muted-foreground">{c.hours} hrs{showPricing && c.va_pay != null ? ` · ${formatCurrency(c.va_pay, (p.currency as "PHP" | "USD") || "USD")} earned` : ""} · {c.open_tasks} open / {c.done_tasks} done tasks · {c.logs} logs{c.last_log_date ? ` · last ${formatDate(c.last_log_date)}` : ""}</p>
                   </div>
                 ))}
                 {detail.assigned_clients.length === 0 && <p className="text-xs text-muted-foreground">No assigned clients yet — assignment comes from tasks and time logs.</p>}
@@ -159,9 +174,9 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
             {tab === "logs" && (<>
               <div className="overflow-x-auto rounded-xl border">
                 <table className="w-full text-xs">
-                  <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-2.5">Date</th><th className="p-2.5">Client / Project</th><th className="p-2.5">Description</th><th className="p-2.5">Hours</th><th className="p-2.5">Earned</th><th className="p-2.5">Status</th></tr></thead>
+                  <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-2.5">Date</th><th className="p-2.5">Client / Project</th><th className="p-2.5">Description</th><th className="p-2.5">Hours</th>{showPricing && <th className="p-2.5">Earned</th>}<th className="p-2.5">Status</th></tr></thead>
                   <tbody>{detail.time_logs.map((l) => (
-                    <tr key={l.id} className="border-b last:border-0"><td className="whitespace-nowrap p-2.5">{formatDate(l.work_date)}</td><td className="whitespace-nowrap p-2.5 font-medium">{l.client_name}{l.project_name ? <span className="block text-[10px] font-normal text-muted-foreground">{l.project_name}</span> : null}</td><td className="max-w-[220px] p-2.5"><span className="line-clamp-2">{l.description_plain}</span></td><td className="p-2.5 font-bold">{Number(l.hours).toFixed(2)}</td><td className="p-2.5">{formatCurrency(l.va_pay, (p.currency as "PHP" | "USD") || "USD")}</td><td className="p-2.5 capitalize">{l.status}</td></tr>
+                    <tr key={l.id} className="border-b last:border-0"><td className="whitespace-nowrap p-2.5">{formatDate(l.work_date)}</td><td className="whitespace-nowrap p-2.5 font-medium">{l.client_name}{l.project_name ? <span className="block text-[10px] font-normal text-muted-foreground">{l.project_name}</span> : null}</td><td className="max-w-[220px] p-2.5"><span className="line-clamp-2">{l.description_plain}</span></td><td className="p-2.5 font-bold">{Number(l.hours).toFixed(2)}</td>{showPricing && <td className="p-2.5">{formatCurrency(l.va_pay, (p.currency as "PHP" | "USD") || "USD")}</td>}<td className="p-2.5 capitalize">{l.status}</td></tr>
                   ))}{detail.time_logs.length === 0 && <tr><td colSpan={6} className="p-5 text-center text-muted-foreground">No time logs yet.</td></tr>}</tbody>
                 </table>
               </div>

@@ -451,17 +451,15 @@ def upsert_client_va_role(
 ):
     """Set or update a VA's role for this client (per-client, not global).
 
-    Admin can set any VA's role. A VA may only set their own role.
+    Admin and auditor can set any VA's role. A VA may only set their own role.
     """
     from app.models import ClientVARole, VA
 
-    if current.role == UserRole.auditor:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Auditors cannot edit roles")
     if current.role == UserRole.va:
         if not current.va_id or current.va_id != va_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VAs can only set their own client role")
-    elif current.role != UserRole.admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    elif current.role not in (UserRole.admin, UserRole.auditor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Auditor access required")
 
     if not db.query(Client).filter(Client.id == client_id).first():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
@@ -492,7 +490,7 @@ def upsert_client_va_role(
 def delete_client_va_role(
     client_id: UUID,
     va_id: UUID,
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
     from app.models import ClientVARole

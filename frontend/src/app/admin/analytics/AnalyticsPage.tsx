@@ -35,7 +35,6 @@ export function AnalyticsPage() {
   const { data: appUsers = [] } = useQuery({
     queryKey: ["app-users"],
     queryFn: () => apiFetch<{ id: string; name: string; role: string; va_id?: string | null }[]>("/auth/users"),
-    enabled: isAdmin,
   })
   const auditorCandidates = [
     ...(profile ? [{ id: profile.id, label: `${profile.display_name} (Admin)` }] : []),

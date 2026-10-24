@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import CurrentUser, get_current_user, require_admin
+from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
+from decimal import Decimal
 from app.models import ActivityLog, EmailLog, EmailTemplate, SystemSetting, UserRole
 from app.schemas import (
     ActivityLogResponse,
@@ -127,10 +128,22 @@ def get_display_settings(
 
 @router.get("", response_model=SettingsResponse)
 def get_settings(
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    return SettingsResponse(**_get_settings(db))
+    """Company branding for PDFs/reports. Money fields are blanked for auditors."""
+    data = _get_settings(db)
+    if current.role == UserRole.auditor:
+        data = {
+            **data,
+            "wise_email": "",
+            "paypal_email": "",
+            "hide_pricing": True,
+            "default_va_hourly_rate": Decimal("0"),
+            "resend_api_key": "",
+            "admin_notify_email": "",
+        }
+    return SettingsResponse(**data)
 
 
 @router.put("", response_model=SettingsResponse)

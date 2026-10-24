@@ -289,7 +289,7 @@ def client_detail(
     from decimal import Decimal
     from sqlalchemy import func as _func
     from sqlalchemy.orm import joinedload as _jl
-    from app.models import Project, Task, TaskStatus, WorkLogStatus
+    from app.models import ClientVARole, Project, Task, TaskStatus, VA, WorkLogStatus
     from app.routers.tasks import _serialize as serialize_task
     from app.routers.work_logs import _serialize_log
 
@@ -310,6 +310,37 @@ def client_detail(
 
     def hours(items):
         return sum((l.hours for l in items), Decimal("0"))
+
+    # Team: explicit roles + any VA who has tasks/logs on this client
+    role_rows = (
+        db.query(ClientVARole)
+        .options(_jl(ClientVARole.va))
+        .filter(ClientVARole.client_id == client_id)
+        .all()
+    )
+    role_by_va = {str(r.va_id): r for r in role_rows}
+    team_va_ids: set[str] = {str(r.va_id) for r in role_rows}
+    for t in tasks:
+        if t.assignee_va_id:
+            team_va_ids.add(str(t.assignee_va_id))
+    for l in logs:
+        team_va_ids.add(str(l.va_id))
+    team_vas = (
+        db.query(VA).filter(VA.id.in_([UUID(x) for x in team_va_ids])).all()
+        if team_va_ids else []
+    )
+    team = []
+    for va in sorted(team_vas, key=lambda v: v.name.lower()):
+        r = role_by_va.get(str(va.id))
+        team.append({
+            "va_id": str(va.id),
+            "va_name": va.name,
+            "role": r.role if r else "",
+            "has_explicit_role": bool(r),
+            "open_tasks": len([t for t in open_tasks if t.assignee_va_id == va.id]),
+            "hours": str(hours([l for l in billable if l.va_id == va.id])),
+            "is_active": bool(va.is_active),
+        })
 
     sub_rows = []
     for s in client.sub_clients:
@@ -395,6 +426,7 @@ def client_detail(
             "last_activity": str(max((l.work_date for l in logs), default=None)) if logs else None,
         },
         "financials": financials,
+        "team": team,
         "sub_clients": sub_rows,
         "projects": project_rows,
         "tasks": [serialize_task(db, t).model_dump(mode="json") for t in recent_tasks],
@@ -407,6 +439,57 @@ def client_detail(
             "paid_at": i.paid_at.isoformat() if i.paid_at else None,
         } for i in invoices],
     }
+
+
+@router.put("/{client_id}/team/{va_id}")
+def upsert_client_va_role(
+    client_id: UUID,
+    va_id: UUID,
+    body: dict,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Set or update a VA's role for this client (per-client, not global)."""
+    from app.models import ClientVARole, VA
+
+    if not db.query(Client).filter(Client.id == client_id).first():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+    va = db.query(VA).filter(VA.id == va_id).first()
+    if not va:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VA not found")
+    role = str(body.get("role") or "").strip() or "General VA"
+    if len(role) > 255:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Role is too long")
+    row = db.query(ClientVARole).filter(ClientVARole.client_id == client_id, ClientVARole.va_id == va_id).first()
+    if row:
+        row.role = role
+    else:
+        row = ClientVARole(client_id=client_id, va_id=va_id, role=role)
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "va_id": str(va.id),
+        "va_name": va.name,
+        "role": row.role,
+        "has_explicit_role": True,
+        "is_active": bool(va.is_active),
+    }
+
+
+@router.delete("/{client_id}/team/{va_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_client_va_role(
+    client_id: UUID,
+    va_id: UUID,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    from app.models import ClientVARole
+
+    row = db.query(ClientVARole).filter(ClientVARole.client_id == client_id, ClientVARole.va_id == va_id).first()
+    if row:
+        db.delete(row)
+        db.commit()
 
 
 @router.patch("/{client_id}", response_model=ClientResponse)

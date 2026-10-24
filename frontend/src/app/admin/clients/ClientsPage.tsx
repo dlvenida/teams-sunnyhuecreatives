@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
-import type { Client, ClientDetail, ClientFinancialRow, SubClient } from "@/lib/types"
+import type { Client, ClientDetail, ClientFinancialRow, ClientTeamMember, SubClient, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -18,6 +18,7 @@ import {
   Plus,
   Search,
   Trash2,
+  Users,
   X,
 } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
@@ -60,6 +61,9 @@ export function ClientsPage() {
   const [clientForm, setClientForm] = useState<ClientForm>(emptyClient)
   const [subForm, setSubForm] = useState<SubClientForm>(emptySub)
   const [error, setError] = useState("")
+  const [teamAddVaId, setTeamAddVaId] = useState("")
+  const [teamAddRole, setTeamAddRole] = useState("")
+  const [editingTeamRole, setEditingTeamRole] = useState<{ va_id: string; role: string } | null>(null)
 
   const { data: clients = [] } = useQuery({
     queryKey: ["clients"],
@@ -68,6 +72,11 @@ export function ClientsPage() {
   const { data: subClients = [] } = useQuery({
     queryKey: ["sub-clients"],
     queryFn: () => apiFetch<SubClient[]>("/clients/sub-clients"),
+  })
+  const { data: allVas = [] } = useQuery({
+    queryKey: ["vas"],
+    queryFn: () => apiFetch<VA[]>("/vas"),
+    enabled: isAdmin && !!viewingId,
   })
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ["client-detail", viewingId],
@@ -86,6 +95,25 @@ export function ClientsPage() {
     qc.invalidateQueries({ queryKey: ["clients"] })
     qc.invalidateQueries({ queryKey: ["sub-clients"] })
   }
+  const invalidateDetail = () => qc.invalidateQueries({ queryKey: ["client-detail", viewingId] })
+
+  const saveTeamRole = useMutation({
+    mutationFn: ({ va_id, role }: { va_id: string; role: string }) =>
+      apiFetch(`/clients/${viewingId}/team/${va_id}`, {
+        method: "PUT",
+        body: JSON.stringify({ role: role.trim() || "General VA" }),
+      }),
+    onSuccess: () => {
+      invalidateDetail()
+      setEditingTeamRole(null)
+      setTeamAddVaId("")
+      setTeamAddRole("")
+    },
+  })
+  const removeTeamRole = useMutation({
+    mutationFn: (va_id: string) => apiFetch(`/clients/${viewingId}/team/${va_id}`, { method: "DELETE" }),
+    onSuccess: invalidateDetail,
+  })
 
   const clientMap = useMemo(
     () => Object.fromEntries(clients.map((c) => [c.id, c.name])),
@@ -589,7 +617,112 @@ export function ClientsPage() {
                       <p className="mt-2 text-[10px] text-muted-foreground">Total Earned = all invoices billed for this client · VA Earned = pay stored on approved/invoiced time logs (in each VA's currency above) · Net = Total Earned − VA Earned.</p>
                     </div>
                   </>)}
-                  {detail.stats.va_names.length > 0 && <p className="text-xs text-muted-foreground">Worked on by: <span className="font-semibold text-foreground">{detail.stats.va_names.join(", ")}</span></p>}
+                  {/* Assigned VAs + per-client roles */}
+                  <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-rose-50/50 to-card p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-primary">
+                          <Users className="h-3.5 w-3.5" /> Team on this client
+                        </p>
+                        <p className="text-xs text-muted-foreground">Each VA can have a different role per client.</p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {(detail.team ?? []).length === 0 && (
+                        <p className="text-xs text-muted-foreground">No VAs assigned yet. Assign a task or add someone below.</p>
+                      )}
+                      {(detail.team ?? []).map((m: ClientTeamMember) => (
+                        <div key={m.va_id} className="flex flex-wrap items-center gap-2 rounded-xl border bg-white/80 px-3 py-2.5">
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-xs font-extrabold text-primary">
+                            {m.va_name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-bold">{m.va_name}</p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {m.open_tasks ?? 0} open task{(m.open_tasks ?? 0) === 1 ? "" : "s"}
+                              {m.hours != null ? ` · ${Number(m.hours).toFixed(1)} hrs` : ""}
+                              {!m.is_active ? " · archived" : ""}
+                            </p>
+                          </div>
+                          {editingTeamRole?.va_id === m.va_id ? (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <Input
+                                className="h-8 w-[160px] text-xs"
+                                value={editingTeamRole.role}
+                                placeholder="e.g. Social Media Manager"
+                                onChange={(e) => setEditingTeamRole({ ...editingTeamRole, role: e.target.value })}
+                                autoFocus
+                              />
+                              <Button size="sm" variant="gold" disabled={saveTeamRole.isPending} onClick={() => saveTeamRole.mutate({ va_id: m.va_id, role: editingTeamRole.role })}>Save</Button>
+                              <Button size="sm" variant="ghost" onClick={() => setEditingTeamRole(null)}>Cancel</Button>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className={cn(
+                                "rounded-full px-2.5 py-1 text-[11px] font-bold",
+                                m.role ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
+                              )}>
+                                {m.role || "No role set"}
+                              </span>
+                              {isAdmin && (
+                                <>
+                                  <Button size="sm" variant="outline" onClick={() => setEditingTeamRole({ va_id: m.va_id, role: m.role || "" })}>
+                                    <Pencil className="h-3 w-3" /> Role
+                                  </Button>
+                                  {m.has_explicit_role && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      title="Clear role"
+                                      onClick={() => { if (confirm(`Clear role for ${m.va_name} on this client?`)) removeTeamRole.mutate(m.va_id) }}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                                    </Button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {isAdmin && (
+                      <div className="mt-3 grid gap-2 rounded-xl border border-dashed border-primary/25 bg-primary/[0.03] p-3 sm:grid-cols-[1fr_1fr_auto]">
+                        <div>
+                          <Label className="text-[10px]">Add VA</Label>
+                          <Select value={teamAddVaId} onChange={(e) => setTeamAddVaId(e.target.value)} className="h-9">
+                            <option value="">Select VA…</option>
+                            {allVas
+                              .filter((v) => v.is_active && !(detail.team ?? []).some((m) => m.va_id === v.id && m.has_explicit_role))
+                              .map((v) => (
+                                <option key={v.id} value={v.id}>{v.name}</option>
+                              ))}
+                          </Select>
+                        </div>
+                        <div>
+                          <Label className="text-[10px]">Role for this client</Label>
+                          <Input
+                            className="h-9"
+                            placeholder="e.g. Graphic Designer"
+                            value={teamAddRole}
+                            onChange={(e) => setTeamAddRole(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex items-end">
+                          <Button
+                            size="sm"
+                            variant="gold"
+                            className="w-full"
+                            disabled={!teamAddVaId || saveTeamRole.isPending}
+                            onClick={() => saveTeamRole.mutate({ va_id: teamAddVaId, role: teamAddRole })}
+                          >
+                            <Plus className="h-3.5 w-3.5" /> Add
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div>
                     <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Sub-clients</p>
                     <div className="grid gap-2 sm:grid-cols-2">

@@ -6,6 +6,7 @@ import {
 } from "lucide-react"
 import { apiFetch } from "@/lib/api"
 import type { NotificationItem, NotificationList } from "@/lib/types"
+import { resolveNotificationLink } from "@/lib/notificationLink"
 import { TYPE_META, timeAgo } from "@/components/layout/NotificationsPanel"
 import { Card, CardContent } from "@/components/ui/card"
 import { StatCard } from "@/components/magicui/stat-card"
@@ -122,7 +123,8 @@ export function NotificationsPage() {
 
   const openItem = (n: NotificationItem) => {
     if (!n.is_read) markOne.mutate(n)
-    if (n.link) navigate(n.link)
+    const path = resolveNotificationLink(n.link)
+    if (path) navigate(path)
   }
 
   return (

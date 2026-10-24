@@ -174,7 +174,32 @@ export function VATimeLogPage() {
             <div><Label>Client</Label><Select value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value, sub_client_id: "" })}><option value="">Select client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
             {subClients.length > 0 && <div><Label>Sub-client</Label><Select value={form.sub_client_id} onChange={(e) => setForm({ ...form, sub_client_id: e.target.value })}><option value="">None</option>{subClients.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>}
             <div><Label>Project</Label><Select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })}><option value="">No project</option>{projects.filter((p) => !form.client_id || p.client_id === form.client_id).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></div>
-            <div><Label>My Task</Label><Select value={form.task_id} onChange={(e) => { const t = myTasks.find((x) => x.id === e.target.value); setForm({ ...form, task_id: e.target.value, client_id: t ? t.client_id : form.client_id, project_id: (t && t.project_id) || form.project_id }) }}><option value="">No task</option>{myTasks.filter((t) => t.status !== "done").map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</Select></div>
+            <div>
+              <Label>My Task</Label>
+              <Select
+                value={form.task_id}
+                onChange={(e) => {
+                  const t = myTasks.find((x) => x.id === e.target.value)
+                  setForm({
+                    ...form,
+                    task_id: e.target.value,
+                    client_id: t ? t.client_id : form.client_id,
+                    project_id: (t && t.project_id) || form.project_id,
+                  })
+                }}
+              >
+                <option value="">No task</option>
+                {myTasks
+                  .filter((t) => t.status !== "done")
+                  .slice()
+                  .sort((a, b) => (a.client_name || "").localeCompare(b.client_name || "") || a.title.localeCompare(b.title))
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.client_name ? `${t.client_name} — ${t.title}` : t.title}
+                    </option>
+                  ))}
+              </Select>
+            </div>
             <div><Label>Start Time</Label><Input type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} /></div>
             <div><Label>End Time</Label><Input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} /></div>
             <div><Label>Total Hours</Label><Input value={`${hours.toFixed(2)} hrs`} disabled /></div>

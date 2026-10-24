@@ -134,7 +134,27 @@ export function TimeClockPage() {
           <div className="min-w-0">
           {!current ? (
             <div className="w-full space-y-3 text-left">
-              <div><Label>My task (optional — picks client/project automatically)</Label><Select value={taskId} onChange={e => { setTaskId(e.target.value); const t = tasks.find(x => x.id === e.target.value); if (t) { setClientId(t.client_id); setProjectId(t.project_id || "") } }}><option value="">General / choose below</option>{tasks.map(t => <option key={t.id} value={t.id}>{t.title} — {t.client_name}</option>)}</Select></div>
+              <div>
+                <Label>My task (optional — picks client/project automatically)</Label>
+                <Select
+                  value={taskId}
+                  onChange={(e) => {
+                    setTaskId(e.target.value)
+                    const t = tasks.find((x) => x.id === e.target.value)
+                    if (t) { setClientId(t.client_id); setProjectId(t.project_id || "") }
+                  }}
+                >
+                  <option value="">General / choose below</option>
+                  {tasks
+                    .slice()
+                    .sort((a, b) => (a.client_name || "").localeCompare(b.client_name || "") || a.title.localeCompare(b.title))
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.client_name ? `${t.client_name} — ${t.title}` : t.title}
+                      </option>
+                    ))}
+                </Select>
+              </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div><Label>Client</Label><Select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Select client</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
                 <div><Label>Project</Label><Select value={projectId} onChange={e => setProjectId(e.target.value)}><option value="">No project</option>{projects.filter(p => !clientId || p.client_id === clientId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></div>

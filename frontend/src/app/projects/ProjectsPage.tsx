@@ -1,5 +1,6 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import type { Cadence, Client, Project, ProjectStatus } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -14,18 +15,34 @@ const CADENCE_LABEL: Record<Cadence, string> = { weekly: "Weekly", biweekly: "Bi
 
 export function ProjectsPage() {
   const qc = useQueryClient()
-  const isAdmin = getAuthUser()?.role === "admin"
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const user = getAuthUser()
+  const isAdmin = user?.role === "admin"
+  const deepProjectId = searchParams.get("project")
+  const deepCommentId = searchParams.get("comment")
   const [search, setSearch] = useState("")
   const [clientId, setClientId] = useState("")
   const [statusF, setStatusF] = useState("")
   const [modal, setModal] = useState<null | { mode: "create" | "edit"; project?: Project }>(null)
   const [detail, setDetail] = useState<Project | null>(null)
+  const [highlightCommentId, setHighlightCommentId] = useState<string | null>(null)
   const [form, setForm] = useState(empty)
   const [error, setError] = useState("")
 
   const qs = `${clientId ? `&client_id=${clientId}` : ""}`
   const { data: projects = [], isLoading } = useQuery({ queryKey: ["projects", clientId], queryFn: () => apiFetch<Project[]>(`/projects?include_archived=true${qs}`) })
   const { data: clients = [] } = useQuery({ queryKey: [isAdmin ? "clients" : "va-clients"], queryFn: () => apiFetch<Client[]>(isAdmin ? "/clients?active_only=true" : "/va/clients") })
+
+  useEffect(() => {
+    if (!deepProjectId || !projects.length) return
+    const p = projects.find((x) => x.id === deepProjectId)
+    if (!p) return
+    setDetail(p)
+    setHighlightCommentId(deepCommentId)
+    const base = user?.role === "va" ? "/va/projects" : "/admin/projects"
+    navigate(base, { replace: true })
+  }, [deepProjectId, deepCommentId, projects, navigate, user?.role])
 
   const filtered = projects.filter(p => (!search || p.name.toLowerCase().includes(search.toLowerCase())) && (!statusF || p.status === statusF))
   const invalidate = () => qc.invalidateQueries({ queryKey: ["projects"] })
@@ -81,7 +98,14 @@ export function ProjectsPage() {
           {filtered.length === 0 && <p className="text-sm text-muted-foreground">No projects yet.{isAdmin ? " Create one to group tasks per client." : ""}</p>}
         </div>
       )}
-      {detail && <ProjectDetail project={detail} onClose={() => setDetail(null)} />}
+      {detail && (
+        <ProjectDetail
+          project={detail}
+          highlightCommentId={highlightCommentId}
+          initialTab={highlightCommentId ? "discussion" : undefined}
+          onClose={() => { setDetail(null); setHighlightCommentId(null) }}
+        />
+      )}
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setModal(null)}>
           <div className="w-full max-w-md rounded-xl bg-card p-5 shadow-xl" onClick={e => e.stopPropagation()}>

@@ -489,6 +489,16 @@ export interface UserDetail {
   history: { id: string; action: string; description: string; path?: string | null; method?: string | null; created_at?: string | null }[]
 }
 
+export interface ClientTeamMember {
+  va_id: string
+  va_name: string
+  role: string
+  has_explicit_role: boolean
+  open_tasks?: number
+  hours?: string
+  is_active: boolean
+}
+
 export interface ClientDetail {
   financials?: ClientFinancials
   client: { id: string; name: string; billing_type: string; default_rate?: string | null; is_active: boolean; created_at?: string | null }
@@ -498,6 +508,7 @@ export interface ClientDetail {
     tasks_total: number; tasks_open: number; tasks_done: number; tasks_overdue: number
     invoices_count: number; invoices_unpaid: number; va_names: string[]; last_activity?: string | null
   }
+  team?: ClientTeamMember[]
   sub_clients: { id: string; name: string; is_active: boolean; hours: string; logs: number; tasks: number }[]
   projects: { id: string; name: string; status: string; cadence: string; color: string; sub_client_name?: string | null; task_total: number; task_done: number; hours: string; due_date?: string | null }[]
   tasks: TaskItem[]

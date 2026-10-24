@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Bell, BellRing, CheckCheck, Clock3, FileText, Handshake, ListTodo, MessageSquareText, Sparkles, Trash2, X } from "lucide-react"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import type { NotificationItem, NotificationList } from "@/lib/types"
+import { resolveNotificationLink } from "@/lib/notificationLink"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -71,7 +72,8 @@ export function NotificationsPanel() {
   const openItem = (n: NotificationItem) => {
     if (!n.is_read) markOne.mutate(n.id)
     setOpen(false)
-    if (n.link) navigate(n.link)
+    const path = resolveNotificationLink(n.link)
+    if (path) navigate(path)
   }
 
   return (

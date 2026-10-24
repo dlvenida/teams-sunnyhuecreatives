@@ -287,8 +287,11 @@ def add_comment(task_id: UUID, body: TaskCommentCreate, current: Annotated[Curre
     task_full = _base_query(db).filter(Task.id == task_id).first()
     if task_full:
         notify_task_comment(db, task_full, c.body, name, author_is_assignee=bool(current.va_id and task_full.assignee_va_id == current.va_id))
-    comment_svc.notify_mentions(db, mentions, scope_label="a task", title=task_full.title if task_full else "Task",
-                                body=f"{name}: {c.body}", link="/va/tasks", exclude_user_id=current.user.id)
+    from app.services.notifications import task_deep_link
+    comment_svc.notify_mentions(
+        db, mentions, scope_label="a task", title=task_full.title if task_full else "Task",
+        body=f"{name}: {c.body}", link=task_deep_link(task_id, c.id), exclude_user_id=current.user.id,
+    )
     return comment_svc.serialize_comment(db, c, "task", current.user.id)
 
 
@@ -323,10 +326,14 @@ def toggle_reaction(task_id: UUID, comment_id: UUID, body: ReactionToggle, curre
     db.commit()
     if not existing:
         task = db.query(Task).filter(Task.id == task_id).first()
-        comment_svc.notify_reaction(db, scope="task", comment=c, emoji=body.emoji,
-                                    reactor_name=comment_svc.display_name(db, current),
-                                    scope_title=task.title if task else "Task", link="/va/tasks",
-                                    exclude_user_id=current.user.id)
+        from app.services.notifications import task_deep_link
+        comment_svc.notify_reaction(
+            db, scope="task", comment=c, emoji=body.emoji,
+            reactor_name=comment_svc.display_name(db, current),
+            scope_title=task.title if task else "Task",
+            link=task_deep_link(task_id, comment_id),
+            exclude_user_id=current.user.id,
+        )
     db.refresh(c)
     return comment_svc.serialize_comment(db, c, "task", current.user.id)
 

@@ -46,6 +46,12 @@ class RateStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class ClientApprovalStatus(str, enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+
+
 class Currency(str, enum.Enum):
     PHP = "PHP"
     USD = "USD"
@@ -170,12 +176,26 @@ class Client(Base):
     billing_type: Mapped[BillingType] = mapped_column(Enum(BillingType, name="billing_type"))
     default_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    approval_status: Mapped[ClientApprovalStatus] = mapped_column(
+        Enum(ClientApprovalStatus, name="client_approval_status"),
+        default=ClientApprovalStatus.approved,
+        index=True,
+    )
+    proposed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    proposed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     sub_clients: Mapped[list["SubClient"]] = relationship(back_populates="client", cascade="all, delete-orphan")
     work_logs: Mapped[list["WorkLog"]] = relationship(back_populates="client")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="client")
     packages: Mapped[list["ClientPackage"]] = relationship(back_populates="client", cascade="all, delete-orphan")
+    proposer: Mapped["User | None"] = relationship(foreign_keys=[proposed_by])
 
 
 class SubClient(Base):

@@ -278,7 +278,7 @@ export function UsersPage() {
             ))}
           </tbody>
         </table>
-        <p className="border-t bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">{roleTab === "auditor" ? "Auditors sign in to the Analytics board to monitor VA activity — they cannot approve logs, edit tasks, or change payroll. Assign them per-VA in Analytics." : "Administrators have full access to every page, including payroll, invoices, and settings."}</p>
+        <p className="border-t bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">{roleTab === "auditor" ? "Auditors can review tasks, projects, time logs, attachments, and team reports — with all money hidden. They can propose new clients for admin approval. They cannot see payroll, rates, invoices, or analytics." : "Administrators have full access to every page, including payroll, invoices, and settings."}</p>
       </div>
       ) : (
       <div className="overflow-x-auto rounded-xl border bg-card">

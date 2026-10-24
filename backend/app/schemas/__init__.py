@@ -9,6 +9,7 @@ from pydantic import BaseModel, BeforeValidator, Field
 from app.models import (
     BillingType,
     Cadence,
+    ClientApprovalStatus,
     ClockStatus,
     Currency,
     InvoiceStatus,
@@ -130,8 +131,19 @@ class ClientResponse(BaseModel):
     billing_type: BillingType
     default_rate: Decimal | None
     is_active: bool
+    approval_status: ClientApprovalStatus = ClientApprovalStatus.approved
+    proposed_by_name: str | None = None
+    proposed_at: datetime | None = None
+    reviewed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ClientApproveRequest(BaseModel):
+    billing_type: BillingType | None = None
+    default_rate: Decimal | None = None
+    included_hours: Decimal | None = None
+    overage_rate: Decimal | None = None
 
 
 class SubClientCreate(BaseModel):

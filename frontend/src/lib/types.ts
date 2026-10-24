@@ -4,6 +4,10 @@ export interface Client {
   billing_type: "hourly" | "fixed" | "package_hours"
   default_rate: string | null
   is_active: boolean
+  approval_status?: "pending" | "approved" | "rejected" | string
+  proposed_by_name?: string | null
+  proposed_at?: string | null
+  reviewed_at?: string | null
 }
 
 export interface ClientPackage {

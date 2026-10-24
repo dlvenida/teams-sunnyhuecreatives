@@ -98,7 +98,12 @@ def submit_rate(
     current: Annotated[CurrentUser, Depends(require_va)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    if not db.query(Client).filter(Client.id == body.client_id, Client.is_active == True).first():
+    from app.models import ClientApprovalStatus
+    if not db.query(Client).filter(
+        Client.id == body.client_id,
+        Client.is_active == True,
+        Client.approval_status == ClientApprovalStatus.approved,
+    ).first():
         raise HTTPException(404, "Client not found")
     # One active request/rate per client: replace any pending; approved stays until this one is approved
     db.query(VARate).filter(

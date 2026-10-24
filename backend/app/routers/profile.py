@@ -15,6 +15,7 @@ from app.auth import hash_password, verify_password
 from app.schemas import (
     EmailChangeConfirm,
     EmailChangeRequest,
+    NotificationPreferences,
     ProfileResponse,
     ProfileUpdate,
     RemovePinRequest,
@@ -85,7 +86,26 @@ def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
         tenure_label=tenure_label(user.hire_date),
         date_of_birth=user.date_of_birth, linkedin_url=user.linkedin_url, portfolio_url=user.portfolio_url,
         status_message=user.status_message, created_at=user.created_at,
+        notification_preferences=_prefs(user),
     )
+
+
+def _prefs(user: User) -> NotificationPreferences:
+    raw = user.notification_preferences if isinstance(user.notification_preferences, dict) else {}
+    defaults = NotificationPreferences()
+    merged = defaults.model_dump()
+    if raw:
+        if "popup_enabled" in raw:
+            merged["popup_enabled"] = bool(raw["popup_enabled"])
+        if "sound_enabled" in raw:
+            merged["sound_enabled"] = bool(raw["sound_enabled"])
+        if raw.get("sound_id") in ("chime", "bell", "ping", "loud"):
+            merged["sound_id"] = raw["sound_id"]
+        if isinstance(raw.get("popup_types"), dict):
+            for k in merged["popup_types"]:
+                if k in raw["popup_types"]:
+                    merged["popup_types"][k] = bool(raw["popup_types"][k])
+    return NotificationPreferences(**merged)
 
 
 @router.get("/me", response_model=ProfileResponse)
@@ -129,6 +149,10 @@ def update_my_profile(
             va.name = display_name.strip()
         else:
             user.display_name = display_name.strip() or None
+
+    prefs = data.pop("notification_preferences", None)
+    if prefs is not None:
+        user.notification_preferences = prefs if isinstance(prefs, dict) else dict(prefs)
 
     for key, value in data.items():
         setattr(user, key, value)

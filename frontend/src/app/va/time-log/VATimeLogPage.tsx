@@ -321,7 +321,15 @@ export function VATimeLogPage() {
             <tbody>{logs.map((log) => (
               <tr key={log.id} className="border-b border-border">
                 <td className="p-2">{log.work_date}</td>
-                <td className="p-2">{log.client_name}{log.task_title && <span className="block text-[10px] text-muted-foreground">{log.task_title}</span>}</td>
+                <td className="p-2">
+                  {log.client_name}
+                  {log.task_title && <span className="block text-[10px] text-muted-foreground">{log.task_title}</span>}
+                  {log.rolled_to_next_payroll && (
+                    <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-1.5 py-px text-[9px] font-bold text-amber-900">
+                      Rolls to next payroll{log.payable_on ? ` · ${log.payable_on}` : ""}
+                    </span>
+                  )}
+                </td>
                 <td className="p-2 whitespace-nowrap">{log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}<span className="block text-[10px] text-muted-foreground">{log.source === "clock" ? "clock" : "manual"}</span></td>
                 <td className="p-2">{log.hours}</td>
                 {showMoney && <><td className="p-2">{formatCurrency(log.va_rate)}</td><td className="p-2">{formatCurrency(log.va_pay)}</td></>}

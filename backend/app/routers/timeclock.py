@@ -242,13 +242,17 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
             end_time=end_t,
         )
         desc = (body.description or "").strip() or (entry.task.title if entry.task else None) or (body.notes or "").strip() or "Clocked work"
+        from app.services.payroll_calendar import resolve_payable_on
+        work_date = local_in.date()
+        payable_on = resolve_payable_on(db, current.va_id, work_date)
         log = WorkLog(
-            work_date=local_in.date(), va_id=current.va_id, client_id=entry.client_id,
+            work_date=work_date, va_id=current.va_id, client_id=entry.client_id,
             sub_client_id=entry.task.sub_client_id if entry.task else None,
             project_id=entry.project_id, task_id=entry.task_id,
             description_plain=desc, start_time=start_t, end_time=end_t,
             hours=hours, va_rate=rate, va_pay=pay,
             notes=entry.notes, status=WorkLogStatus.submitted, clock_in_at=entry.clock_in, clock_out_at=now, source="clock",
+            payable_on=payable_on,
         )
         db.add(log)
         db.flush()

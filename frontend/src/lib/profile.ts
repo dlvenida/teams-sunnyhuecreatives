@@ -1,9 +1,33 @@
+export type NotificationSoundId = "chime" | "bell" | "ping" | "loud"
+
+export interface NotificationPreferences {
+  popup_enabled: boolean
+  sound_enabled: boolean
+  sound_id: NotificationSoundId
+  popup_types: Record<string, boolean>
+}
+
+export const DEFAULT_NOTIFICATION_PREFS: NotificationPreferences = {
+  popup_enabled: true,
+  sound_enabled: true,
+  sound_id: "chime",
+  popup_types: {
+    comment: true,
+    task: true,
+    log: true,
+    clock: true,
+    delegation: true,
+    invoice: true,
+    system: true,
+  },
+}
+
 export interface UserProfile {
   id: string
   email: string
   username?: string | null
   pending_email?: string | null
-  role: "admin" | "va"
+  role: "admin" | "auditor" | "va"
   display_name: string
   has_profile_photo: boolean
   phone?: string | null
@@ -30,6 +54,7 @@ export interface UserProfile {
   linkedin_url?: string | null
   portfolio_url?: string | null
   status_message?: string | null
+  notification_preferences?: NotificationPreferences | null
   created_at?: string | null
 }
 

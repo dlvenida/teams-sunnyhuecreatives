@@ -170,6 +170,8 @@ class User(Base):
     linkedin_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     portfolio_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     status_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Pop-up / sound notification preferences (023)
+    notification_preferences: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     va_profile: Mapped["VA | None"] = relationship(back_populates="user", uselist=False, foreign_keys="[VA.user_id]")
@@ -449,6 +451,8 @@ class WorkLog(Base):
     status: Mapped[WorkLogStatus] = mapped_column(
         Enum(WorkLogStatus, name="work_log_status"), default=WorkLogStatus.submitted
     )
+    # When set, payroll uses this date instead of work_date (late entries after an approved timesheet).
+    payable_on: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     invoice_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

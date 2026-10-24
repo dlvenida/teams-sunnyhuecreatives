@@ -87,10 +87,13 @@ export function PayrollDocument({
   payroll,
   settings,
   showPricing = true,
+  usdPhpRate,
 }: {
   payroll: PayrollResponse
   settings: Settings
   showPricing?: boolean
+  /** Admin-entered rate for this payroll period (1 USD = N PHP). */
+  usdPhpRate?: number | null
 }) {
   const period = `${formatInvoiceDate(payroll.period_start)} – ${formatInvoiceDate(payroll.period_end)}`
   const monthLabel = new Date(payroll.period_start + "T00:00:00").toLocaleDateString("en-US", {
@@ -106,6 +109,10 @@ export function PayrollDocument({
     <Document>
       {payroll.vas.map((va) => {
         const total = showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`
+        const phpTotal =
+          showPricing && usdPhpRate && va.currency === "USD"
+            ? formatCurrency(parseFloat(String(va.total_pay)) * usdPhpRate, "PHP")
+            : null
         const first = va.va_name.split(" ")[0]
         const lines =
           (va.by_client ?? []).length > 0
@@ -148,6 +155,11 @@ export function PayrollDocument({
               <View>
                 <Text style={styles.bannerAmount}>{total}</Text>
                 <Text style={styles.bannerDue}>earned this period</Text>
+                {phpTotal ? (
+                  <Text style={styles.bannerDue}>
+                    ≈ {phpTotal} at 1 USD = {usdPhpRate!.toFixed(2)} PHP
+                  </Text>
+                ) : null}
               </View>
               <View>
                 <Text style={styles.bannerPeriodLabel}>Service period</Text>
@@ -197,6 +209,11 @@ export function PayrollDocument({
                   ? formatInvoiceTotal(va.total_pay).replace("USD", va.currency)
                   : `${va.total_hours} hrs`}
               </Text>
+              {phpTotal ? (
+                <Text style={{ fontSize: 11, color: COLORS.muted, marginTop: 4 }}>
+                  Philippine peso equivalent: {phpTotal}
+                </Text>
+              ) : null}
             </View>
 
             <View style={styles.payBox}>

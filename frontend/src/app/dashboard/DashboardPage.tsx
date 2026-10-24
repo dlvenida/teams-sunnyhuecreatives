@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input, Label } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TASK_STATUSES, PRIORITY_META, formatDuration } from "@/components/tasks/task-utils"
+import { OwnerFinancePanel } from "@/components/dashboard/OwnerFinancePanel"
 import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, DollarSign, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, TrendingUp, Volume2, X } from "lucide-react"
 
 const BIBLE_VERSES = [
@@ -429,6 +430,9 @@ export function DashboardPage() {
           </Card>
         </div>
       )}
+
+      {/* Owner earnings + expenses — admin only (never shown to VA or auditor) */}
+      {isAdmin && <OwnerFinancePanel />}
 
       {/* Jane profit bar + business stats (admin only — money hidden for auditor) */}
       {isAdmin && data && (

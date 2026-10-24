@@ -958,6 +958,7 @@ class PayrollRunCreate(BaseModel):
     currency: str = "PHP"
     method: str | None = None
     notes: str | None = None
+    usd_php_rate: Decimal | None = None
 
 
 class PayrollRunResponse(BaseModel):
@@ -971,7 +972,33 @@ class PayrollRunResponse(BaseModel):
     currency: str
     method: str | None = None
     notes: str | None = None
+    usd_php_rate: Decimal | None = None
     paid_at: datetime
+
+
+class BusinessExpenseCreate(BaseModel):
+    expense_date: date
+    description: str = Field(min_length=1, max_length=500)
+    amount: Decimal
+    currency: str = "USD"
+
+
+class BusinessExpenseUpdate(BaseModel):
+    expense_date: date | None = None
+    description: str | None = Field(default=None, min_length=1, max_length=500)
+    amount: Decimal | None = None
+    currency: str | None = None
+
+
+class BusinessExpenseResponse(BaseModel):
+    id: UUID
+    expense_date: date
+    description: str
+    amount: Decimal
+    currency: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class ReportRequest(BaseModel):

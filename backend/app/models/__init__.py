@@ -520,10 +520,27 @@ class PayrollRun(Base):
     currency: Mapped[str] = mapped_column(String(10), default="PHP")
     method: Mapped[str | None] = mapped_column(String(50), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    usd_php_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     va: Mapped["VA"] = relationship()
+
+
+class BusinessExpense(Base):
+    """Admin-only manual business expenses (tools, subscriptions, misc)."""
+
+    __tablename__ = "business_expenses"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    expense_date: Mapped[date] = mapped_column(Date, index=True)
+    description: Mapped[str] = mapped_column(String(500))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(10), default="USD")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class TimesheetSubmission(Base):

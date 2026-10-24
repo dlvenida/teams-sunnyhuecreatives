@@ -305,7 +305,8 @@ def list_runs(
         PayrollRunResponse(
             id=r.id, va_id=r.va_id, va_name=r.va.name if r.va else None,
             period_start=r.period_start, period_end=r.period_end, total_hours=r.total_hours,
-            total_pay=r.total_pay, currency=r.currency, method=r.method, notes=r.notes, paid_at=r.paid_at,
+            total_pay=r.total_pay, currency=r.currency, method=r.method, notes=r.notes,
+            usd_php_rate=r.usd_php_rate, paid_at=r.paid_at,
         ) for r in runs
     ]
 
@@ -468,7 +469,8 @@ def mark_paid(
     run = PayrollRun(
         va_id=body.va_id, period_start=body.period_start, period_end=body.period_end,
         total_hours=body.total_hours, total_pay=body.total_pay, currency=body.currency,
-        method=body.method, notes=body.notes, created_by=current.user.id,
+        method=body.method, notes=body.notes, usd_php_rate=body.usd_php_rate,
+        created_by=current.user.id,
     )
     db.add(run)
     db.commit()
@@ -479,7 +481,8 @@ def mark_paid(
     return PayrollRunResponse(
         id=run.id, va_id=run.va_id, va_name=va.name if va else None,
         period_start=run.period_start, period_end=run.period_end, total_hours=run.total_hours,
-        total_pay=run.total_pay, currency=run.currency, method=run.method, notes=run.notes, paid_at=run.paid_at,
+        total_pay=run.total_pay, currency=run.currency, method=run.method, notes=run.notes,
+        usd_php_rate=run.usd_php_rate, paid_at=run.paid_at,
     )
 
 

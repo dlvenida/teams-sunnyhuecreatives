@@ -82,13 +82,15 @@ def my_assigned_clients(
 ):
     """Clients ASSIGNED to this VA (from their tasks and time logs) — the VA Clients tab."""
     from decimal import Decimal
-    from app.models import Project, Task, TaskStatus, WorkLogStatus
+    from app.models import ClientVARole, Project, Task, TaskStatus, WorkLogStatus
 
     tasks = db.query(Task).filter(Task.assignee_va_id == current.va_id).all()
     logs = db.query(WorkLog).filter(WorkLog.va_id == current.va_id).all()
     billable = [l for l in logs if l.status in (WorkLogStatus.approved, WorkLogStatus.invoiced)]
+    role_rows = db.query(ClientVARole).filter(ClientVARole.va_id == current.va_id).all()
+    role_by_client = {str(r.client_id): r.role for r in role_rows}
     client_ids: list = []
-    for src in ([t.client_id for t in tasks] + [l.client_id for l in logs]):
+    for src in ([t.client_id for t in tasks] + [l.client_id for l in logs] + [r.client_id for r in role_rows]):
         if src and src not in client_ids:
             client_ids.append(src)
     rows = []
@@ -97,6 +99,9 @@ def my_assigned_clients(
         c_logs = [l for l in logs if l.client_id == cid]
         b_logs = [l for l in billable if l.client_id == cid]
         client_obj = (c_tasks[0].client if c_tasks else None) or (c_logs[0].client if c_logs else None)
+        if not client_obj:
+            from app.models import Client
+            client_obj = db.query(Client).filter(Client.id == cid).first()
         if not client_obj:
             continue
         project_ids = {t.project_id for t in c_tasks if t.project_id} | {l.project_id for l in c_logs if l.project_id}
@@ -107,10 +112,13 @@ def my_assigned_clients(
                 p_tasks = [t for t in c_tasks if t.project_id == pid]
                 projects.append({"id": str(p.id), "name": p.name, "color": p.color, "status": p.status.value if hasattr(p.status, "value") else str(p.status), "task_total": len(p_tasks), "task_done": len([t for t in p_tasks if t.status == TaskStatus.done])})
         sub_names = sorted({l.sub_client.name for l in c_logs if l.sub_client})
+        role = role_by_client.get(str(cid))
         rows.append({
             "client_id": str(cid), "name": client_obj.name,
             "billing_type": client_obj.billing_type.value if hasattr(client_obj.billing_type, "value") else str(client_obj.billing_type),
             "is_active": bool(client_obj.is_active),
+            "role": role,
+            "has_explicit_role": role is not None,
             "total_tasks": len(c_tasks),
             "open_tasks": len([t for t in c_tasks if t.status != TaskStatus.done]),
             "done_tasks": len([t for t in c_tasks if t.status == TaskStatus.done]),
@@ -126,6 +134,36 @@ def my_assigned_clients(
         })
     rows.sort(key=lambda r: r["name"].lower())
     return rows
+
+
+@router.put("/my-clients/{client_id}/role")
+def set_my_client_role(
+    client_id: UUID,
+    body: dict,
+    current: Annotated[CurrentUser, Depends(require_va)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """VA sets or updates their own role for a specific client."""
+    from app.models import Client, ClientVARole
+
+    if not db.query(Client).filter(Client.id == client_id).first():
+        raise HTTPException(status_code=404, detail="Client not found")
+    role = str(body.get("role") or "").strip() or "General VA"
+    if len(role) > 255:
+        raise HTTPException(status_code=400, detail="Role is too long")
+    row = (
+        db.query(ClientVARole)
+        .filter(ClientVARole.client_id == client_id, ClientVARole.va_id == current.va_id)
+        .first()
+    )
+    if row:
+        row.role = role
+    else:
+        row = ClientVARole(client_id=client_id, va_id=current.va_id, role=role)
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"client_id": str(client_id), "role": row.role, "has_explicit_role": True}
 
 
 @router.get("/sub-clients", response_model=list[SubClientResponse])

@@ -627,65 +627,85 @@ export function ClientsPage() {
                         <p className="text-xs text-muted-foreground">Each VA can have a different role per client.</p>
                       </div>
                     </div>
-                    <div className="space-y-2">
-                      {(detail.team ?? []).length === 0 && (
-                        <p className="text-xs text-muted-foreground">No VAs assigned yet. Assign a task or add someone below.</p>
-                      )}
-                      {(detail.team ?? []).map((m: ClientTeamMember) => (
-                        <div key={m.va_id} className="flex flex-wrap items-center gap-2 rounded-xl border bg-white/80 px-3 py-2.5">
-                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-xs font-extrabold text-primary">
-                            {m.va_name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-bold">{m.va_name}</p>
-                            <p className="text-[10px] text-muted-foreground">
-                              {m.open_tasks ?? 0} open task{(m.open_tasks ?? 0) === 1 ? "" : "s"}
-                              {m.hours != null ? ` · ${Number(m.hours).toFixed(1)} hrs` : ""}
-                              {!m.is_active ? " · archived" : ""}
-                            </p>
-                          </div>
-                          {editingTeamRole?.va_id === m.va_id ? (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <Input
-                                className="h-8 w-[160px] text-xs"
-                                value={editingTeamRole.role}
-                                placeholder="e.g. Social Media Manager"
-                                onChange={(e) => setEditingTeamRole({ ...editingTeamRole, role: e.target.value })}
-                                autoFocus
-                              />
-                              <Button size="sm" variant="gold" disabled={saveTeamRole.isPending} onClick={() => saveTeamRole.mutate({ va_id: m.va_id, role: editingTeamRole.role })}>Save</Button>
-                              <Button size="sm" variant="ghost" onClick={() => setEditingTeamRole(null)}>Cancel</Button>
-                            </div>
-                          ) : (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className={cn(
-                                "rounded-full px-2.5 py-1 text-[11px] font-bold",
-                                m.role ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
-                              )}>
-                                {m.role || "No role set"}
-                              </span>
-                              {isAdmin && (
-                                <>
-                                  <Button size="sm" variant="outline" onClick={() => setEditingTeamRole({ va_id: m.va_id, role: m.role || "" })}>
-                                    <Pencil className="h-3 w-3" /> Role
-                                  </Button>
-                                  {m.has_explicit_role && (
-                                    <Button
-                                      size="sm"
-                                      variant="ghost"
-                                      title="Clear role"
-                                      onClick={() => { if (confirm(`Clear role for ${m.va_name} on this client?`)) removeTeamRole.mutate(m.va_id) }}
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5 text-red-600" />
-                                    </Button>
+                    {(detail.team ?? []).length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No VAs assigned yet. Assign a task or add someone below.</p>
+                    ) : (
+                      <div className="overflow-x-auto rounded-xl border bg-white/80">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b bg-muted/40 text-left text-muted-foreground">
+                              <th className="p-2.5 font-medium">VA</th>
+                              <th className="p-2.5 font-medium">Role for this client</th>
+                              <th className="p-2.5 font-medium">Open tasks</th>
+                              <th className="p-2.5 font-medium">Hours</th>
+                              {isAdmin && <th className="p-2.5 font-medium text-right">Actions</th>}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(detail.team ?? []).map((m: ClientTeamMember) => (
+                              <tr key={m.va_id} className="border-b last:border-0">
+                                <td className="p-2.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-[10px] font-extrabold text-primary">
+                                      {m.va_name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()}
+                                    </span>
+                                    <div>
+                                      <p className="font-bold">{m.va_name}</p>
+                                      {!m.is_active && <p className="text-[10px] text-muted-foreground">Archived</p>}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="p-2.5">
+                                  {editingTeamRole?.va_id === m.va_id ? (
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      <Input
+                                        className="h-8 w-[180px] text-xs"
+                                        value={editingTeamRole.role}
+                                        placeholder="e.g. Social Media Manager"
+                                        onChange={(e) => setEditingTeamRole({ ...editingTeamRole, role: e.target.value })}
+                                        autoFocus
+                                      />
+                                      <Button size="sm" variant="gold" disabled={saveTeamRole.isPending} onClick={() => saveTeamRole.mutate({ va_id: m.va_id, role: editingTeamRole.role })}>Save</Button>
+                                      <Button size="sm" variant="ghost" onClick={() => setEditingTeamRole(null)}>Cancel</Button>
+                                    </div>
+                                  ) : (
+                                    <span className={cn(
+                                      "inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold",
+                                      m.role ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground",
+                                    )}>
+                                      {m.role || "No role set"}
+                                    </span>
                                   )}
-                                </>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                                </td>
+                                <td className="p-2.5">{m.open_tasks ?? 0}</td>
+                                <td className="p-2.5">{m.hours != null ? `${Number(m.hours).toFixed(1)}` : "—"}</td>
+                                {isAdmin && (
+                                  <td className="p-2.5 text-right">
+                                    {editingTeamRole?.va_id !== m.va_id && (
+                                      <div className="flex justify-end gap-1">
+                                        <Button size="sm" variant="outline" onClick={() => setEditingTeamRole({ va_id: m.va_id, role: m.role || "" })}>
+                                          <Pencil className="h-3 w-3" /> Role
+                                        </Button>
+                                        {m.has_explicit_role && (
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            title="Clear role"
+                                            onClick={() => { if (confirm(`Clear role for ${m.va_name} on this client?`)) removeTeamRole.mutate(m.va_id) }}
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                                          </Button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                     {isAdmin && (
                       <div className="mt-3 grid gap-2 rounded-xl border border-dashed border-primary/25 bg-primary/[0.03] p-3 sm:grid-cols-[1fr_1fr_auto]">
                         <div>

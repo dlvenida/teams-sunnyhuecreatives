@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { AtSign, Briefcase, Hash, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
+import { AtSign, Briefcase, CalendarDays, Hash, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
 import { PinInput } from "@/components/auth/PinInput"
 
 export function ProfilePage() {
@@ -224,6 +224,22 @@ export function ProfilePage() {
             {profile.job_title && <Badge>{profile.job_title}</Badge>}
             {profile.timezone && <Badge>{profile.timezone}</Badge>}
           </div>
+          {(profile.job_title || profile.hire_date || profile.tenure_label) && (
+            <div className="mt-3 rounded-xl border border-primary/15 bg-white/60 px-3 py-2.5 text-xs dark:bg-background/40">
+              {profile.job_title && (
+                <p className="font-semibold text-foreground">{profile.job_title}</p>
+              )}
+              {profile.hire_date && (
+                <p className="mt-0.5 flex items-center gap-1.5 text-muted-foreground">
+                  <CalendarDays className="h-3.5 w-3.5 shrink-0 text-primary" />
+                  Started {new Date(profile.hire_date + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                </p>
+              )}
+              {profile.tenure_label && (
+                <p className="mt-1 font-medium text-primary">{profile.tenure_label}</p>
+              )}
+            </div>
+          )}
           {profile.status_message && <p className="mt-2 text-xs text-muted-foreground">“{profile.status_message}”</p>}
         </CardContent>
       </Card>
@@ -290,7 +306,16 @@ export function ProfilePage() {
             <div><Label htmlFor="job-title">Job title / Role</Label><Input id="job-title" placeholder="Virtual Assistant, Designer…" value={form.job_title} onChange={(e) => update("job_title", e.target.value)} /></div>
             <div><Label htmlFor="status-msg">Status message</Label><Input id="status-msg" placeholder="Available, On leave, Focus mode…" value={form.status_message} onChange={(e) => update("status_message", e.target.value)} /></div>
             <div><Label htmlFor="tz">Timezone</Label><Select id="tz" value={form.timezone} onChange={(e) => update("timezone", e.target.value)}>{TIMEZONES.map(t => <option key={t} value={t}>{t}</option>)}</Select></div>
-            <div><Label htmlFor="hire">Hire / Start date</Label><Input id="hire" type="date" value={form.hire_date} onChange={(e) => update("hire_date", e.target.value)} /></div>
+            <div>
+              <Label htmlFor="hire">Hire / Start date</Label>
+              <Input id="hire" type="date" value={form.hire_date} onChange={(e) => update("hire_date", e.target.value)} />
+              {profile.tenure_label && (
+                <p className="mt-1 text-[11px] font-medium text-primary">{profile.tenure_label}</p>
+              )}
+              {!profile.tenure_label && form.hire_date && (
+                <p className="mt-1 text-[11px] text-muted-foreground">Tenure updates automatically from your start date after you save.</p>
+              )}
+            </div>
             <div><Label htmlFor="dob">Date of birth</Label><Input id="dob" type="date" value={form.date_of_birth} onChange={(e) => update("date_of_birth", e.target.value)} /></div>
             <div><Label htmlFor="skills">Skills (comma separated)</Label><Input id="skills" placeholder="Inbox management, Canva, Bookkeeping" value={form.skills} onChange={(e) => update("skills", e.target.value)} /></div>
           </div>

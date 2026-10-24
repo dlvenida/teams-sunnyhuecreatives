@@ -386,6 +386,11 @@ export interface TimeClockEntry {
   adjustment_count?: number
   last_adjusted_at?: string | null
   last_adjustment_reason?: string | null
+  original_clock_in?: string | null
+  original_clock_out?: string | null
+  last_adjusted_by_name?: string | null
+  last_adjusted_by_role?: string | null
+  pending_correction_request_id?: string | null
   created_at?: string | null
 }
 
@@ -403,11 +408,33 @@ export interface TimeClockAdjustment {
   created_at?: string | null
 }
 
+export interface TimeClockCorrectionRequest {
+  id: string
+  entry_id: string
+  va_id: string
+  va_name?: string | null
+  task_title?: string | null
+  client_name?: string | null
+  current_clock_in?: string | null
+  current_clock_out?: string | null
+  proposed_clock_in?: string | null
+  proposed_clock_out?: string | null
+  proposed_notes?: string | null
+  reason: string
+  status: string
+  resolved_by_name?: string | null
+  resolved_at?: string | null
+  resolution_note?: string | null
+  created_at?: string | null
+}
+
 export interface VAAssignedClient {
   client_id: string
   name: string
   billing_type: string
   is_active: boolean
+  role?: string | null
+  has_explicit_role?: boolean
   total_tasks: number
   open_tasks: number
   done_tasks: number

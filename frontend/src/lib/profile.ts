@@ -23,6 +23,9 @@ export interface UserProfile {
   emergency_contact_phone?: string | null
   emergency_contact_relationship?: string | null
   hire_date?: string | null
+  tenure_years?: number | null
+  tenure_months?: number | null
+  tenure_label?: string | null
   date_of_birth?: string | null
   linkedin_url?: string | null
   portfolio_url?: string | null

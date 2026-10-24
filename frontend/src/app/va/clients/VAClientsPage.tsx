@@ -1,29 +1,49 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { apiFetch } from "@/lib/api"
 import type { VAAssignedClient } from "@/lib/types"
 import { Button } from "@/components/ui/button"
+import { Input, Label } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { CreateReportModal } from "@/components/reports/CreateReportModal"
 import { formatDate } from "@/lib/utils"
-import { Building2, Flag, FolderKanban, KanbanSquare } from "lucide-react"
+import { Building2, Flag, FolderKanban, KanbanSquare, Pencil, X } from "lucide-react"
 
 /** VA view — Clients tab showing only clients ASSIGNED to this VA. */
 export function VAClientsPage() {
+  const qc = useQueryClient()
   const [reportClientId, setReportClientId] = useState<string | null>(null)
+  const [editingRole, setEditingRole] = useState<{ client_id: string; role: string } | null>(null)
+  const [roleError, setRoleError] = useState("")
   const { data: clients = [], isLoading } = useQuery({
     queryKey: ["va-my-clients"],
     queryFn: () => apiFetch<VAAssignedClient[]>("/va/my-clients"),
   })
   const totalHours = clients.reduce((s, c) => s + Number(c.hours || 0), 0)
 
+  const saveRole = useMutation({
+    mutationFn: ({ client_id, role }: { client_id: string; role: string }) =>
+      apiFetch(`/va/my-clients/${client_id}/role`, {
+        method: "PUT",
+        body: JSON.stringify({ role: role.trim() || "General VA" }),
+      }),
+    onSuccess: () => {
+      setEditingRole(null)
+      setRoleError("")
+      qc.invalidateQueries({ queryKey: ["va-my-clients"] })
+    },
+    onError: (e: Error) => setRoleError(e.message),
+  })
+
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-xl font-bold">My Clients</h1>
-          <p className="text-sm text-muted-foreground">Clients assigned to you — from your Task Board and time logs. {clients.length} client(s) · {totalHours.toFixed(1)} hrs logged.</p>
+          <p className="text-sm text-muted-foreground">
+            Clients assigned to you — set your role for each one (e.g. Digital Marketing Specialist for Client A). {clients.length} client(s) · {totalHours.toFixed(1)} hrs logged.
+          </p>
         </div>
         <Button variant="gold" size="sm" onClick={() => setReportClientId("")}>
           <Flag className="h-3.5 w-3.5" /> Create a Report
@@ -46,6 +66,32 @@ export function VAClientsPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold">{c.name}</p>
                   <p className="text-xs capitalize text-muted-foreground">{c.billing_type} billing{c.is_active ? "" : " · archived"}{c.sub_clients.length ? ` · ${c.sub_clients.join(", ")}` : ""}</p>
+                  {editingRole?.client_id === c.client_id ? (
+                    <div className="mt-2 space-y-1.5">
+                      <Label className="text-[10px]">Your role for this client</Label>
+                      <Input
+                        className="h-8 text-xs"
+                        value={editingRole.role}
+                        placeholder="e.g. Email Marketing Manager"
+                        onChange={(e) => setEditingRole({ ...editingRole, role: e.target.value })}
+                        autoFocus
+                      />
+                      {roleError && <p className="text-[10px] text-red-600">{roleError}</p>}
+                      <div className="flex gap-1.5">
+                        <Button size="sm" variant="gold" disabled={saveRole.isPending} onClick={() => saveRole.mutate({ client_id: c.client_id, role: editingRole.role })}>Save</Button>
+                        <Button size="sm" variant="ghost" onClick={() => { setEditingRole(null); setRoleError("") }}><X className="h-3.5 w-3.5" /></Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${c.role ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"}`}>
+                        {c.role || "No role set"}
+                      </span>
+                      <Button size="sm" variant="ghost" className="h-7 px-2 text-[10px]" onClick={() => { setRoleError(""); setEditingRole({ client_id: c.client_id, role: c.role || "" }) }}>
+                        <Pencil className="h-3 w-3" /> {c.role ? "Edit role" : "Set role"}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">

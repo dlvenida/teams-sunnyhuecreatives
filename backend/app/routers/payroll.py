@@ -103,12 +103,34 @@ def calculate_payroll(
     runs = {
         r.va_id: r for r in db.query(PayrollRun).filter(PayrollRun.period_start == period_start, PayrollRun.period_end == period_end).all()
     }
-    sheets = {
-        t.va_id: t
-        for t in db.query(TimesheetSubmission)
-        .filter(TimesheetSubmission.period_start == period_start, TimesheetSubmission.period_end == period_end)
+    # Match timesheets that overlap the selected payroll window (not only exact dates),
+    # so a VA submit for Oct 1–15 still appears when admin views a nearby custom range.
+    overlapping_sheets = (
+        db.query(TimesheetSubmission)
+        .options(joinedload(TimesheetSubmission.va).joinedload(VA.user))
+        .filter(
+            TimesheetSubmission.period_start <= period_end,
+            TimesheetSubmission.period_end >= period_start,
+        )
         .all()
-    }
+    )
+    if body.va_id:
+        overlapping_sheets = [t for t in overlapping_sheets if t.va_id == body.va_id]
+    sheets: dict = {}
+    for t in overlapping_sheets:
+        prev = sheets.get(t.va_id)
+        # Prefer exact period match, then newest submission
+        if not prev:
+            sheets[t.va_id] = t
+        elif t.period_start == period_start and t.period_end == period_end:
+            sheets[t.va_id] = t
+        elif prev.period_start != period_start or prev.period_end != period_end:
+            if (t.submitted_at or t.period_start) >= (prev.submitted_at or prev.period_start):
+                sheets[t.va_id] = t
+    # Ensure VAs who submitted a timesheet appear even with zero payable logs yet
+    for t in sheets.values():
+        if t.va_id not in va_map and t.va:
+            va_map[t.va_id] = {"va": t.va, "entries": [], "total_hours": Decimal("0"), "total_pay": Decimal("0")}
 
     results = []
     total_php = Decimal("0")
@@ -217,6 +239,59 @@ def calculate_payroll(
         total_hours=sum((r.total_hours for r in results), Decimal("0")),
         total_pending_hours=sum((r.pending_hours for r in results), Decimal("0")),
     )
+
+
+@router.get("/timesheets", response_model=list[TimesheetSubmissionResponse])
+def list_timesheets(
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+    status_filter: str | None = None,
+    limit: int = 50,
+):
+    """Pending (and recent) timesheet submissions for the VA Payroll inbox."""
+    q = (
+        db.query(TimesheetSubmission)
+        .options(joinedload(TimesheetSubmission.va).joinedload(VA.user))
+        .order_by(TimesheetSubmission.submitted_at.desc())
+    )
+    if status_filter:
+        try:
+            q = q.filter(TimesheetSubmission.status == TimesheetStatus(status_filter))
+        except ValueError:
+            raise HTTPException(400, "Invalid timesheet status")
+    rows = q.limit(min(limit, 100)).all()
+    out: list[TimesheetSubmissionResponse] = []
+    for row in rows:
+        logs = (
+            db.query(WorkLog)
+            .filter(
+                WorkLog.va_id == row.va_id,
+                WorkLog.work_date >= row.period_start,
+                WorkLog.work_date <= row.period_end,
+                WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
+            )
+            .all()
+        )
+        full_name = (
+            (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
+            or (row.va.name if row.va else None)
+        )
+        out.append(
+            TimesheetSubmissionResponse(
+                id=row.id,
+                va_id=row.va_id,
+                va_name=full_name,
+                period_start=row.period_start,
+                period_end=row.period_end,
+                status=row.status.value if hasattr(row.status, "value") else str(row.status),
+                notes=row.notes,
+                submitted_at=row.submitted_at,
+                reviewed_at=row.reviewed_at,
+                entry_count=len(logs),
+                total_hours=sum((l.hours for l in logs), Decimal("0")),
+            )
+        )
+    return out
 
 
 @router.get("/runs", response_model=list[PayrollRunResponse])

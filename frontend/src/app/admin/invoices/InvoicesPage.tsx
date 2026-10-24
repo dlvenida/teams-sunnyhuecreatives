@@ -454,11 +454,11 @@ export function InvoicesPage() {
             <Textarea
               value={form.service_description}
               onChange={(e) => setForm({ ...form, service_description: e.target.value })}
-              placeholder={"e.g. Social Media VA Services — Melaleuca & Elite Vitality\nOctober 1–15, 2026"}
+              placeholder={"Hint only — e.g. Social Media VA Services — Melaleuca & Elite Vitality"}
               rows={3}
             />
             <p className="mt-1 text-[10px] text-muted-foreground">
-              Type exactly what the client should see. Leave blank to use the default service title + period.
+              Type exactly what the client should see on the PDF. Leave blank to use “Social Media VA Services — [period]” (never “Engagement Package”). The grey hint text never appears on the invoice.
             </p>
           </div>
         </div>

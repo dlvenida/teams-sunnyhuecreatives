@@ -14,7 +14,7 @@ from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionRe
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
 from app.services.calculations import calculate_hours
-from app.services.email import send_va_submission_notification
+from app.services.email import send_timesheet_submitted_notification, send_va_submission_notification
 from app.services.notifications import admin_and_auditor_user_ids, push
 from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
 from app.services.work_log_overlap import assert_no_time_overlap
@@ -461,7 +461,12 @@ def submit_timesheet(
         db.commit()
         db.refresh(row)
 
-    va = db.query(VA).filter(VA.id == current.va_id).first()
+    va = (
+        db.query(VA)
+        .options(joinedload(VA.user))
+        .filter(VA.id == current.va_id)
+        .first()
+    )
     logs = (
         db.query(WorkLog)
         .filter(
@@ -473,14 +478,29 @@ def submit_timesheet(
         .all()
     )
     hours = sum((l.hours for l in logs), Decimal("0"))
+    va_label = (
+        (va.user.display_name.strip() if va and va.user and va.user.display_name else "")
+        or (va.name if va else "VA")
+    )
+    # In-app for admin + auditor; email for admins
     push(
         db,
         admin_and_auditor_user_ids(db),
         "log",
-        f"📋 Timesheet submitted by {va.name if va else 'VA'}",
-        f"{body.date_from} – {body.date_to} · {hours} hrs · {len(logs)} entries ready for review.",
+        f"📋 Timesheet submitted by {va_label}",
+        f"{body.date_from} – {body.date_to} · {hours} hrs · {len(logs)} entries — Pending Approval.",
         "/admin/payroll",
     )
+    try:
+        send_timesheet_submitted_notification(
+            va_label,
+            str(body.date_from),
+            str(body.date_to),
+            str(hours),
+            len(logs),
+        )
+    except Exception:
+        pass
     return TimesheetSubmissionResponse(
         id=row.id,
         va_id=row.va_id,

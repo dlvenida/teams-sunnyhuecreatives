@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import type { CommentAttachment, MentionRef, TaskComment, TeamMember } from "@/lib/types"
@@ -19,7 +19,18 @@ function highlightMentions(body: string) {
     part.startsWith("@") ? <span key={i} className="rounded bg-primary/15 px-1 font-medium text-primary">{part}</span> : <span key={i}>{part}</span>)
 }
 
-export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; scopeId: string; scopeTitle?: string }) {
+export function CommentThread({
+  scope,
+  scopeId,
+  scopeTitle,
+  highlightCommentId,
+}: {
+  scope: Scope
+  scopeId: string
+  scopeTitle?: string
+  /** Scroll to and briefly highlight this comment (e.g. from a mention notification). */
+  highlightCommentId?: string | null
+}) {
   const qc = useQueryClient()
   const me = getAuthUser()
   const base = scope === "task" ? `/tasks/${scopeId}` : `/projects/${scopeId}`
@@ -42,6 +53,16 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
 
   const { data: comments = [], isLoading } = useQuery({ queryKey: [...qKey, sort], queryFn: () => apiFetch<TaskComment[]>(`${base}/comments?sort=${sort}`) })
   const { data: team = [] } = useQuery({ queryKey: ["team"], queryFn: () => apiFetch<TeamMember[]>("/team") })
+
+  useEffect(() => {
+    if (!highlightCommentId || isLoading || !comments.length) return
+    const el = document.getElementById(`comment-${highlightCommentId}`)
+    if (!el) return
+    el.scrollIntoView({ behavior: "smooth", block: "center" })
+    el.classList.add("ring-2", "ring-primary", "ring-offset-2")
+    const t = window.setTimeout(() => el.classList.remove("ring-2", "ring-primary", "ring-offset-2"), 2800)
+    return () => window.clearTimeout(t)
+  }, [highlightCommentId, isLoading, comments])
 
   const invalidate = () => qc.invalidateQueries({ queryKey: qKey })
   async function uploadOne(blob: Blob, name: string, extra: Record<string, string> = {}): Promise<CommentAttachment> {
@@ -169,8 +190,8 @@ export function CommentThread({ scope, scopeId, scopeTitle }: { scope: Scope; sc
   const repliesOf = (id: string) => visible.filter(c => c.parent_id === id)
 
   const renderComment = (c: TaskComment, nested = false) => (
-    <div key={c.id} className={nested ? "ml-8 border-l-2 border-muted pl-3" : ""}>
-      <div className="rounded-xl border bg-card p-3">
+    <div key={c.id} id={`comment-${c.id}`} className={nested ? "ml-8 border-l-2 border-muted pl-3 scroll-mt-24" : "scroll-mt-24"}>
+      <div className={`rounded-xl border bg-card p-3 transition ${highlightCommentId === c.id ? "ring-2 ring-primary ring-offset-2" : ""}`}>
         <div className="flex items-start gap-2">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[10px] font-bold text-primary">{initials(c.author_name)}</span>
           <div className="min-w-0 flex-1">

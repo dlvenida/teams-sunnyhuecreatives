@@ -676,6 +676,29 @@ class TimeClockAdjustment(Base):
     va: Mapped["VA"] = relationship()
 
 
+class ClientVARole(Base):
+    """Per-client role for a VA (e.g. Social Media Manager for Client A, General VA for Client B)."""
+
+    __tablename__ = "client_va_roles"
+    __table_args__ = (UniqueConstraint("client_id", "va_id", name="uq_client_va_role"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), index=True
+    )
+    va_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(255), default="General VA")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    client: Mapped["Client"] = relationship()
+    va: Mapped["VA"] = relationship()
+
+
 class VARate(Base):
     """Per-VA, per-client pay rate. Pending until Jane approves; prior approved stays active."""
     __tablename__ = "va_rates"

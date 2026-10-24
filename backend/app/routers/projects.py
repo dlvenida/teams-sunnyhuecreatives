@@ -113,8 +113,11 @@ def add_project_comment(project_id: UUID, body: ProjectCommentCreate, current: A
                                            CommentAttachment.scope_id == project_id, CommentAttachment.uploaded_by == current.user.id
                                            ).update({CommentAttachment.comment_id: c.id}, synchronize_session=False)
         db.commit()
-    comment_svc.notify_mentions(db, mentions, scope_label="a project discussion", title=p.name, body=f"{name}: {c.body}",
-                                link="/va/projects", exclude_user_id=current.user.id)
+    from app.services.notifications import project_deep_link
+    comment_svc.notify_mentions(
+        db, mentions, scope_label="a project discussion", title=p.name, body=f"{name}: {c.body}",
+        link=project_deep_link(project_id, c.id), exclude_user_id=current.user.id,
+    )
     return comment_svc.serialize_comment(db, c, "project", current.user.id)
 
 
@@ -149,10 +152,14 @@ def react_project_comment(project_id: UUID, comment_id: UUID, body: ReactionTogg
     db.commit()
     if not existing:
         project = db.query(Project).filter(Project.id == project_id).first()
-        comment_svc.notify_reaction(db, scope="project", comment=c, emoji=body.emoji,
-                                    reactor_name=comment_svc.display_name(db, current),
-                                    scope_title=project.name if project else "Project", link="/va/projects",
-                                    exclude_user_id=current.user.id)
+        from app.services.notifications import project_deep_link
+        comment_svc.notify_reaction(
+            db, scope="project", comment=c, emoji=body.emoji,
+            reactor_name=comment_svc.display_name(db, current),
+            scope_title=project.name if project else "Project",
+            link=project_deep_link(project_id, comment_id),
+            exclude_user_id=current.user.id,
+        )
     db.refresh(c)
     return comment_svc.serialize_comment(db, c, "project", current.user.id)
 
@@ -210,8 +217,12 @@ def create_meetup(project_id: UUID, body: MeetupCreate, current: Annotated[Curre
                       ends_at=body.ends_at, location=body.location, attendees=attendees,
                       created_by=current.user.id, created_by_name=comment_svc.display_name(db, current))
     db.add(m); db.commit(); db.refresh(m)
-    comment_svc.notify_mentions(db, attendees, scope_label="a project meet-up", title=p.name,
-                                body=f"📅 {m.title} — {m.starts_at.strftime('%b %d, %Y %I:%M %p')}", link="/va/projects", exclude_user_id=current.user.id)
+    from app.services.notifications import project_deep_link
+    comment_svc.notify_mentions(
+        db, attendees, scope_label="a project meet-up", title=p.name,
+        body=f"📅 {m.title} — {m.starts_at.strftime('%b %d, %Y %I:%M %p')}",
+        link=project_deep_link(project_id), exclude_user_id=current.user.id,
+    )
     return m
 
 

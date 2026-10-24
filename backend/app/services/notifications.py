@@ -8,14 +8,56 @@ from app.services.email import branded_email, detail_rows, render_template, send
 BASE = "/va/tasks"
 
 
+def task_deep_link(task_id, comment_id=None) -> str:
+    """Role-neutral deep link; push() rewrites /tasks → /admin/tasks or /va/tasks per recipient."""
+    link = f"/tasks?task={task_id}"
+    if comment_id:
+        link += f"&comment={comment_id}"
+    return link
+
+
+def project_deep_link(project_id, comment_id=None) -> str:
+    link = f"/projects?project={project_id}"
+    if comment_id:
+        link += f"&comment={comment_id}"
+    return link
+
+
+def _link_for_role(link: str | None, role: UserRole | str | None) -> str | None:
+    """Rewrite neutral /tasks and /projects (and legacy /va|/admin prefixes) for the recipient."""
+    if not link:
+        return None
+    role_val = role.value if hasattr(role, "value") else str(role or "")
+    prefix = "/va" if role_val == "va" else "/admin"
+
+    if link.startswith("/tasks"):
+        return f"{prefix}{link}"
+    if link.startswith("/projects"):
+        return f"{prefix}{link}"
+
+    # Legacy absolute paths — swap prefix so admin/auditor aren't sent to /va/*
+    for board in ("/tasks", "/projects"):
+        for old in ("/va", "/admin"):
+            if link.startswith(f"{old}{board}"):
+                return f"{prefix}{link[len(old):]}"
+    return link
+
+
 def push(db: Session, user_ids, type: str, title: str, body: str = "", link: str = "", exclude_user_id=None) -> None:
-    """Create in-app notification(s). Best-effort — never breaks the request."""
+    """Create in-app notification(s). Best-effort — never breaks the request.
+
+    Links starting with /tasks or /projects are rewritten per recipient role so
+    admins land on /admin/... and VAs on /va/....
+    """
     try:
         ids = [u for u in dict.fromkeys(user_ids or []) if u and u != exclude_user_id]
         if not ids:
             return
+        users = {u.id: u for u in db.query(User).filter(User.id.in_(ids)).all()}
         for uid in ids:
-            db.add(Notification(user_id=uid, type=type, title=title, body=body or None, link=link or None))
+            user = users.get(uid)
+            resolved = _link_for_role(link, user.role if user else None)
+            db.add(Notification(user_id=uid, type=type, title=title, body=body or None, link=resolved))
         db.commit()
     except Exception:
         try:
@@ -83,7 +125,8 @@ def notify_task_assigned(db: Session, task: Task, first_in_project: bool = False
             send_email(email, subject, branded_email(title, subject, body, "Open My Board", f"{settings.app_url}{BASE}"), template_key="task_assigned")
         push(db, [va_user_id(db, task.assignee_va_id)], "task",
              f"🌸 New project: {task.project.name}" if first_in_project and task.project else f"📌 New task assigned: {task.title}",
-             f"{task.client.name if task.client else ''}{' · ' + task.project.name if task.project else ''} · due {task.due_date or 'no date'}", BASE)
+             f"{task.client.name if task.client else ''}{' · ' + task.project.name if task.project else ''} · due {task.due_date or 'no date'}",
+             task_deep_link(task.id))
     except Exception:
         pass
 
@@ -101,7 +144,7 @@ def notify_task_updated(db: Session, task: Task, change: str, actor_name: str = 
             send_email(email, rendered[0], rendered[1], template_key="task_updated")
         else:
             send_email(email, f"Task updated: {task.title}", branded_email(title, change, body, "View Task", f"{settings.app_url}{BASE}"), template_key="task_updated")
-        push(db, [va_user_id(db, task.assignee_va_id)], "task", f"🔔 Task updated: {task.title}", change, BASE)
+        push(db, [va_user_id(db, task.assignee_va_id)], "task", f"🔔 Task updated: {task.title}", change, task_deep_link(task.id))
     except Exception:
         pass
 
@@ -118,7 +161,7 @@ def notify_task_comment(db: Session, task: Task, comment_body: str, author_name:
                 send_email(_resend_config()[2], rendered[0], rendered[1], template_key="task_comment")
             else:
                 send_email(_resend_config()[2], f"Task comment: {task.title}", branded_email(title, comment_body[:120], body, "Open Board", f"{settings.app_url}/admin/tasks"), template_key="task_comment")
-            push(db, admin_user_ids(db), "comment", f"💬 {author_name} commented on: {task.title}", comment_body[:200], "/admin/tasks")
+            push(db, admin_user_ids(db), "comment", f"💬 {author_name} commented on: {task.title}", comment_body[:200], task_deep_link(task.id))
             return
         contact = _va_contact(db, task.assignee_va_id)
         if not contact:
@@ -131,7 +174,7 @@ def notify_task_comment(db: Session, task: Task, comment_body: str, author_name:
             send_email(email, rendered[0], rendered[1], template_key="task_comment")
         else:
             send_email(email, f"New comment: {task.title}", branded_email(title, comment_body[:120], body, "Reply on My Board", f"{settings.app_url}{BASE}"), template_key="task_comment")
-        push(db, [va_user_id(db, task.assignee_va_id)], "comment", f"💬 New comment on: {task.title}", f"{author_name}: {comment_body[:180]}", BASE)
+        push(db, [va_user_id(db, task.assignee_va_id)], "comment", f"💬 New comment on: {task.title}", f"{author_name}: {comment_body[:180]}", task_deep_link(task.id))
     except Exception:
         pass
 

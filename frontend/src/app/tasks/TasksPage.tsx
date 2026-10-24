@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import type { Cadence, Client, Project, TaskItem, TaskPriority, TaskRecurrence, TaskStatus, VA } from "@/lib/types"
@@ -11,7 +11,7 @@ import { TASK_STATUSES, PRIORITY_META, RECURRENCE_OPTIONS, WEEKDAY_OPTIONS, grou
 import { CommentThread } from "@/components/comments/CommentThread"
 import { DetailAttachments } from "@/components/comments/DetailAttachments"
 import { AlertTriangle, CalendarDays, Columns3, List, MessageSquare, Pencil, Plus, Repeat, Search, Timer, Trash2, X } from "lucide-react"
-import { Link, useSearchParams } from "react-router-dom"
+import { Link, useNavigate, useSearchParams } from "react-router-dom"
 
 type ViewMode = "board" | "list" | "timeline"
 
@@ -25,10 +25,13 @@ const emptyForm = {
 
 export function TasksPage() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
   const isAuditor = user?.role === "auditor"
   const [searchParams] = useSearchParams()
+  const deepTaskId = searchParams.get("task")
+  const deepCommentId = searchParams.get("comment")
   const [view, setView] = useState<ViewMode>("board")
   const [cadence, setCadence] = useState<Cadence>("weekly")
   const [search, setSearch] = useState("")
@@ -41,6 +44,7 @@ export function TasksPage() {
   const [modal, setModal] = useState<null | { mode: "create" | "edit"; task?: TaskItem }>(null)
   const [form, setForm] = useState(emptyForm)
   const [commentTask, setCommentTask] = useState<TaskItem | null>(null)
+  const [highlightCommentId, setHighlightCommentId] = useState<string | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
   const [error, setError] = useState("")
 
@@ -62,6 +66,29 @@ export function TasksPage() {
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false") })
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas"), enabled: isAdmin })
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks"] }); qc.invalidateQueries({ queryKey: ["task-stats"] }); qc.invalidateQueries({ queryKey: ["projects"] }) }
+
+  // Deep-link from mention / comment notifications: ?task=&comment=
+  useEffect(() => {
+    if (!deepTaskId) return
+    let cancelled = false
+    const fromList = tasks.find((t) => t.id === deepTaskId)
+    const open = (t: TaskItem) => {
+      if (cancelled) return
+      setCommentTask(t)
+      setHighlightCommentId(deepCommentId)
+      // Clear query so closing the drawer doesn't reopen it
+      const base = user?.role === "va" ? "/va/tasks" : "/admin/tasks"
+      navigate(base, { replace: true })
+    }
+    if (fromList) {
+      open(fromList)
+      return
+    }
+    apiFetch<TaskItem>(`/tasks/${deepTaskId}`)
+      .then((t) => open(t))
+      .catch(() => { /* task missing or no access */ })
+    return () => { cancelled = true }
+  }, [deepTaskId, deepCommentId, tasks, navigate, user?.role])
 
   const save = useMutation({
     mutationFn: () => {
@@ -300,7 +327,7 @@ export function TasksPage() {
       )}
 
       {commentTask && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={() => setCommentTask(null)}>
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={() => { setCommentTask(null); setHighlightCommentId(null) }}>
           <div className="h-full w-full max-w-2xl overflow-y-auto bg-card p-5 shadow-xl" onClick={e => e.stopPropagation()}>
             <div className="mb-1 flex items-start justify-between gap-2">
               <div>
@@ -309,7 +336,7 @@ export function TasksPage() {
               </div>
               <span className="flex gap-1">
                 {!isAuditor && <Button size="sm" variant="outline" onClick={() => openEdit(commentTask)}><Pencil className="h-3 w-3" /> Edit Task</Button>}
-                <button onClick={() => setCommentTask(null)} className="p-1"><X className="h-4 w-4" /></button>
+                <button onClick={() => { setCommentTask(null); setHighlightCommentId(null) }} className="p-1"><X className="h-4 w-4" /></button>
               </span>
             </div>
             {commentTask.description && <p className="mb-2 whitespace-pre-wrap text-xs text-muted-foreground">{commentTask.description}</p>}
@@ -325,7 +352,7 @@ export function TasksPage() {
             <div className="mb-4"><DetailAttachments scope="task" scopeId={commentTask.id} /></div>
             <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> Comments & Updates</h3>
             <p className="mb-2 text-[11px] text-muted-foreground">Admin, Auditors and Users can comment here — tag teammates with @, react with emoji, attach images (auto-AVIF into the bucket) and draw on them.</p>
-            <CommentThread scope="task" scopeId={commentTask.id} scopeTitle={commentTask.title} />
+            <CommentThread scope="task" scopeId={commentTask.id} scopeTitle={commentTask.title} highlightCommentId={highlightCommentId} />
           </div>
         </div>
       )}

@@ -18,11 +18,21 @@ const TABS: { id: Tab; label: string; icon: typeof ListTodo }[] = [
   { id: "meetups", label: "Meet-ups", icon: Video },
 ]
 
-export function ProjectDetail({ project, onClose }: { project: Project; onClose: () => void }) {
+export function ProjectDetail({
+  project,
+  onClose,
+  initialTab,
+  highlightCommentId,
+}: {
+  project: Project
+  onClose: () => void
+  initialTab?: Tab
+  highlightCommentId?: string | null
+}) {
   const qc = useQueryClient()
   const user = getAuthUser()
   const prefix = user?.role === "va" ? "/va" : "/admin"
-  const [tab, setTab] = useState<Tab>("tasks")
+  const [tab, setTab] = useState<Tab>(initialTab || (highlightCommentId ? "discussion" : "tasks"))
   const pct = project.task_total ? Math.round((project.task_done / project.task_total) * 100) : 0
 
   const { data: tasks = [], isLoading: tasksLoading } = useQuery({ queryKey: ["tasks", "project", project.id], queryFn: () => apiFetch<TaskItem[]>(`/tasks?project_id=${project.id}`), enabled: tab === "tasks" })
@@ -101,7 +111,7 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
             {tab === "discussion" && (
               <div>
                 <p className="mb-2 text-[11px] text-muted-foreground">Project-wide discussion for Admin, Auditors and Users — tag teammates with @, react, attach AVIF-optimized images and draw on them. For task-specific talk, open the task instead.</p>
-                <CommentThread scope="project" scopeId={project.id} scopeTitle={project.name} />
+                <CommentThread scope="project" scopeId={project.id} scopeTitle={project.name} highlightCommentId={highlightCommentId} />
               </div>
             )}
 

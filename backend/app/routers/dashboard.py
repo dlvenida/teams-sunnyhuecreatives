@@ -74,8 +74,22 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
     hours_week = lq.filter(WorkLog.work_date >= week_start, WorkLog.work_date <= week_end).with_entities(_func.coalesce(_func.sum(WorkLog.hours), 0)).scalar() or 0
     done_week = [t for t in by_status(TaskStatus.done) if t.completed_at and week_start <= t.completed_at.date() <= week_end]
 
+    # Timesheet deadline reminders (semi-monthly) — also push notifications (deduped)
+    try:
+        from app.services.timesheet_reminders import dashboard_timesheet_attention, run_timesheet_reminders
+        run_timesheet_reminders(db)
+    except Exception:
+        pass
+
     # Attention + prepare
     attention, prepare = [], []
+    try:
+        from app.services.timesheet_reminders import dashboard_timesheet_attention
+        for item in dashboard_timesheet_attention(db, is_va=is_va, va_id=current.va_id, is_staff=is_admin):
+            attention.append(item)
+            prepare.insert(0, item["title"])
+    except Exception:
+        pass
     for t in overdue[:5]:
         attention.append({"type": "overdue_task", "severity": "high", "title": f"Overdue: {t.title}", "detail": f"{t.client.name if t.client else ''} · due {t.due_date}", "link": "/admin/tasks" if is_admin else "/va/tasks"})
     # Repeating tasks that missed their deadline — next copy waits until Done

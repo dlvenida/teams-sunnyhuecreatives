@@ -35,6 +35,7 @@ from app.schemas import (
 )
 from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
+from app.services.payroll_calendar import filter_logs_in_pay_period
 from app.services.va_rates import package_flats_for_period
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
@@ -80,8 +81,9 @@ def calculate_payroll(
         q = (
             db.query(WorkLog)
             .options(joinedload(WorkLog.va).joinedload(VA.user), joinedload(WorkLog.client), joinedload(WorkLog.project), joinedload(WorkLog.task))
-            .filter(WorkLog.status.in_(statuses), WorkLog.work_date >= start, WorkLog.work_date <= end)
+            .filter(WorkLog.status.in_(statuses))
         )
+        q = filter_logs_in_pay_period(q, start, end)
         if va_id:
             q = q.filter(WorkLog.va_id == va_id)
         return q.order_by(WorkLog.va_id, WorkLog.work_date).all()
@@ -262,16 +264,14 @@ def list_timesheets(
     rows = q.limit(min(limit, 100)).all()
     out: list[TimesheetSubmissionResponse] = []
     for row in rows:
-        logs = (
-            db.query(WorkLog)
-            .filter(
+        logs = filter_logs_in_pay_period(
+            db.query(WorkLog).filter(
                 WorkLog.va_id == row.va_id,
-                WorkLog.work_date >= row.period_start,
-                WorkLog.work_date <= row.period_end,
                 WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
-            )
-            .all()
-        )
+            ),
+            row.period_start,
+            row.period_end,
+        ).all()
         full_name = (
             (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
             or (row.va.name if row.va else None)
@@ -326,7 +326,7 @@ def timesheet_entries(
     )
     if not row:
         raise HTTPException(404, "Timesheet not found")
-    logs = (
+    logs = filter_logs_in_pay_period(
         db.query(WorkLog)
         .options(
             joinedload(WorkLog.client),
@@ -336,13 +336,11 @@ def timesheet_entries(
         )
         .filter(
             WorkLog.va_id == row.va_id,
-            WorkLog.work_date >= row.period_start,
-            WorkLog.work_date <= row.period_end,
             WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
-        )
-        .order_by(WorkLog.work_date, WorkLog.start_time)
-        .all()
-    )
+        ),
+        row.period_start,
+        row.period_end,
+    ).order_by(WorkLog.work_date, WorkLog.start_time).all()
     redact = current.role == UserRole.auditor
     full_name = (
         (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
@@ -407,16 +405,14 @@ def review_timesheet(
     row.reviewed_by = current.user.id
     db.commit()
     db.refresh(row)
-    logs = (
-        db.query(WorkLog)
-        .filter(
+    logs = filter_logs_in_pay_period(
+        db.query(WorkLog).filter(
             WorkLog.va_id == row.va_id,
-            WorkLog.work_date >= row.period_start,
-            WorkLog.work_date <= row.period_end,
             WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
-        )
-        .all()
-    )
+        ),
+        row.period_start,
+        row.period_end,
+    ).all()
     full_name = (
         (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
         or (row.va.name if row.va else None)

@@ -5,6 +5,7 @@ import { getNavForRole } from "@/lib/navigation"
 import { Sidebar } from "@/components/layout/Sidebar"
 import { TopBar } from "@/components/layout/TopBar"
 import { ImpersonationBanner } from "@/components/layout/ImpersonationBanner"
+import { NotificationAlerts } from "@/components/notifications/NotificationAlerts"
 
 export function AppShell() {
   const user = getAuthUser()
@@ -23,6 +24,7 @@ export function AppShell() {
         </main>
         <footer className="px-5 pb-4 text-center text-[10px] text-muted-foreground">© Teams - Sunny Hue Creative - DLV IT Solutions</footer>
       </div>
+      <NotificationAlerts />
     </div>
   )
 }

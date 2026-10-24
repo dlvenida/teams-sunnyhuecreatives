@@ -56,6 +56,8 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
         clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
+        payable_on=getattr(log, "payable_on", None),
+        rolled_to_next_payroll=bool(getattr(log, "payable_on", None)),
         created_at=log.created_at,
         attachment_count=len(log.attachments) if getattr(log, "attachments", None) is not None else 0,
     )
@@ -219,9 +221,16 @@ def _my_log_or_404(db: Session, log_id: UUID, va_id):
 @router.patch("/work-logs/{log_id}", response_model=WorkLogResponse)
 def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
     """VA can edit their own log while it is still submitted/rejected (not approved/invoiced)."""
+    from app.services.payroll_calendar import resolve_payable_on, va_cannot_edit_log
+
     log = _my_log_or_404(db, log_id, current.va_id)
     if log.status in (WorkLogStatus.approved, WorkLogStatus.invoiced):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approved/invoiced logs can only be edited by an admin")
+    if va_cannot_edit_log(db, current.va_id, log.work_date, getattr(log, "payable_on", None)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This entry is in an approved timesheet and is locked. Add a new late entry instead — it will roll to the next payroll.",
+        )
     data = body.model_dump(exclude_unset=True)
     for k, v in data.items():
         setattr(log, k, v)
@@ -241,6 +250,7 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
         rate, pay, _ = resolve_log_pay(db, current.va_id, log.client_id, log.hours)
         log.va_rate = rate
         log.va_pay = pay
+        log.payable_on = resolve_payable_on(db, current.va_id, work_date)
         if log.status == WorkLogStatus.rejected:
             log.status = WorkLogStatus.submitted  # editing a rejected log resubmits it
     db.commit()
@@ -250,9 +260,13 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
 
 @router.delete("/work-logs/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_my_work_log(log_id: UUID, current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
+    from app.services.payroll_calendar import va_cannot_edit_log
+
     log = _my_log_or_404(db, log_id, current.va_id)
     if log.status in (WorkLogStatus.approved, WorkLogStatus.invoiced):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Approved/invoiced logs cannot be deleted")
+    if va_cannot_edit_log(db, current.va_id, log.work_date, getattr(log, "payable_on", None)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This entry is in an approved timesheet and cannot be deleted")
     db.delete(log)
     db.commit()
 
@@ -506,6 +520,8 @@ def submit_work_log(
     current: Annotated[CurrentUser, Depends(require_va)],
     db: Annotated[Session, Depends(get_db)],
 ):
+    from app.services.payroll_calendar import resolve_payable_on
+
     hours = calculate_hours(body.start_time, body.end_time)
     assert_no_time_overlap(
         db,
@@ -515,6 +531,7 @@ def submit_work_log(
         end_time=body.end_time,
     )
     rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
+    payable_on = resolve_payable_on(db, current.va_id, body.work_date)
 
     log = WorkLog(
         work_date=body.work_date,
@@ -532,6 +549,7 @@ def submit_work_log(
         va_pay=pay,
         notes=body.notes,
         status=WorkLogStatus.submitted,
+        payable_on=payable_on,
     )
     db.add(log)
     db.commit()
@@ -569,20 +587,20 @@ def list_my_timesheets(
             TimesheetSubmission.period_start == date_from,
             TimesheetSubmission.period_end == date_to,
         )
+    from app.services.payroll_calendar import filter_logs_in_pay_period
+
     rows = q.order_by(TimesheetSubmission.submitted_at.desc()).limit(50).all()
     va = db.query(VA).filter(VA.id == current.va_id).first()
     out = []
     for r in rows:
-        logs = (
-            db.query(WorkLog)
-            .filter(
+        logs = filter_logs_in_pay_period(
+            db.query(WorkLog).filter(
                 WorkLog.va_id == r.va_id,
-                WorkLog.work_date >= r.period_start,
-                WorkLog.work_date <= r.period_end,
                 WorkLog.status.in_(BILLABLE + [WorkLogStatus.submitted]),
-            )
-            .all()
-        )
+            ),
+            r.period_start,
+            r.period_end,
+        ).all()
         out.append(
             TimesheetSubmissionResponse(
                 id=r.id,
@@ -607,6 +625,8 @@ def submit_timesheet(
     current: Annotated[CurrentUser, Depends(require_va)],
     db: Annotated[Session, Depends(get_db)],
 ):
+    from app.services.payroll_calendar import filter_logs_in_pay_period
+
     if body.date_to < body.date_from:
         raise HTTPException(status_code=400, detail="date_to must be on or after date_from")
 
@@ -619,6 +639,21 @@ def submit_timesheet(
         )
         .first()
     )
+    if existing and existing.status == TimesheetStatus.reviewed:
+        raise HTTPException(
+            status_code=400,
+            detail="This timesheet was already approved and is locked. You cannot resubmit it. "
+            "Late entries for dates in this period will roll over to the next payroll.",
+        )
+    # Also lock if payroll was already marked paid for this exact period
+    from app.models import PayrollRun
+    if db.query(PayrollRun).filter(
+        PayrollRun.va_id == current.va_id,
+        PayrollRun.period_start == body.date_from,
+        PayrollRun.period_end == body.date_to,
+    ).first():
+        raise HTTPException(status_code=400, detail="Payroll for this period was already paid — timesheet is locked.")
+
     if existing:
         existing.notes = body.notes
         existing.status = TimesheetStatus.submitted
@@ -645,16 +680,14 @@ def submit_timesheet(
         .filter(VA.id == current.va_id)
         .first()
     )
-    logs = (
-        db.query(WorkLog)
-        .filter(
+    logs = filter_logs_in_pay_period(
+        db.query(WorkLog).filter(
             WorkLog.va_id == current.va_id,
-            WorkLog.work_date >= body.date_from,
-            WorkLog.work_date <= body.date_to,
             WorkLog.status.in_(BILLABLE + [WorkLogStatus.submitted]),
-        )
-        .all()
-    )
+        ),
+        body.date_from,
+        body.date_to,
+    ).all()
     hours = sum((l.hours for l in logs), Decimal("0"))
     va_label = (
         (va.user.display_name.strip() if va and va.user and va.user.display_name else "")

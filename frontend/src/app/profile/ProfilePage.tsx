@@ -1,16 +1,26 @@
 import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, getAuthUser, setAuthUser } from "@/lib/api"
-import { profileToForm, TIMEZONES, type ProfileFormData, type UserProfile } from "@/lib/profile"
+import {
+  DEFAULT_NOTIFICATION_PREFS,
+  profileToForm,
+  TIMEZONES,
+  type NotificationPreferences,
+  type NotificationSoundId,
+  type ProfileFormData,
+  type UserProfile,
+} from "@/lib/profile"
 import { ProfilePhotoUpload } from "@/components/profile/ProfilePhotoUpload"
 import { ThemeSwitcher } from "@/components/theme/ThemeSwitcher"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { AtSign, Briefcase, CalendarDays, Hash, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
+import { AtSign, BellRing, Briefcase, CalendarDays, Hash, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Volume2, Wallet } from "lucide-react"
 import { PinInput } from "@/components/auth/PinInput"
 import { roleLabel } from "@/lib/utils"
+import { playNotificationSound } from "@/lib/notificationSound"
+import { TYPE_META } from "@/components/layout/NotificationsPanel"
 
 export function ProfilePage() {
   const qc = useQueryClient()
@@ -253,6 +263,7 @@ export function ProfilePage() {
           { id: "links", label: "Links", icon: Link2 },
           { id: "email", label: "Email", icon: Mail },
           { id: "payment", label: "Payment", icon: Wallet },
+          { id: "notifications", label: "Notifications", icon: BellRing },
           { id: "appearance", label: "Appearance", icon: Palette },
           { id: "security", label: "Security", icon: Lock },
         ].map(t => (
@@ -462,6 +473,27 @@ export function ProfilePage() {
       </Card>
       )}
 
+      {tab === "notifications" && profile && (
+        <NotificationSettingsCard
+          prefs={{
+            ...DEFAULT_NOTIFICATION_PREFS,
+            ...(profile.notification_preferences || {}),
+            popup_types: {
+              ...DEFAULT_NOTIFICATION_PREFS.popup_types,
+              ...(profile.notification_preferences?.popup_types || {}),
+            },
+          }}
+          onSave={(next) =>
+            apiFetch<UserProfile>("/profile/me", {
+              method: "PATCH",
+              body: JSON.stringify({ notification_preferences: next }),
+            }).then((data) => {
+              qc.setQueryData(["profile"], data)
+            })
+          }
+        />
+      )}
+
       {tab === "appearance" && (
       <Card>
         <CardHeader className="pb-2">
@@ -576,5 +608,131 @@ export function ProfilePage() {
       </>
       )}
     </div>
+  )
+}
+
+const SOUND_OPTIONS: { id: NotificationSoundId; label: string; hint: string }[] = [
+  { id: "chime", label: "Chime", hint: "Soft three-note" },
+  { id: "bell", label: "Bell", hint: "Two-tone ring" },
+  { id: "ping", label: "Ping", hint: "Short single tone" },
+  { id: "loud", label: "Loud", hint: "Strong triple alert" },
+]
+
+function NotificationSettingsCard({
+  prefs,
+  onSave,
+}: {
+  prefs: NotificationPreferences
+  onSave: (next: NotificationPreferences) => Promise<unknown>
+}) {
+  const [local, setLocal] = useState(prefs)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState("")
+
+  useEffect(() => setLocal(prefs), [prefs])
+
+  const save = async () => {
+    setSaving(true)
+    setMsg("")
+    try {
+      await onSave(local)
+      setMsg("Notification settings saved.")
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Save failed")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <BellRing className="h-4 w-4 text-primary" /> Notification settings
+        </CardTitle>
+        <p className="text-[11px] text-muted-foreground">
+          Control pop-ups and sounds when new notifications arrive — even while you are on another page.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <label className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm">
+          <span>
+            <span className="font-semibold">Pop-up notifications</span>
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">Show a brief toast in the corner for new alerts</span>
+          </span>
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-primary"
+            checked={local.popup_enabled}
+            onChange={(e) => setLocal({ ...local, popup_enabled: e.target.checked })}
+          />
+        </label>
+
+        <label className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm">
+          <span>
+            <span className="font-semibold">Sound alerts</span>
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">Play a sound when a new notification arrives</span>
+          </span>
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-primary"
+            checked={local.sound_enabled}
+            onChange={(e) => setLocal({ ...local, sound_enabled: e.target.checked })}
+          />
+        </label>
+
+        <div>
+          <Label className="mb-1.5 flex items-center gap-1.5"><Volume2 className="h-3.5 w-3.5" /> Sound</Label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {SOUND_OPTIONS.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => {
+                  setLocal({ ...local, sound_id: s.id })
+                  playNotificationSound(s.id)
+                }}
+                className={`rounded-xl border px-3 py-2.5 text-left text-xs transition ${
+                  local.sound_id === s.id ? "border-primary bg-primary/10 ring-1 ring-primary/30" : "hover:bg-muted/50"
+                }`}
+              >
+                <span className="font-bold">{s.label}</span>
+                <span className="mt-0.5 block text-[10px] text-muted-foreground">{s.hint} · click to preview</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <Label className="mb-1.5">Show pop-up for</Label>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {Object.keys(DEFAULT_NOTIFICATION_PREFS.popup_types).map((type) => {
+              const meta = TYPE_META[type]
+              return (
+                <label key={type} className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-xs">
+                  <span className="font-semibold">{meta?.label || type}</span>
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 accent-primary"
+                    checked={local.popup_types[type] !== false}
+                    onChange={(e) =>
+                      setLocal({
+                        ...local,
+                        popup_types: { ...local.popup_types, [type]: e.target.checked },
+                      })
+                    }
+                  />
+                </label>
+              )
+            })}
+          </div>
+        </div>
+
+        {msg && <p className="text-[11px] text-muted-foreground">{msg}</p>}
+        <Button variant="gold" size="sm" disabled={saving} onClick={() => void save()}>
+          {saving ? "Saving…" : "Save notification settings"}
+        </Button>
+      </CardContent>
+    </Card>
   )
 }

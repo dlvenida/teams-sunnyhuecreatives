@@ -55,6 +55,8 @@ def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
         clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
+        payable_on=getattr(log, "payable_on", None),
+        rolled_to_next_payroll=bool(getattr(log, "payable_on", None)),
         created_at=log.created_at,
         attachment_count=len(log.attachments) if getattr(log, "attachments", None) is not None else 0,
     )

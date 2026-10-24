@@ -296,10 +296,16 @@ export function VAPayrollPage() {
             <Button
               variant="gold"
               className="w-full"
-              disabled={!rangeReady || submitTimesheet.isPending}
+              disabled={!rangeReady || submitTimesheet.isPending || submitted?.status === "reviewed"}
               onClick={() => submitTimesheet.mutate()}
+              title={submitted?.status === "reviewed" ? "Approved timesheets are locked" : undefined}
             >
-              <Send className="h-4 w-4" /> {submitted ? "Resubmit timesheet" : "Submit timesheet"}
+              <Send className="h-4 w-4" />{" "}
+              {submitted?.status === "reviewed"
+                ? "Timesheet locked"
+                : submitted
+                  ? "Resubmit timesheet"
+                  : "Submit timesheet"}
             </Button>
           </div>
           <div className="flex items-end">
@@ -310,12 +316,27 @@ export function VAPayrollPage() {
         </div>
 
         {submitted && (
-          <p className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
-            <CheckCircle2 className="h-4 w-4" />
-            Timesheet submitted for {formatInvoiceDate(submitted.period_start)} – {formatInvoiceDate(submitted.period_end)}
-            {" · "}status: <strong className="capitalize">{submitted.status}</strong>
+          <p className={cn(
+            "flex items-center gap-2 rounded-xl border px-3 py-2 text-xs",
+            submitted.status === "reviewed"
+              ? "border-green-200 bg-green-50 text-green-900"
+              : "border-sky-200 bg-sky-50 text-sky-800",
+          )}>
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>
+              Timesheet for {formatInvoiceDate(submitted.period_start)} – {formatInvoiceDate(submitted.period_end)}
+              {" · "}status: <strong className="capitalize">{submitted.status === "reviewed" ? "approved (locked)" : submitted.status}</strong>
+              {submitted.status === "reviewed" && (
+                <span className="mt-1 block text-[11px]">
+                  You cannot resubmit this period. Late entries for these dates still work — they roll over to the next payroll (paid after the next cutoff: 15th or end of month).
+                </span>
+              )}
+            </span>
           </p>
         )}
+        <p className="rounded-xl border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
+          Payroll schedule: submit by the <strong>15th</strong> (paid on the 16th) and by the <strong>30th/31st</strong> (paid on the 1st). Dashboard reminders appear a few days before each deadline.
+        </p>
         {submitMsg && <p className="rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">{submitMsg}</p>}
         {submitErr && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{submitErr}</p>}
 

@@ -89,6 +89,8 @@ export interface WorkLog {
   clock_in_at?: string | null
   clock_out_at?: string | null
   source?: string
+  payable_on?: string | null
+  rolled_to_next_payroll?: boolean
   created_at: string
   attachment_count?: number
 }

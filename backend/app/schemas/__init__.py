@@ -202,6 +202,21 @@ class VADelegateRequest(BaseModel):
 
 
 # Profile
+class NotificationPreferences(BaseModel):
+    popup_enabled: bool = True
+    sound_enabled: bool = True
+    sound_id: str = "chime"  # chime | bell | ping | loud
+    popup_types: dict[str, bool] = Field(default_factory=lambda: {
+        "comment": True,
+        "task": True,
+        "log": True,
+        "clock": True,
+        "delegation": True,
+        "invoice": True,
+        "system": True,
+    })
+
+
 class ProfileUpdate(BaseModel):
     username: str | None = None
     display_name: str | None = None
@@ -223,6 +238,7 @@ class ProfileUpdate(BaseModel):
     linkedin_url: str | None = None
     portfolio_url: str | None = None
     status_message: str | None = None
+    notification_preferences: NotificationPreferences | None = None
 
 
 class EmailChangeRequest(BaseModel):
@@ -265,6 +281,7 @@ class ProfileResponse(BaseModel):
     linkedin_url: str | None = None
     portfolio_url: str | None = None
     status_message: str | None = None
+    notification_preferences: NotificationPreferences | None = None
     created_at: datetime | None = None
 
 
@@ -814,6 +831,8 @@ class WorkLogResponse(BaseModel):
     clock_in_at: datetime | None = None
     clock_out_at: datetime | None = None
     source: str = "manual"
+    payable_on: date | None = None
+    rolled_to_next_payroll: bool = False
     created_at: datetime
     attachment_count: int = 0
 

@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
+import { CLIENT_VA_ROLE_SUGGESTIONS } from "@/lib/clientVaRoles"
 
 type Tab = "clients" | "sub-clients"
 type StatusFilter = "all" | "active" | "archived" | "pending"
@@ -623,14 +624,27 @@ export function ClientsPage() {
                     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-primary">
-                          <Users className="h-3.5 w-3.5" /> Team on this client
+                          <Users className="h-3.5 w-3.5" /> VA roles for {detail.client.name}
                         </p>
-                        <p className="text-xs text-muted-foreground">Each VA can have a different role per client.</p>
+                        <p className="text-xs text-muted-foreground">
+                          Job titles only (not pay). Same VA can be “Social Media Manager” here and “Email Marketing Specialist” on another client.
+                          {canEditTeamRoles ? " Admin and Auditor can add or edit." : ""}
+                        </p>
                       </div>
                     </div>
                     {(detail.team ?? []).length === 0 ? (
                       <p className="text-xs text-muted-foreground">No VAs assigned yet. Assign a task or add someone below.</p>
                     ) : (
+                      <div className="space-y-3">
+                        <ul className="space-y-1 rounded-xl border bg-white/80 px-3 py-2 text-xs">
+                          {(detail.team ?? []).map((m: ClientTeamMember) => (
+                            <li key={`sum-${m.va_id}`} className="flex flex-wrap items-baseline gap-x-1.5 py-0.5">
+                              <span className="font-bold">{m.va_name}</span>
+                              <span className="text-muted-foreground">—</span>
+                              <span className={m.role ? "font-semibold text-primary" : "text-muted-foreground"}>{m.role || "No role set"}</span>
+                            </li>
+                          ))}
+                        </ul>
                       <div className="overflow-x-auto rounded-xl border bg-white/80">
                         <table className="w-full text-xs">
                           <thead>
@@ -660,7 +674,8 @@ export function ClientsPage() {
                                   {editingTeamRole?.va_id === m.va_id ? (
                                     <div className="flex flex-wrap items-center gap-1.5">
                                       <Input
-                                        className="h-8 w-[180px] text-xs"
+                                        className="h-8 w-[200px] text-xs"
+                                        list="client-page-va-role-suggestions"
                                         value={editingTeamRole.role}
                                         placeholder="e.g. Social Media Manager"
                                         onChange={(e) => setEditingTeamRole({ ...editingTeamRole, role: e.target.value })}
@@ -706,6 +721,7 @@ export function ClientsPage() {
                           </tbody>
                         </table>
                       </div>
+                      </div>
                     )}
                     {canEditTeamRoles && (
                       <div className="mt-3 grid gap-2 rounded-xl border border-dashed border-primary/25 bg-primary/[0.03] p-3 sm:grid-cols-[1fr_1fr_auto]">
@@ -724,6 +740,7 @@ export function ClientsPage() {
                           <Label className="text-[10px]">Role for this client</Label>
                           <Input
                             className="h-9"
+                            list="client-page-va-role-suggestions"
                             placeholder="e.g. Graphic Designer"
                             value={teamAddRole}
                             onChange={(e) => setTeamAddRole(e.target.value)}
@@ -740,6 +757,9 @@ export function ClientsPage() {
                             <Plus className="h-3.5 w-3.5" /> Add
                           </Button>
                         </div>
+                        <datalist id="client-page-va-role-suggestions">
+                          {CLIENT_VA_ROLE_SUGGESTIONS.map((r) => <option key={r} value={r} />)}
+                        </datalist>
                       </div>
                     )}
                   </div>

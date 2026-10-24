@@ -1,28 +1,62 @@
 import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { apiFetch, getAuthUser, homeForRole, startImpersonation } from "@/lib/api"
-import type { UserDetail } from "@/lib/types"
+import type { Client, UserDetail } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Input, Label, Select } from "@/components/ui/input"
 import { cn, formatCurrency, formatDate, roleLabel } from "@/lib/utils"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { TASK_STATUSES, PRIORITY_META } from "@/components/tasks/task-utils"
-import { Building2, Clock, Eye, FolderKanban, History, KanbanSquare, Loader2, UserCircle, X } from "lucide-react"
+import { CLIENT_VA_ROLE_SUGGESTIONS } from "@/lib/clientVaRoles"
+import { Building2, Clock, Eye, FolderKanban, History, KanbanSquare, Loader2, Pencil, Plus, UserCircle, X } from "lucide-react"
 
 type Tab = "profile" | "clients" | "tasks" | "projects" | "timeline" | "logs" | "history"
-const TABS: [Tab, string][] = [["profile", "Profile"], ["clients", "Assigned Clients"], ["tasks", "Assigned Tasks"], ["projects", "Assigned Projects"], ["timeline", "Timeline"], ["logs", "Time Logs"], ["history", "History"]]
+const TABS: [Tab, string][] = [["profile", "Profile"], ["clients", "Roles per client"], ["tasks", "Assigned Tasks"], ["projects", "Assigned Projects"], ["timeline", "Timeline"], ["logs", "Time Logs"], ["history", "History"]]
 
 export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose: () => void }) {
+  const qc = useQueryClient()
   const { showPricing } = useDisplaySettings()
-  const isAdmin = getAuthUser()?.role === "admin"
+  const me = getAuthUser()
+  const isAdmin = me?.role === "admin"
+  const canEditRoles = me?.role === "admin" || me?.role === "auditor"
   const [tab, setTab] = useState<Tab>("profile")
   const [switchError, setSwitchError] = useState("")
   const [switching, setSwitching] = useState(false)
+  const [editingClientId, setEditingClientId] = useState<string | null>(null)
+  const [editRole, setEditRole] = useState("")
+  const [addClientId, setAddClientId] = useState("")
+  const [addRole, setAddRole] = useState("")
+  const [roleError, setRoleError] = useState("")
   const { data: detail, isLoading, error } = useQuery({
     queryKey: ["user-detail", userId],
     queryFn: () => apiFetch<UserDetail>(`/auth/users/${userId}/detail`),
     enabled: !!userId,
+  })
+  const { data: allClients = [] } = useQuery({
+    queryKey: ["clients"],
+    queryFn: () => apiFetch<Client[]>("/clients?active_only=true"),
+    enabled: canEditRoles && tab === "clients" && !!detail?.profile.va_id,
+  })
+
+  const saveRole = useMutation({
+    mutationFn: ({ client_id, role }: { client_id: string; role: string }) => {
+      const vaId = detail?.profile.va_id
+      if (!vaId) throw new Error("This user has no VA profile")
+      return apiFetch(`/clients/${client_id}/team/${vaId}`, {
+        method: "PUT",
+        body: JSON.stringify({ role: role.trim() || "General VA" }),
+      })
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["user-detail", userId] })
+      setEditingClientId(null)
+      setAddClientId("")
+      setAddRole("")
+      setRoleError("")
+    },
+    onError: (e: Error) => setRoleError(e.message),
   })
 
   const switchTo = async () => {
@@ -121,14 +155,109 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
             </>)}
 
             {tab === "clients" && (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {detail.assigned_clients.map((c) => (
-                  <div key={c.client_id} className="rounded-xl border p-3 text-xs">
-                    <p className="flex items-center gap-1.5 font-bold"><Building2 className="h-3.5 w-3.5 text-primary" /> {c.name} {!c.is_active && <span className="text-muted-foreground">(archived)</span>}</p>
-                    <p className="mt-1 text-muted-foreground">{c.hours} hrs{showPricing && c.va_pay != null ? ` · ${formatCurrency(c.va_pay, (p.currency as "PHP" | "USD") || "USD")} earned` : ""} · {c.open_tasks} open / {c.done_tasks} done tasks · {c.logs} logs{c.last_log_date ? ` · last ${formatDate(c.last_log_date)}` : ""}</p>
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-primary/15 bg-primary/[0.03] p-3">
+                  <p className="text-xs font-bold">Role per client</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Job function titles only (not pay). Example: Social Media Manager for Client A, Email Marketing Specialist for Client B.
+                    {canEditRoles ? " Admin and Auditor can add or update anytime; the VA can also set their own." : ""}
+                  </p>
+                </div>
+                {roleError && <p className="text-[11px] text-red-600">{roleError}</p>}
+                <div className="space-y-2">
+                  {detail.assigned_clients.map((c) => (
+                    <div key={c.client_id} className="rounded-xl border p-3 text-xs">
+                      {editingClientId === c.client_id ? (
+                        <div className="space-y-2">
+                          <p className="font-bold">{c.name}</p>
+                          <Label className="text-[10px]">Role for this client</Label>
+                          <Input
+                            className="h-8 text-xs"
+                            list="client-va-role-suggestions"
+                            value={editRole}
+                            placeholder="e.g. Social Media Manager"
+                            onChange={(e) => setEditRole(e.target.value)}
+                            autoFocus
+                          />
+                          <div className="flex gap-1.5">
+                            <Button size="sm" variant="gold" disabled={saveRole.isPending} onClick={() => saveRole.mutate({ client_id: c.client_id, role: editRole })}>Save</Button>
+                            <Button size="sm" variant="ghost" onClick={() => setEditingClientId(null)}>Cancel</Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                              <span className="inline-flex items-center gap-1.5 font-bold"><Building2 className="h-3.5 w-3.5 text-primary" /> {c.name}</span>
+                              <span className="text-muted-foreground">—</span>
+                              <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold", c.role ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground")}>
+                                {c.role || "No role set"}
+                              </span>
+                              {!c.is_active && <span className="text-muted-foreground">(archived)</span>}
+                            </p>
+                            <p className="mt-1 text-muted-foreground">
+                              {c.hours} hrs
+                              {showPricing && c.va_pay != null ? ` · ${formatCurrency(c.va_pay, (p.currency as "PHP" | "USD") || "USD")} earned` : ""}
+                              {" · "}{c.open_tasks} open / {c.done_tasks} done tasks · {c.logs} logs
+                              {c.last_log_date ? ` · last ${formatDate(c.last_log_date)}` : ""}
+                            </p>
+                          </div>
+                          {canEditRoles && p.va_id && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => { setRoleError(""); setEditingClientId(c.client_id); setEditRole(c.role || "") }}
+                            >
+                              <Pencil className="h-3 w-3" /> {c.role ? "Edit role" : "Set role"}
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {detail.assigned_clients.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No clients yet — add a role below, or assign a task / log time for a client.</p>
+                  )}
+                </div>
+                {canEditRoles && p.va_id && (
+                  <div className="grid gap-2 rounded-xl border border-dashed border-primary/25 p-3 sm:grid-cols-[1fr_1fr_auto]">
+                    <div>
+                      <Label className="text-[10px]">Client</Label>
+                      <Select value={addClientId} onChange={(e) => setAddClientId(e.target.value)} className="h-9">
+                        <option value="">Select client…</option>
+                        {allClients
+                          .filter((c) => c.is_active !== false && !detail.assigned_clients.some((a) => a.client_id === c.id && a.has_explicit_role))
+                          .map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Role title</Label>
+                      <Input
+                        className="h-9"
+                        list="client-va-role-suggestions"
+                        placeholder="e.g. Community Manager"
+                        value={addRole}
+                        onChange={(e) => setAddRole(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <Button
+                        size="sm"
+                        variant="gold"
+                        className="w-full"
+                        disabled={!addClientId || saveRole.isPending}
+                        onClick={() => saveRole.mutate({ client_id: addClientId, role: addRole })}
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add role
+                      </Button>
+                    </div>
                   </div>
-                ))}
-                {detail.assigned_clients.length === 0 && <p className="text-xs text-muted-foreground">No assigned clients yet — assignment comes from tasks and time logs.</p>}
+                )}
+                <datalist id="client-va-role-suggestions">
+                  {CLIENT_VA_ROLE_SUGGESTIONS.map((r) => <option key={r} value={r} />)}
+                </datalist>
               </div>
             )}
 

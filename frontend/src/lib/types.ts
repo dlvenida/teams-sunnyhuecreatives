@@ -509,7 +509,11 @@ export interface UserDetail {
     tasks_overdue: number; clients_count: number; projects_count: number; clock_sessions: number
     clock_hours: string; last_activity?: string | null
   }
-  assigned_clients: { client_id: string; name: string; is_active: boolean; open_tasks: number; done_tasks: number; total_tasks: number; hours: string; va_pay: string; logs: number; last_log_date?: string | null }[]
+  assigned_clients: {
+    client_id: string; name: string; is_active: boolean; open_tasks: number; done_tasks: number
+    total_tasks: number; hours: string; va_pay: string; logs: number; last_log_date?: string | null
+    role?: string | null; has_explicit_role?: boolean
+  }[]
   assigned_projects: { id: string; name: string; color: string; status: string; cadence: string; client_id: string; client_name?: string | null; sub_client_name?: string | null; task_total: number; task_done: number; hours: string; due_date?: string | null }[]
   tasks: TaskItem[]
   time_logs: WorkLog[]

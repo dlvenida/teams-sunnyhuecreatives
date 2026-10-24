@@ -293,19 +293,36 @@ def user_detail(
     def _pay(items):
         return sum((l.va_pay for l in items), Decimal("0"))
 
-    # Assigned clients: union of clients from tasks + work logs
+    # Assigned clients: union of tasks + work logs + explicit per-client roles
+    from app.models import Client, ClientVARole
+
+    role_by_client: dict[str, str] = {}
+    if va:
+        for r in db.query(ClientVARole).filter(ClientVARole.va_id == va.id).all():
+            role_by_client[str(r.client_id)] = r.role
+
     client_ids: list = []
-    for src in ([t.client_id for t in tasks] + [l.client_id for l in logs]):
+    for src in [t.client_id for t in tasks] + [l.client_id for l in logs]:
         if src and src not in client_ids:
             client_ids.append(src)
+    for cid_str in role_by_client:
+        try:
+            uid = UUID(cid_str)
+        except ValueError:
+            continue
+        if uid not in client_ids:
+            client_ids.append(uid)
     assigned_clients = []
     for cid in client_ids:
         c_tasks = [t for t in tasks if t.client_id == cid]
         c_logs = [l for l in billable if l.client_id == cid]
         all_c_logs = [l for l in logs if l.client_id == cid]
         client_obj = c_tasks[0].client if c_tasks and c_tasks[0].client else (all_c_logs[0].client if all_c_logs else None)
+        if not client_obj:
+            client_obj = db.query(Client).filter(Client.id == cid).first()
+        cid_str = str(cid)
         assigned_clients.append({
-            "client_id": str(cid), "name": client_obj.name if client_obj else "Unknown",
+            "client_id": cid_str, "name": client_obj.name if client_obj else "Unknown",
             "is_active": bool(client_obj.is_active) if client_obj else True,
             "open_tasks": len([t for t in c_tasks if t.status != TaskStatus.done]),
             "done_tasks": len([t for t in c_tasks if t.status == TaskStatus.done]),
@@ -313,6 +330,8 @@ def user_detail(
             "va_pay": None if redact else str(_pay(c_logs)),
             "logs": len(all_c_logs),
             "last_log_date": str(max((l.work_date for l in all_c_logs), default=None)) if all_c_logs else None,
+            "role": role_by_client.get(cid_str) or "",
+            "has_explicit_role": cid_str in role_by_client,
         })
     assigned_clients.sort(key=lambda x: x["name"].lower())
 

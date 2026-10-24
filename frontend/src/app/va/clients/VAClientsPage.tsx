@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { CreateReportModal } from "@/components/reports/CreateReportModal"
 import { formatDate } from "@/lib/utils"
 import { Building2, Flag, FolderKanban, KanbanSquare, Pencil, X } from "lucide-react"
+import { CLIENT_VA_ROLE_SUGGESTIONS } from "@/lib/clientVaRoles"
 
 /** VA view — Clients tab showing only clients ASSIGNED to this VA. */
 export function VAClientsPage() {
@@ -71,11 +72,15 @@ export function VAClientsPage() {
                       <Label className="text-[10px]">Your role for this client</Label>
                       <Input
                         className="h-8 text-xs"
+                        list="va-client-role-suggestions"
                         value={editingRole.role}
                         placeholder="e.g. Email Marketing Manager"
                         onChange={(e) => setEditingRole({ ...editingRole, role: e.target.value })}
                         autoFocus
                       />
+                      <datalist id="va-client-role-suggestions">
+                        {CLIENT_VA_ROLE_SUGGESTIONS.map((r) => <option key={r} value={r} />)}
+                      </datalist>
                       {roleError && <p className="text-[10px] text-red-600">{roleError}</p>}
                       <div className="flex gap-1.5">
                         <Button size="sm" variant="gold" disabled={saveRole.isPending} onClick={() => saveRole.mutate({ client_id: c.client_id, role: editingRole.role })}>Save</Button>

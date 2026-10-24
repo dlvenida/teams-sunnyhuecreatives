@@ -4,7 +4,7 @@ import { apiFetch, getAuthUser } from "@/lib/api"
 import type { UserReport } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { cn, formatDate } from "@/lib/utils"
+import { cn, formatDate, roleLabel } from "@/lib/utils"
 import { CreateReportModal, REPORT_CATEGORIES } from "@/components/reports/CreateReportModal"
 import { Flag, Inbox } from "lucide-react"
 
@@ -81,7 +81,7 @@ export function UserReportsPage() {
                     <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{categoryLabel(r.category)}</span>
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {isStaff ? <>By <strong className="text-foreground">{r.reporter_name}</strong> ({r.reporter_role}) · </> : ""}{fmtDateTime(r.created_at)}
+                    {isStaff ? <>By <strong className="text-foreground">{r.reporter_name}</strong> ({roleLabel(r.reporter_role)}) · </> : ""}{fmtDateTime(r.created_at)}
                     {r.client_name ? ` · Client: ${r.client_name}` : ""}{r.project_name ? ` · ${r.project_name}` : ""}{r.task_title ? ` · Task: ${r.task_title}` : ""}
                   </p>
                   <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">{r.body}</p>

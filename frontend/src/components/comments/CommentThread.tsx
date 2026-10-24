@@ -5,6 +5,7 @@ import type { CommentAttachment, MentionRef, TaskComment, TeamMember } from "@/l
 import { Button } from "@/components/ui/button"
 import { Select, Textarea } from "@/components/ui/input"
 import { formatBytes, prepareImage } from "@/lib/imagePrep"
+import { roleLabel } from "@/lib/utils"
 import { AuthImage, useAuthImageUrl } from "./AuthImage"
 import { ImageAnnotator } from "./ImageAnnotator"
 import { ImagePlus, Loader2, Pencil, Pin, Reply, Send, Trash2, X } from "lucide-react"
@@ -197,7 +198,7 @@ export function CommentThread({
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
               <span className="font-semibold text-foreground">{c.author_name}</span>
-              <span className={`rounded-full px-1.5 py-px text-[9px] font-semibold uppercase ${c.author_role === "admin" ? "bg-rose-100 text-rose-700" : c.author_role === "auditor" ? "bg-sky-100 text-sky-700" : "bg-violet-100 text-violet-700"}`}>{c.author_role === "va" ? "User" : c.author_role}</span>
+              <span className={`rounded-full px-1.5 py-px text-[9px] font-semibold ${c.author_role === "admin" ? "bg-rose-100 text-rose-700" : c.author_role === "auditor" ? "bg-sky-100 text-sky-700" : "bg-violet-100 text-violet-700"}`}>{roleLabel(c.author_role)}</span>
               <span className="text-muted-foreground">{new Date(c.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
               {c.edited_at && <span className="text-muted-foreground">(edited)</span>}
               {c.is_pinned && <span className="inline-flex items-center gap-0.5 text-amber-600"><Pin className="h-3 w-3" /> Pinned</span>}
@@ -292,7 +293,7 @@ export function CommentThread({
               {mentionMatches.map(m => (
                 <button key={m.user_id} className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-muted" onClick={() => pickMention(m)}>
                   <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">{initials(m.name)}</span>
-                  {m.name} <span className="ml-auto text-[9px] uppercase text-muted-foreground">{m.role === "va" ? "User" : m.role}</span>
+                  {m.name} <span className="ml-auto text-[9px] text-muted-foreground">{roleLabel(m.role)}</span>
                 </button>
               ))}
             </div>

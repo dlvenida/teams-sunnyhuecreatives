@@ -7,7 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, get_current_user, require_admin
+from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
 from app.models import Client, CommentAttachment, CommentReaction, Project, ProjectComment, ProjectMeetup, ProjectStatus, SubClient, Task, TaskStatus, UserRole, WorkLog
 from app.schemas import LinkAttachmentCreate, MeetupCreate, MeetupResponse, MeetupUpdate, ProjectCommentCreate, ProjectCreate, ProjectResponse, ProjectUpdate, ReactionToggle, TaskCommentResponse, TaskCommentUpdate
 from app.services import comments as comment_svc
@@ -49,11 +49,9 @@ def list_projects(
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(body: ProjectCreate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
-    """Admin or VA can create a project (name + description + client). Auditor is view-only."""
-    if current.role == UserRole.auditor:
-        raise HTTPException(403, "Auditors can view projects but cannot create them")
-    if current.role not in (UserRole.admin, UserRole.va):
-        raise HTTPException(403, "Only administrators and VAs can create projects")
+    """Admin, auditor, or VA can create a project (name + description + client)."""
+    if current.role not in (UserRole.admin, UserRole.auditor, UserRole.va):
+        raise HTTPException(403, "Not allowed to create projects")
     if not db.query(Client).filter(Client.id == body.client_id).first():
         raise HTTPException(404, "Client not found")
     if body.sub_client_id and not db.query(SubClient).filter(SubClient.id == body.sub_client_id, SubClient.client_id == body.client_id).first():
@@ -74,7 +72,7 @@ def get_project(project_id: UUID, _: Annotated[CurrentUser, Depends(get_current_
 
 
 @router.patch("/{project_id}", response_model=ProjectResponse)
-def update_project(project_id: UUID, body: ProjectUpdate, _: Annotated[CurrentUser, Depends(require_admin)], db: Annotated[Session, Depends(get_db)]):
+def update_project(project_id: UUID, body: ProjectUpdate, _: Annotated[CurrentUser, Depends(require_admin_or_auditor)], db: Annotated[Session, Depends(get_db)]):
     p = db.query(Project).filter(Project.id == project_id).first()
     if not p: raise HTTPException(404, "Project not found")
     data = body.model_dump(exclude_unset=True)
@@ -253,7 +251,7 @@ def delete_meetup(project_id: UUID, meetup_id: UUID, current: Annotated[CurrentU
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_project(project_id: UUID, _: Annotated[CurrentUser, Depends(require_admin)], db: Annotated[Session, Depends(get_db)]):
+def delete_project(project_id: UUID, _: Annotated[CurrentUser, Depends(require_admin_or_auditor)], db: Annotated[Session, Depends(get_db)]):
     p = db.query(Project).filter(Project.id == project_id).first()
     if not p: raise HTTPException(404, "Project not found")
     # Tasks keep existing but lose project link via FK SET NULL? Tasks defined SET NULL, but ORM cascade on project.tasks would delete.

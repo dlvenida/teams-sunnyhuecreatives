@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { AtSign, Briefcase, CalendarDays, Hash, HeartHandshake, Link2, Lock, Mail, Palette, Phone, Landmark, Wallet } from "lucide-react"
 import { PinInput } from "@/components/auth/PinInput"
+import { roleLabel } from "@/lib/utils"
 
 export function ProfilePage() {
   const qc = useQueryClient()
@@ -219,7 +220,7 @@ export function ProfilePage() {
             displayName={profile.display_name}
           />
           <div className="mt-4 flex flex-wrap gap-2">
-            <Badge variant="default" className="capitalize">{profile.role}</Badge>
+            <Badge variant="default">{roleLabel(profile.role)}</Badge>
             {profile.currency && <Badge variant={profile.currency === "PHP" ? "php" : "usd"}>{profile.currency}</Badge>}
             {profile.job_title && <Badge>{profile.job_title}</Badge>}
             {profile.timezone && <Badge>{profile.timezone}</Badge>}

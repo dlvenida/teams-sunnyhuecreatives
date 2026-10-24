@@ -5,7 +5,7 @@ import type { AppUser, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
+import { cn, roleLabel } from "@/lib/utils"
 import {
   Archive,
   ArchiveRestore,
@@ -272,7 +272,7 @@ export function UsersPage() {
               <tr key={u.id} className="border-b last:border-0 hover:bg-muted/30">
                 <td className="p-3 font-semibold">{u.name}</td>
                 <td className="p-3 text-primary">{u.email}</td>
-                <td className="p-3"><span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold capitalize", u.role === "admin" ? "bg-primary/10 text-primary" : "bg-sky-100 text-sky-700")}>{u.role}</span></td>
+                <td className="p-3"><span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold", u.role === "admin" ? "bg-primary/10 text-primary" : "bg-sky-100 text-sky-700")}>{roleLabel(u.role)}</span></td>
                 <td className="p-3 text-muted-foreground">{u.role === "auditor" ? `${u.auditing_count} VA(s) assigned in Analytics` : "Full access"}</td>
                 <td className="p-3"><Badge variant={u.is_active ? "success" : "default"}>{u.is_active ? "Active" : "Archived"}</Badge></td>
                 <td className="p-3"><div className="flex justify-end gap-1">

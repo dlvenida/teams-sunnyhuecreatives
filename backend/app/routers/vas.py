@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.auth import hash_password
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_admin_or_auditor
-from app.models import Currency, Project, Task, TaskComment, TaskStatus, TimeClockEntry, ClockStatus, User, VA, WorkLog
+from app.models import Currency, Project, Task, TaskComment, TaskStatus, TimeClockEntry, ClockStatus, User, UserRole, VA, WorkLog
 from app.schemas import AdminResetPasswordRequest, VADelegateRequest, VAReviewerUpdate, VAResponse, VAUpdate
 from app.services.notifications import notify_delegation
 
@@ -33,7 +33,13 @@ def list_vas(
     db: Annotated[Session, Depends(get_db)],
     active_only: bool = False,
 ):
-    q = db.query(VA).options(joinedload(VA.user))
+    # Staff (admin/auditor) may have a personal VA row for their own time clock — never list those as team VAs.
+    q = (
+        db.query(VA)
+        .options(joinedload(VA.user))
+        .join(User, VA.user_id == User.id)
+        .filter(User.role == UserRole.va)
+    )
     if active_only:
         q = q.filter(VA.is_active == True)
     return [_serialize_va(v) for v in q.order_by(VA.name).all()]

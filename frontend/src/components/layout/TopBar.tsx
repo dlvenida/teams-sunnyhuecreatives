@@ -7,9 +7,9 @@ import type { AppUser, TimeClockEntry } from "@/lib/types"
 import { GlobalSearch } from "@/components/layout/GlobalSearch"
 import { NotificationsPanel } from "@/components/layout/NotificationsPanel"
 import { formatDuration } from "@/components/tasks/task-utils"
-import { cn } from "@/lib/utils"
+import { cn, roleLabel } from "@/lib/utils"
 
-/** Live time-clock widget for VA / non-admin users — clock in, pause, resume, clock out right from the header. Admins don't clock in, so they don't see it. */
+/** Live personal time-clock — clock in, pause, resume, clock out from the header (VA, admin, and auditor). */
 function HeaderClock() {
   const qc = useQueryClient()
   const { data: current, dataUpdatedAt } = useQuery({ queryKey: ["topbar-clock"], queryFn: () => apiFetch<TimeClockEntry | null>("/time-clock/current"), refetchInterval: 20_000 })
@@ -51,7 +51,7 @@ function HeaderClock() {
 
   return (
     <div className={cn("flex shrink-0 items-center gap-1.5 rounded-full border py-1 pl-3 pr-1.5", running ? "border-green-300 bg-green-50" : "border-amber-300 bg-amber-50")}>
-      <Link to="/va/time-clock" className="flex items-center gap-2" title="Open Time Clock">
+        <Link to={getAuthUser()?.role === "va" ? "/va/time-clock" : "/admin/time-clock"} className="flex items-center gap-2" title="Open Time Clock">
         <span className={cn("h-2 w-2 rounded-full", running ? "live-dot bg-green-500" : "bg-amber-500")} />
         <span className={cn("hidden text-[11px] font-semibold sm:inline", running ? "text-green-800" : "text-amber-800")}>{running ? "Clocked in" : "Paused"}</span>
         <span className={cn("font-mono text-[11px] font-bold sm:text-xs", running ? "text-green-900" : "text-amber-900")}>{formatDuration(elapsed)}</span>
@@ -66,7 +66,7 @@ function HeaderClock() {
   )
 }
 
-/** Admin header clock — admins don't clock in; this shows who's live right now plus all recent clock logs/history. */
+/** Team clock for admin/auditor — who's live plus recent clock history. */
 function HeaderAdminClock() {
   const [open, setOpen] = useState(false)
   const { data: live = [], dataUpdatedAt } = useQuery({ queryKey: ["topbar-live"], queryFn: () => apiFetch<TimeClockEntry[]>("/time-clock/live"), refetchInterval: 15_000 })
@@ -165,7 +165,7 @@ function AdminUserSwitcher() {
             {targets.map((u) => (
               <button key={u.id} disabled={busy} onClick={() => void switchTo(u)} className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-xs hover:bg-muted/50 disabled:opacity-60">
                 <span className="min-w-0"><span className="block truncate font-semibold">{u.name}</span><span className="block truncate text-[11px] text-muted-foreground">{u.email}</span></span>
-                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold capitalize text-primary">{u.role}</span>
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{roleLabel(u.role)}</span>
               </button>
             ))}
             {targets.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No active VA/auditor accounts to switch into.</p>}
@@ -180,7 +180,8 @@ function AdminUserSwitcher() {
 export function TopBar({ onMenu }: { onMenu?: () => void }) {
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
-  const { data: current } = useQuery({ queryKey: ["topbar-clock-status"], queryFn: () => apiFetch<TimeClockEntry | null>("/time-clock/current"), enabled: !!user && user.role === "va", refetchInterval: 20_000 })
+  const isStaff = user?.role === "admin" || user?.role === "auditor"
+  const { data: current } = useQuery({ queryKey: ["topbar-clock-status"], queryFn: () => apiFetch<TimeClockEntry | null>("/time-clock/current"), enabled: !!user, refetchInterval: 20_000 })
 
   return (
     <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b border-border/70 bg-card/85 px-2.5 backdrop-blur-xl sm:gap-3 sm:px-4">
@@ -191,8 +192,13 @@ export function TopBar({ onMenu }: { onMenu?: () => void }) {
         <p className="hidden text-[10px] text-muted-foreground sm:block">{!isAdmin && current ? "You're on the clock — keep going!" : "Let's make today productive"}</p>
       </div>
       {isAdmin && !isImpersonating() && <AdminUserSwitcher />}
-      {/* Time clock — VA/users clock in here; admin sees the whole team's clock, logs & history */}
-      {!!user && (user.role === "va" ? <HeaderClock /> : <HeaderAdminClock />)}
+      {/* Personal clock for everyone; staff also get the team live/history panel */}
+      {!!user && (
+        <>
+          <HeaderClock />
+          {isStaff && <HeaderAdminClock />}
+        </>
+      )}
       <GlobalSearch className="hidden w-64 max-w-full md:block xl:w-80" />
       <NotificationsPanel />
     </header>

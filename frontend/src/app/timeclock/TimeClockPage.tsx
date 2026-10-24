@@ -30,6 +30,9 @@ export function TimeClockPage() {
   const isAuditor = role === "auditor"
   const isStaff = isAdmin || isAuditor
   const canEdit = isAdmin || isAuditor
+  const [staffTab, setStaffTab] = useState<"mine" | "team">("mine")
+  const showMine = !isStaff || staffTab === "mine"
+  const showTeam = isStaff && staffTab === "team"
   const [taskId, setTaskId] = useState("")
   const [clientId, setClientId] = useState("")
   const [projectId, setProjectId] = useState("")
@@ -49,23 +52,27 @@ export function TimeClockPage() {
   const [baseElapsed, setBaseElapsed] = useState(0)
   const [startedAt, setStartedAt] = useState<number | null>(null)
 
-  const { data: current } = useQuery({ queryKey: ["clock-current"], queryFn: () => apiFetch<TimeClockEntry | null>("/time-clock/current"), enabled: !isStaff, refetchInterval: 15000 })
-  const { data: history = [] } = useQuery({ queryKey: ["clock-history"], queryFn: () => apiFetch<TimeClockEntry[]>("/time-clock/my-history"), enabled: !isStaff })
-  const { data: live = [] } = useQuery({ queryKey: ["clock-live"], queryFn: () => apiFetch<TimeClockEntry[]>("/time-clock/live"), enabled: isStaff, refetchInterval: 10000 })
-  const { data: allEntries = [] } = useQuery({ queryKey: ["clock-all"], queryFn: () => apiFetch<TimeClockEntry[]>("/time-clock"), enabled: isStaff })
-  const { data: tasks = [] } = useQuery({ queryKey: ["tasks-mine"], queryFn: () => apiFetch<TaskItem[]>("/tasks?mine=true"), enabled: !isStaff })
-  const { data: clients = [] } = useQuery({ queryKey: ["va-clients"], queryFn: () => apiFetch<Client[]>("/va/clients"), enabled: !isStaff })
-  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false"), enabled: !isStaff })
-  const { data: adjustments = [] } = useQuery({ queryKey: ["clock-adjustments"], queryFn: () => apiFetch<TimeClockAdjustment[]>("/time-clock/adjustments"), enabled: isStaff })
+  const { data: current } = useQuery({ queryKey: ["clock-current"], queryFn: () => apiFetch<TimeClockEntry | null>("/time-clock/current"), enabled: showMine, refetchInterval: 15000 })
+  const { data: history = [] } = useQuery({ queryKey: ["clock-history"], queryFn: () => apiFetch<TimeClockEntry[]>("/time-clock/my-history"), enabled: showMine })
+  const { data: live = [] } = useQuery({ queryKey: ["clock-live"], queryFn: () => apiFetch<TimeClockEntry[]>("/time-clock/live"), enabled: showTeam, refetchInterval: 10000 })
+  const { data: allEntries = [] } = useQuery({ queryKey: ["clock-all"], queryFn: () => apiFetch<TimeClockEntry[]>("/time-clock"), enabled: showTeam })
+  const { data: tasks = [] } = useQuery({ queryKey: ["tasks-mine"], queryFn: () => apiFetch<TaskItem[]>("/tasks?mine=true"), enabled: showMine })
+  const { data: clients = [] } = useQuery({
+    queryKey: [isStaff ? "clients" : "va-clients"],
+    queryFn: () => apiFetch<Client[]>(isStaff ? "/clients?active_only=true" : "/va/clients"),
+    enabled: showMine,
+  })
+  const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false"), enabled: showMine })
+  const { data: adjustments = [] } = useQuery({ queryKey: ["clock-adjustments"], queryFn: () => apiFetch<TimeClockAdjustment[]>("/time-clock/adjustments"), enabled: showTeam })
   const { data: correctionRequests = [] } = useQuery({
     queryKey: ["clock-correction-requests"],
     queryFn: () => apiFetch<TimeClockCorrectionRequest[]>("/time-clock/correction-requests?status_filter=pending"),
-    enabled: isStaff,
+    enabled: showTeam,
   })
   const { data: myRequests = [] } = useQuery({
     queryKey: ["my-clock-correction-requests"],
     queryFn: () => apiFetch<TimeClockCorrectionRequest[]>("/time-clock/my-correction-requests"),
-    enabled: !isStaff,
+    enabled: showMine,
   })
 
   useEffect(() => { if (current) { setBaseElapsed(current.elapsed_seconds); setStartedAt(Date.now()) } else { setStartedAt(null); setBaseElapsed(0) } }, [current])
@@ -210,16 +217,34 @@ export function TimeClockPage() {
 
   const selectedTask = tasks.find(t => t.id === taskId)
   const activeTaskId = current?.task_id || taskId
-  const { data: taskComments = [] } = useQuery({ queryKey: ["clock-task-comments", activeTaskId], queryFn: () => apiFetch<{ id: string; author_name: string; body: string; created_at: string }[]>(`/tasks/${activeTaskId}/comments`), enabled: !isStaff && !!activeTaskId })
+  const { data: taskComments = [] } = useQuery({ queryKey: ["clock-task-comments", activeTaskId], queryFn: () => apiFetch<{ id: string; author_name: string; body: string; created_at: string }[]>(`/tasks/${activeTaskId}/comments`), enabled: showMine && !!activeTaskId })
   const postComment = useMutation({ mutationFn: () => apiFetch(`/tasks/${activeTaskId}/comments`, { method: "POST", body: JSON.stringify({ body: quickComment }) }), onSuccess: () => { setQuickComment(""); qc.invalidateQueries({ queryKey: ["clock-task-comments"] }) } })
 
-  if (isStaff) {
+  const staffTabs = isStaff && (
+    <div className="flex flex-wrap gap-1.5">
+      {([["mine", "My clock"], ["team", "Team"]] as const).map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => setStaffTab(id)}
+          className={`rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${staffTab === id ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-muted/60"}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+
+  if (showTeam) {
     return (<>
       {adjustModal}
       <div className="w-full space-y-4 animate-fade-in">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Time Clock — Team</h1>
-          <p className="text-xs text-muted-foreground">Live sessions, revision requests from VAs, and edit history. Original times stay visible after any edit.</p>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-base font-semibold tracking-tight">Time Clock — Team</h1>
+            <p className="text-xs text-muted-foreground">Live sessions, revision requests from VAs, and edit history. Original times stay visible after any edit.</p>
+          </div>
+          {staffTabs}
         </div>
         <div className="space-y-4">
           <Card>
@@ -272,9 +297,16 @@ export function TimeClockPage() {
 
   return (
     <div className="w-full space-y-4 animate-fade-in">
-      <div>
-        <h1 className="text-base font-semibold tracking-tight">Time Clock</h1>
-        <p className="text-xs text-muted-foreground">Clock in when you start, clock out when you finish. If a time is wrong, request a revision — admin or auditor will edit it for you.</p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-base font-semibold tracking-tight">{isStaff ? "Time Clock — My hours" : "Time Clock"}</h1>
+          <p className="text-xs text-muted-foreground">
+            {isStaff
+              ? "Clock in and out for your own work. Switch to Team to manage VA sessions and revision requests."
+              : "Clock in when you start, clock out when you finish. If a time is wrong, request a revision — admin or auditor will edit it for you."}
+          </p>
+        </div>
+        {staffTabs}
       </div>
       <div className="space-y-4">
         <div className="min-w-0 space-y-4">

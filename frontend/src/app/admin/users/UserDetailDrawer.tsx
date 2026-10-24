@@ -5,7 +5,7 @@ import { apiFetch, getAuthUser, homeForRole, startImpersonation } from "@/lib/ap
 import type { UserDetail } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { cn, formatCurrency, formatDate } from "@/lib/utils"
+import { cn, formatCurrency, formatDate, roleLabel } from "@/lib/utils"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { TASK_STATUSES, PRIORITY_META } from "@/components/tasks/task-utils"
 import { Building2, Clock, Eye, FolderKanban, History, KanbanSquare, Loader2, UserCircle, X } from "lucide-react"
@@ -54,7 +54,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                 <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-sm font-extrabold text-primary">{p.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("")}</span>
                 <div>
                   <h2 className="text-base font-bold leading-tight">{p.name}</h2>
-                  <p className="text-[11px] text-muted-foreground">{p.email} · <span className="capitalize">{p.role}</span>{p.job_title ? ` · ${p.job_title}` : ""} · {p.is_active ? "Active" : "Archived"}{p.created_at ? ` · since ${formatDate(p.created_at.slice(0, 10))}` : ""}</p>
+                  <p className="text-[11px] text-muted-foreground">{p.email} · {roleLabel(p.role)}{p.job_title ? ` · ${p.job_title}` : ""} · {p.is_active ? "Active" : "Archived"}{p.created_at ? ` · since ${formatDate(p.created_at.slice(0, 10))}` : ""}</p>
                 </div>
               </div>
               <div className="flex flex-wrap gap-1.5">
@@ -93,7 +93,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                   <p className="mb-2 flex items-center gap-1.5 font-bold"><UserCircle className="h-4 w-4 text-primary" /> Profile</p>
                   <dl className="space-y-1.5">
                     {([
-                      ["Name", p.name], ["Email", p.email], ["Role", p.role],
+                      ["Name", p.name], ["Email", p.email], ["Role", roleLabel(p.role)],
                       ...(showPricing ? [["Currency", p.currency || "—"] as const] : []),
                       ["Job title", p.job_title || "—"], ["Phone", p.phone || "—"], ["Timezone", p.timezone || "—"],
                       ["Hire date", p.hire_date ? formatDate(p.hire_date) : "—"], ["Status", p.status_message || "—"],

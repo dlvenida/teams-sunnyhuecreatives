@@ -1,13 +1,24 @@
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_admin_or_auditor
-from app.models import Client, ClientPackage, Currency, SubClient, UserRole, WorkLog, Invoice
+from app.models import (
+    Client,
+    ClientApprovalStatus,
+    ClientPackage,
+    Currency,
+    SubClient,
+    UserRole,
+    WorkLog,
+    Invoice,
+)
 from app.schemas import (
+    ClientApproveRequest,
     ClientCreate,
     ClientPackageCreate,
     ClientPackageResponse,
@@ -18,50 +29,48 @@ from app.schemas import (
     SubClientResponse,
     SubClientUpdate,
 )
+from app.services.notifications import admin_user_ids, push
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
 
+def _proposer_name(client: Client) -> str | None:
+    u = getattr(client, "proposer", None)
+    if not u:
+        return None
+    return (u.display_name or u.email or "").strip() or None
+
+
 def _client_response(client: Client, redact_money: bool = False) -> ClientResponse:
+    status_val = client.approval_status or ClientApprovalStatus.approved
     return ClientResponse(
         id=client.id,
         name=client.name,
         billing_type=client.billing_type,
         default_rate=None if redact_money else client.default_rate,
         is_active=client.is_active,
+        approval_status=status_val,
+        proposed_by_name=_proposer_name(client),
+        proposed_at=client.proposed_at,
+        reviewed_at=client.reviewed_at,
     )
 
 
-@router.get("", response_model=list[ClientResponse])
-def list_clients(
-    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
-    db: Annotated[Session, Depends(get_db)],
-    active_only: bool = False,
-    include_archived: bool = True,
-):
-    q = db.query(Client)
-    if active_only:
-        q = q.filter(Client.is_active == True)
-    elif not include_archived:
-        q = q.filter(Client.is_active == True)
-    redact = current.role == UserRole.auditor
-    return [_client_response(c, redact) for c in q.order_by(Client.name).all()]
-
-
-@router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
-def create_client(
-    body: ClientCreate,
-    _: Annotated[CurrentUser, Depends(require_admin)],
-    db: Annotated[Session, Depends(get_db)],
-):
-    if db.query(Client).filter(Client.name == body.name).first():
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Client already exists")
-    data = body.model_dump()
-    included = data.pop("included_hours", None)
-    overage = data.pop("overage_rate", None)
-    client = Client(**data)
-    db.add(client)
-    db.flush()
+def _ensure_default_package(db: Session, client: Client, included=None, overage=None) -> None:
+    pkg = (
+        db.query(ClientPackage)
+        .filter(ClientPackage.client_id == client.id, ClientPackage.is_default == True)
+        .first()
+    )
+    if pkg:
+        pkg.billing_type = client.billing_type
+        pkg.amount = client.default_rate or 0
+        pkg.is_active = True
+        if included is not None:
+            pkg.included_hours = included
+        if overage is not None:
+            pkg.overage_rate = overage
+        return
     db.add(ClientPackage(
         client_id=client.id,
         name=f"{client.name} — Default",
@@ -73,9 +82,163 @@ def create_client(
         is_default=True,
         is_active=True,
     ))
+
+
+@router.get("", response_model=list[ClientResponse])
+def list_clients(
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+    active_only: bool = False,
+    include_archived: bool = True,
+    include_pending: bool = True,
+):
+    q = db.query(Client).options(joinedload(Client.proposer))
+    if active_only:
+        q = q.filter(Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved)
+    elif not include_archived:
+        q = q.filter(Client.is_active == True)
+    if current.role == UserRole.auditor:
+        # Auditors see live approved clients + any pending/rejected proposals (for status)
+        if not include_pending:
+            q = q.filter(Client.approval_status == ClientApprovalStatus.approved)
+    elif current.role != UserRole.admin and not include_pending:
+        q = q.filter(Client.approval_status == ClientApprovalStatus.approved)
+    redact = current.role == UserRole.auditor
+    return [_client_response(c, redact) for c in q.order_by(Client.name).all()]
+
+
+@router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
+def create_client(
+    body: ClientCreate,
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if db.query(Client).filter(Client.name == body.name).first():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Client already exists")
+    data = body.model_dump()
+    included = data.pop("included_hours", None)
+    overage = data.pop("overage_rate", None)
+    is_auditor = current.role == UserRole.auditor
+    if is_auditor:
+        # Auditor proposals never go live and never carry money fields
+        data["default_rate"] = None
+        client = Client(
+            **data,
+            is_active=False,
+            approval_status=ClientApprovalStatus.pending,
+            proposed_by=current.user.id,
+            proposed_at=datetime.now(timezone.utc),
+        )
+        db.add(client)
+        db.flush()
+        db.commit()
+        db.refresh(client)
+        push(
+            db,
+            admin_user_ids(db),
+            "system",
+            f"New client proposal: {client.name}",
+            f"{current.user.display_name or current.user.email} requested a new client. Review, set the rate, and approve.",
+            "/admin/clients",
+            exclude_user_id=current.user.id,
+        )
+        client = (
+            db.query(Client)
+            .options(joinedload(Client.proposer))
+            .filter(Client.id == client.id)
+            .first()
+        )
+        return _client_response(client, redact_money=True)
+
+    client = Client(**data, approval_status=ClientApprovalStatus.approved, is_active=True)
+    db.add(client)
+    db.flush()
+    _ensure_default_package(db, client, included=included, overage=overage)
     db.commit()
     db.refresh(client)
-    return client
+    return _client_response(client)
+
+
+@router.post("/{client_id}/approve", response_model=ClientResponse)
+def approve_client(
+    client_id: UUID,
+    body: ClientApproveRequest,
+    current: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    client = (
+        db.query(Client)
+        .options(joinedload(Client.proposer))
+        .filter(Client.id == client_id)
+        .first()
+    )
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+    if body.billing_type is not None:
+        client.billing_type = body.billing_type
+    if body.default_rate is not None:
+        client.default_rate = body.default_rate
+    client.approval_status = ClientApprovalStatus.approved
+    client.is_active = True
+    client.reviewed_by = current.user.id
+    client.reviewed_at = datetime.now(timezone.utc)
+    _ensure_default_package(db, client, included=body.included_hours, overage=body.overage_rate)
+    db.commit()
+    db.refresh(client)
+    if client.proposed_by:
+        push(
+            db,
+            [client.proposed_by],
+            "system",
+            f"Client approved: {client.name}",
+            "The admin reviewed your client proposal, set the rate, and approved it. It’s now live.",
+            "/admin/clients",
+        )
+    client = (
+        db.query(Client)
+        .options(joinedload(Client.proposer))
+        .filter(Client.id == client_id)
+        .first()
+    )
+    return _client_response(client)
+
+
+@router.post("/{client_id}/reject", response_model=ClientResponse)
+def reject_client(
+    client_id: UUID,
+    current: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    client = (
+        db.query(Client)
+        .options(joinedload(Client.proposer))
+        .filter(Client.id == client_id)
+        .first()
+    )
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+    client.approval_status = ClientApprovalStatus.rejected
+    client.is_active = False
+    client.reviewed_by = current.user.id
+    client.reviewed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(client)
+    if client.proposed_by:
+        push(
+            db,
+            [client.proposed_by],
+            "system",
+            f"Client proposal declined: {client.name}",
+            "The admin declined this client proposal. It will not go live.",
+            "/admin/clients",
+        )
+    client = (
+        db.query(Client)
+        .options(joinedload(Client.proposer))
+        .filter(Client.id == client_id)
+        .first()
+    )
+    return _client_response(client)
 
 
 @router.get("/financials")
@@ -213,7 +376,9 @@ def client_detail(
             "id": str(client.id), "name": client.name,
             "billing_type": client.billing_type.value if hasattr(client.billing_type, "value") else str(client.billing_type),
             "default_rate": None if redact else (str(client.default_rate) if client.default_rate is not None else None),
-            "is_active": bool(client.is_active), "created_at": client.created_at.isoformat() if client.created_at else None,
+            "is_active": bool(client.is_active),
+            "approval_status": (client.approval_status.value if hasattr(client.approval_status, "value") else str(client.approval_status or "approved")),
+            "created_at": client.created_at.isoformat() if client.created_at else None,
         },
         "stats": {
             "total_hours": str(hours(billable)),
@@ -278,7 +443,13 @@ def update_client(
             default_pkg.overage_rate = overage
     db.commit()
     db.refresh(client)
-    return client
+    client = (
+        db.query(Client)
+        .options(joinedload(Client.proposer))
+        .filter(Client.id == client_id)
+        .first()
+    )
+    return _client_response(client)
 
 
 @router.delete("/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -303,7 +474,7 @@ def delete_client(
 
 @router.get("/sub-clients", response_model=list[SubClientResponse])
 def list_sub_clients(
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    _: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
     client_id: UUID | None = None,
     active_only: bool = False,
@@ -314,6 +485,8 @@ def list_sub_clients(
         q = q.filter(SubClient.client_id == client_id)
     if active_only or not include_archived:
         q = q.filter(SubClient.is_active == True)
+    # Hide sub-clients of pending/rejected proposals from operational lists
+    q = q.join(Client).filter(Client.approval_status == ClientApprovalStatus.approved)
     return q.order_by(SubClient.name).all()
 
 

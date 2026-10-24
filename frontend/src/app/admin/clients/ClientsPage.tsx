@@ -23,7 +23,7 @@ import {
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 
 type Tab = "clients" | "sub-clients"
-type StatusFilter = "all" | "active" | "archived"
+type StatusFilter = "all" | "active" | "archived" | "pending"
 
 interface ClientForm {
   name: string
@@ -43,15 +43,17 @@ const emptySub: SubClientForm = { client_id: "", name: "" }
 
 export function ClientsPage() {
   const authUser = getAuthUser()
-  const readOnly = authUser?.role === "auditor"
+  const isAuditor = authUser?.role === "auditor"
   const isAdmin = authUser?.role === "admin"
+  const readOnly = isAuditor // auditor cannot edit/archive/delete; can propose new clients
   const qc = useQueryClient()
   const { showPricing } = useDisplaySettings()
   const [tab, setTab] = useState<Tab>("clients")
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active")
-  const [modal, setModal] = useState<"create" | "edit" | null>(null)
+  const [modal, setModal] = useState<"create" | "edit" | "approve" | null>(null)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
+  const [approvingClient, setApprovingClient] = useState<Client | null>(null)
   const [editingSub, setEditingSub] = useState<SubClient | null>(null)
   const [viewingId, setViewingId] = useState<string>("")
   const [detailTab, setDetailTab] = useState<"overview" | "projects" | "tasks" | "logs" | "invoices">("overview")
@@ -93,10 +95,15 @@ export function ClientsPage() {
   const filteredClients = useMemo(() => {
     const q = search.trim().toLowerCase()
     return clients.filter((c) => {
-      if (statusFilter === "active" && !c.is_active) return false
-      if (statusFilter === "archived" && c.is_active) return false
+      const approval = c.approval_status || "approved"
+      if (statusFilter === "active") {
+        if (approval === "pending") return false
+        if (!c.is_active || approval === "rejected") return false
+      }
+      if (statusFilter === "archived" && (c.is_active || approval === "pending")) return false
+      if (statusFilter === "pending" && approval !== "pending") return false
       if (!q) return true
-      return c.name.toLowerCase().includes(q) || c.billing_type.includes(q)
+      return c.name.toLowerCase().includes(q) || c.billing_type.includes(q) || (c.proposed_by_name || "").toLowerCase().includes(q)
     })
   }, [clients, search, statusFilter])
 
@@ -118,9 +125,9 @@ export function ClientsPage() {
         body: JSON.stringify({
           name: clientForm.name,
           billing_type: clientForm.billing_type,
-          default_rate: clientForm.default_rate ? parseFloat(clientForm.default_rate) : null,
-          included_hours: clientForm.included_hours ? parseFloat(clientForm.included_hours) : null,
-          overage_rate: clientForm.overage_rate ? parseFloat(clientForm.overage_rate) : null,
+          default_rate: isAuditor ? null : (clientForm.default_rate ? parseFloat(clientForm.default_rate) : null),
+          included_hours: isAuditor ? null : (clientForm.included_hours ? parseFloat(clientForm.included_hours) : null),
+          overage_rate: isAuditor ? null : (clientForm.overage_rate ? parseFloat(clientForm.overage_rate) : null),
         }),
       }),
     onSuccess: () => {
@@ -128,6 +135,31 @@ export function ClientsPage() {
       closeModal()
     },
     onError: (err: Error) => setError(err.message),
+  })
+
+  const approveClient = useMutation({
+    mutationFn: () =>
+      apiFetch(`/clients/${approvingClient!.id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({
+          billing_type: clientForm.billing_type,
+          default_rate: clientForm.default_rate ? parseFloat(clientForm.default_rate) : null,
+          included_hours: clientForm.included_hours ? parseFloat(clientForm.included_hours) : null,
+          overage_rate: clientForm.overage_rate ? parseFloat(clientForm.overage_rate) : null,
+        }),
+      }),
+    onSuccess: () => {
+      invalidate()
+      qc.invalidateQueries({ queryKey: ["client-financials"] })
+      closeModal()
+    },
+    onError: (err: Error) => setError(err.message),
+  })
+
+  const rejectClient = useMutation({
+    mutationFn: (id: string) => apiFetch(`/clients/${id}/reject`, { method: "POST" }),
+    onSuccess: invalidate,
+    onError: (err: Error) => alert(err.message),
   })
 
   const updateClient = useMutation({
@@ -175,6 +207,7 @@ export function ClientsPage() {
   const closeModal = () => {
     setModal(null)
     setEditingClient(null)
+    setApprovingClient(null)
     setEditingSub(null)
     setClientForm(emptyClient)
     setSubForm(emptySub)
@@ -186,6 +219,17 @@ export function ClientsPage() {
     setModal("create")
     if (tab === "clients") setClientForm(emptyClient)
     else setSubForm(emptySub)
+  }
+
+  const openApprove = (client: Client) => {
+    setError("")
+    setApprovingClient(client)
+    setClientForm({
+      name: client.name,
+      billing_type: client.billing_type,
+      default_rate: client.default_rate || "",
+    })
+    setModal("approve")
   }
 
   const openEditClient = (client: Client) => {
@@ -241,16 +285,27 @@ export function ClientsPage() {
   const restoreSub = (sub: SubClient) =>
     updateSub.mutate({ id: sub.id, body: { is_active: true } })
 
-  const activeClients = clients.filter((c) => c.is_active)
+  const activeClients = clients.filter((c) => c.is_active && (c.approval_status || "approved") === "approved")
+  const pendingCount = clients.filter((c) => c.approval_status === "pending").length
+  const canCreate = tab === "clients" ? (isAdmin || isAuditor) : isAdmin
 
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-display text-base font-semibold">Clients</h1>
-        {!readOnly && <Button variant="gold" size="sm" onClick={openCreate}>
-          <Plus className="h-3.5 w-3.5" />
-          {tab === "clients" ? "New Client" : "New Sub-client"}
-        </Button>}
+        <div>
+          <h1 className="font-display text-base font-semibold">Clients</h1>
+          {isAuditor && (
+            <p className="text-[11px] text-muted-foreground">
+              Propose a new client for admin review. It won’t go live until the admin sets the rate and approves it.
+            </p>
+          )}
+        </div>
+        {canCreate && (
+          <Button variant="gold" size="sm" onClick={openCreate}>
+            <Plus className="h-3.5 w-3.5" />
+            {tab === "clients" ? (isAuditor ? "Propose Client" : "New Client") : "New Sub-client"}
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2 border-b border-border pb-2">
@@ -289,9 +344,10 @@ export function ClientsPage() {
         <Select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-          className="w-36"
+          className="w-40"
         >
           <option value="active">Active</option>
+          <option value="pending">Pending review{pendingCount ? ` (${pendingCount})` : ""}</option>
           <option value="archived">Archived</option>
           <option value="all">All</option>
         </Select>
@@ -330,16 +386,42 @@ export function ClientsPage() {
                       <td className={cn("p-3 font-bold", f && parseFloat(f.net) < 0 ? "text-red-600" : "text-green-700")}>{f ? formatCurrency(f.net) : "—"}</td>
                     </>) })()}
                     <td className="p-3">
-                      <Badge variant={c.is_active ? "success" : "default"}>
-                        {c.is_active ? "Active" : "Archived"}
-                      </Badge>
+                      {c.approval_status === "pending" ? (
+                        <Badge variant="default">Pending admin review</Badge>
+                      ) : c.approval_status === "rejected" ? (
+                        <Badge variant="default">Declined</Badge>
+                      ) : (
+                        <Badge variant={c.is_active ? "success" : "default"}>
+                          {c.is_active ? "Active" : "Archived"}
+                        </Badge>
+                      )}
+                      {c.approval_status === "pending" && c.proposed_by_name && (
+                        <span className="mt-1 block text-[10px] text-muted-foreground">by {c.proposed_by_name}</span>
+                      )}
                     </td>
                     <td className="p-3">
                       <div className="flex justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                         <Button variant="ghost" size="sm" title="View everything" onClick={() => { setViewingId(c.id); setDetailTab("overview") }}>
                           <Eye className="h-3.5 w-3.5" />
                         </Button>
-                        {!readOnly && (
+                        {isAdmin && c.approval_status === "pending" && (
+                          <>
+                            <Button variant="success" size="sm" title="Approve & set rate" onClick={() => openApprove(c)}>
+                              Approve
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Decline"
+                              onClick={() => {
+                                if (confirm(`Decline proposal for "${c.name}"?`)) rejectClient.mutate(c.id)
+                              }}
+                            >
+                              Decline
+                            </Button>
+                          </>
+                        )}
+                        {!readOnly && c.approval_status !== "pending" && (
                           <>
                             <Button variant="ghost" size="sm" title="Edit" onClick={() => openEditClient(c)}>
                               <Pencil className="h-3.5 w-3.5" />
@@ -353,19 +435,17 @@ export function ClientsPage() {
                                 <ArchiveRestore className="h-3.5 w-3.5" />
                               </Button>
                             )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Delete"
+                              onClick={() => {
+                                if (confirm(`Permanently delete "${c.name}"?`)) deleteClient.mutate(c.id)
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                            </Button>
                           </>
-                        )}
-                        {!readOnly && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            title="Delete"
-                            onClick={() => {
-                              if (confirm(`Permanently delete "${c.name}"?`)) deleteClient.mutate(c.id)
-                            }}
-                          >
-                            <Trash2 className="h-3.5 w-3.5 text-red-600" />
-                          </Button>
                         )}
                       </div>
                     </td>
@@ -474,7 +554,14 @@ export function ClientsPage() {
               <div className="space-y-4 px-5 py-4">
                 {detailTab === "overview" && (<>
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    {[["Total Hours", `${detail.stats.total_hours} hrs`, `${detail.stats.hours_this_month} hrs this month`], ["Tasks", `${detail.stats.tasks_open} open`, `${detail.stats.tasks_done} done · ${detail.stats.tasks_overdue} overdue`], ["Ready to Invoice", `${detail.stats.ready_to_invoice_hours} hrs`, `${detail.stats.invoiced_hours} hrs invoiced`], ["Pending Approval", `${detail.stats.pending_hours} hrs`, `${detail.stats.pending_count} logs waiting`]].map(([t, v, s]) => (
+                    {([
+                      ["Total Hours", `${detail.stats.total_hours} hrs`, `${detail.stats.hours_this_month} hrs this month`],
+                      ["Tasks", `${detail.stats.tasks_open} open`, `${detail.stats.tasks_done} done · ${detail.stats.tasks_overdue} overdue`],
+                      ...(isAdmin
+                        ? [["Ready to Invoice", `${detail.stats.ready_to_invoice_hours} hrs`, `${detail.stats.invoiced_hours} hrs invoiced`] as const]
+                        : []),
+                      ["Pending Approval", `${detail.stats.pending_hours} hrs`, `${detail.stats.pending_count} logs waiting`],
+                    ] as const).map(([t, v, s]) => (
                       <div key={t} className="rounded-2xl border p-3"><p className="text-[11px] font-semibold text-muted-foreground">{t}</p><p className="mt-1 text-lg font-extrabold leading-none">{v}</p><p className="mt-1 text-[11px] text-muted-foreground">{s}</p></div>
                     ))}
                   </div>
@@ -577,24 +664,39 @@ export function ClientsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-lg animate-fade-in">
             <h2 className="text-sm font-semibold">
-              {modal === "create"
-                ? tab === "clients"
-                  ? "Create Client"
-                  : "Create Sub-client"
-                : tab === "clients"
-                  ? "Edit Client"
-                  : "Edit Sub-client"}
+              {modal === "approve"
+                ? `Approve client · ${approvingClient?.name || ""}`
+                : modal === "create"
+                  ? tab === "clients"
+                    ? (isAuditor ? "Propose Client" : "Create Client")
+                    : "Create Sub-client"
+                  : tab === "clients"
+                    ? "Edit Client"
+                    : "Edit Sub-client"}
             </h2>
+            {modal === "approve" && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Set the billing rate, then approve. The client goes live only after this step.
+                {approvingClient?.proposed_by_name ? ` Proposed by ${approvingClient.proposed_by_name}.` : ""}
+              </p>
+            )}
+            {modal === "create" && isAuditor && tab === "clients" && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                This sends a pending request to the admin. They will set the VA rate and approve before the client appears as live.
+              </p>
+            )}
 
-            {tab === "clients" ? (
+            {(tab === "clients" || modal === "approve") ? (
               <div className="mt-4 space-y-3">
-                <div>
-                  <Label>Name</Label>
-                  <Input
-                    value={clientForm.name}
-                    onChange={(e) => setClientForm({ ...clientForm, name: e.target.value })}
-                  />
-                </div>
+                {modal !== "approve" && (
+                  <div>
+                    <Label>Name</Label>
+                    <Input
+                      value={clientForm.name}
+                      onChange={(e) => setClientForm({ ...clientForm, name: e.target.value })}
+                    />
+                  </div>
+                )}
                 <div>
                   <Label>Billing Type</Label>
                   <Select
@@ -608,7 +710,7 @@ export function ClientsPage() {
                     <option value="package_hours">Package + included hours</option>
                   </Select>
                 </div>
-                {showPricing && (
+                {(showPricing || modal === "approve") && (
                   <div>
                     <Label>{clientForm.billing_type === "hourly" ? "Default hourly rate" : "Package amount"}</Label>
                     <Input
@@ -618,7 +720,7 @@ export function ClientsPage() {
                     />
                   </div>
                 )}
-                {showPricing && clientForm.billing_type === "package_hours" && (
+                {(showPricing || modal === "approve") && clientForm.billing_type === "package_hours" && (
                   <>
                     <div>
                       <Label>Included hours</Label>
@@ -663,18 +765,29 @@ export function ClientsPage() {
               <Button variant="outline" size="sm" onClick={closeModal}>
                 Cancel
               </Button>
-              <Button
-                variant="gold"
-                size="sm"
-                disabled={
-                  tab === "clients"
-                    ? !clientForm.name || createClient.isPending || updateClient.isPending
-                    : !subForm.client_id || !subForm.name || createSub.isPending || updateSub.isPending
-                }
-                onClick={() => (tab === "clients" ? saveClient() : saveSub())}
-              >
-                {modal === "create" ? "Create" : "Update"}
-              </Button>
+              {modal === "approve" ? (
+                <Button
+                  variant="gold"
+                  size="sm"
+                  disabled={approveClient.isPending || !clientForm.default_rate}
+                  onClick={() => approveClient.mutate()}
+                >
+                  {approveClient.isPending ? "Approving…" : "Approve & go live"}
+                </Button>
+              ) : (
+                <Button
+                  variant="gold"
+                  size="sm"
+                  disabled={
+                    tab === "clients"
+                      ? !clientForm.name || createClient.isPending || updateClient.isPending
+                      : !subForm.client_id || !subForm.name || createSub.isPending || updateSub.isPending
+                  }
+                  onClick={() => (tab === "clients" ? saveClient() : saveSub())}
+                >
+                  {modal === "create" ? (isAuditor && tab === "clients" ? "Send for review" : "Create") : "Update"}
+                </Button>
+              )}
             </div>
           </div>
         </div>

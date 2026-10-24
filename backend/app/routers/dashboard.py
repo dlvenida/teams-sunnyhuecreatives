@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
-from app.models import Client, Invoice, InvoiceStatus, Project, Task, TaskComment, TaskStatus, TimeClockEntry, ClockStatus, UserRole, VA, WorkLog, WorkLogStatus
+from app.models import Client, ClientApprovalStatus, Invoice, InvoiceStatus, Project, Task, TaskComment, TaskStatus, TimeClockEntry, ClockStatus, UserRole, VA, WorkLog, WorkLogStatus
 from app.routers.work_logs import _serialize_log
 from app.schemas import DashboardSummary
 from app.services.billing import get_week_period
@@ -276,7 +276,10 @@ def get_dashboard_summary(
             .scalar()
             or Decimal("0")
         )
-        active_clients = db.query(Client).filter(Client.is_active == True).count()
+        from app.models import ClientApprovalStatus
+        active_clients = db.query(Client).filter(
+            Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved
+        ).count()
         active_vas = db.query(VA).filter(VA.is_active == True).count()
         pending_logs = (
             db.query(WorkLog)
@@ -331,7 +334,9 @@ def get_dashboard_summary(
         .scalar()
         or Decimal("0")
     )
-    active_clients = db.query(Client).filter(Client.is_active == True).count()
+    active_clients = db.query(Client).filter(
+        Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved
+    ).count()
     invoices_issued = db.query(Invoice).count()
     unpaid_invoices = db.query(Invoice).filter(Invoice.status == InvoiceStatus.unpaid).count()
     active_vas = db.query(VA).filter(VA.is_active == True).count()

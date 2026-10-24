@@ -57,7 +57,13 @@ def list_clients_for_va(
     _: Annotated[CurrentUser, Depends(require_va)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    return db.query(Client).filter(Client.is_active == True).order_by(Client.name).all()
+    from app.models import ClientApprovalStatus
+    return (
+        db.query(Client)
+        .filter(Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved)
+        .order_by(Client.name)
+        .all()
+    )
 
 
 @router.get("/my-clients")

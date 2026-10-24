@@ -1,7 +1,7 @@
 import { Navigate, Outlet } from "react-router-dom"
 import { getAuthUser } from "@/lib/api"
 
-const HOME: Record<string, string> = { admin: "/admin/dashboard", auditor: "/admin/analytics", va: "/va/dashboard" }
+const HOME: Record<string, string> = { admin: "/admin/dashboard", auditor: "/admin/dashboard", va: "/va/dashboard" }
 
 export function ProtectedRoute({ role }: { role?: string | string[] }) {
   const user = getAuthUser()

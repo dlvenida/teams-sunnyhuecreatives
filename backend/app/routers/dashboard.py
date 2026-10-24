@@ -21,6 +21,7 @@ from app.models import (
     TaskStatus,
     TimeClockEntry,
     ClockStatus,
+    User,
     UserRole,
     VA,
     WorkLog,
@@ -179,7 +180,14 @@ def get_team_activity(_: Annotated[CurrentUser, Depends(require_admin_or_auditor
 
     today = date.today()
     week_start, week_end = get_week_period("this_week")
-    vas = db.query(VA).options(joinedload(VA.user), joinedload(VA.reviewer)).filter(VA.is_active.is_(True)).order_by(VA.name).all()
+    vas = (
+        db.query(VA)
+        .options(joinedload(VA.user), joinedload(VA.reviewer))
+        .join(User, VA.user_id == User.id)
+        .filter(VA.is_active.is_(True), User.role == UserRole.va)
+        .order_by(VA.name)
+        .all()
+    )
 
     out = []
     for va in vas:
@@ -317,7 +325,12 @@ def get_dashboard_summary(
         active_clients = db.query(Client).filter(
             Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved
         ).count()
-        active_vas = db.query(VA).filter(VA.is_active == True).count()
+        active_vas = (
+            db.query(VA)
+            .join(User, VA.user_id == User.id)
+            .filter(VA.is_active == True, User.role == UserRole.va)
+            .count()
+        )
         pending_logs = (
             db.query(WorkLog)
             .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.attachments))
@@ -376,7 +389,12 @@ def get_dashboard_summary(
     ).count()
     invoices_issued = db.query(Invoice).count()
     unpaid_invoices = db.query(Invoice).filter(Invoice.status == InvoiceStatus.unpaid).count()
-    active_vas = db.query(VA).filter(VA.is_active == True).count()
+    active_vas = (
+        db.query(VA)
+        .join(User, VA.user_id == User.id)
+        .filter(VA.is_active == True, User.role == UserRole.va)
+        .count()
+    )
 
     week_start, week_end = get_week_period("this_week")
     this_week_va_pay = (

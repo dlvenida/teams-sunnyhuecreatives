@@ -3,7 +3,7 @@ import { NavLink } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { apiFetch, apiFetchBlob, getAuthUser, logout, setAuthUser } from "@/lib/api"
 import type { UserProfile } from "@/lib/profile"
-import { cn } from "@/lib/utils"
+import { cn, roleLabel } from "@/lib/utils"
 import type { NavItem } from "@/lib/navigation"
 import { Button } from "@/components/ui/button"
 import { ChevronsUpDown, LogOut, Sparkles, X } from "lucide-react"
@@ -100,7 +100,7 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
             <span className="block truncate text-[13px] font-bold leading-tight">{displayName}</span>
             <span className="block truncate text-[10px] leading-tight text-muted-foreground">{subLine}</span>
             <span className="mt-1 inline-flex items-center gap-1">
-              <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-primary-foreground">{profile?.role || user?.role || "member"}</span>
+              <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-bold tracking-wide text-primary-foreground">{roleLabel(profile?.role || user?.role)}</span>
               {profile?.status_message && <span className="max-w-[90px] truncate text-[9px] text-muted-foreground">{profile.status_message}</span>}
             </span>
           </span>

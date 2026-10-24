@@ -67,8 +67,18 @@ def require_admin_or_auditor(current: Annotated[CurrentUser, Depends(get_current
 
 
 def require_va(current: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
-    if current.role != UserRole.va:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VA access required")
+    """Personal worker access: Virtual Assistants, or admin/auditor tracking their own hours."""
     if not current.va_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VA profile not found")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Worker profile not found — sign out and back in")
+    if current.role == UserRole.va:
+        return current
+    if current.role in (UserRole.admin, UserRole.auditor):
+        return current
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VA access required")
+
+
+def require_ops(current: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
+    """Admin or auditor managing tasks/projects (full ops, no money implied)."""
+    if current.role not in (UserRole.admin, UserRole.auditor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Auditor access required")
     return current

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, getAuthUser } from "@/lib/api"
 import type { Client, Project, SubClient, TaskItem, WorkLog } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
@@ -44,6 +44,9 @@ async function uploadTaskCommentFiles(taskId: string, files: File[], note: strin
 
 export function VATimeLogPage() {
   const qc = useQueryClient()
+  const role = getAuthUser()?.role
+  const isStaff = role === "admin" || role === "auditor"
+  const showMoney = role !== "auditor"
   const fileRef = useRef<HTMLInputElement>(null)
   const [form, setForm] = useState({
     work_date: new Date().toISOString().split("T")[0],
@@ -63,7 +66,10 @@ export function VATimeLogPage() {
   const [newProject, setNewProject] = useState({ name: "", description: "", client_id: "" })
   const [projectError, setProjectError] = useState("")
 
-  const { data: clients = [] } = useQuery({ queryKey: ["va-clients"], queryFn: () => apiFetch<Client[]>("/va/clients") })
+  const { data: clients = [] } = useQuery({
+    queryKey: [isStaff ? "clients" : "va-clients"],
+    queryFn: () => apiFetch<Client[]>(isStaff ? "/clients?active_only=true" : "/va/clients"),
+  })
   const { data: subClients = [] } = useQuery({
     queryKey: ["va-sub-clients", form.client_id],
     queryFn: () => apiFetch<SubClient[]>(`/va/sub-clients?client_id=${form.client_id}`),
@@ -72,7 +78,7 @@ export function VATimeLogPage() {
   const { data: approvedRate } = useQuery({
     queryKey: ["va-rate-client", form.client_id],
     queryFn: () => apiFetch<ApprovedRate | null>(`/va-rates/mine/for-client/${form.client_id}`),
-    enabled: !!form.client_id,
+    enabled: !!form.client_id && showMoney,
   })
   const { data: logs = [] } = useQuery({ queryKey: ["va-logs"], queryFn: () => apiFetch<WorkLog[]>("/va/work-logs") })
   const { data: myTasks = [] } = useQuery({ queryKey: ["tasks-mine"], queryFn: () => apiFetch<TaskItem[]>("/tasks?mine=true") })
@@ -186,7 +192,11 @@ export function VATimeLogPage() {
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
       <div>
         <h1 className="text-base font-semibold">Log Time</h1>
-        <p className="text-[11px] text-muted-foreground">Rate auto-fills from your approved My Rates profile</p>
+        <p className="text-[11px] text-muted-foreground">
+          {showMoney
+            ? "Rate auto-fills from your approved My Rates profile"
+            : "Log your own hours — date, start/end, and task or service performed."}
+        </p>
       </div>
 
       <Card>
@@ -250,8 +260,12 @@ export function VATimeLogPage() {
             <div><Label>Start Time</Label><Input type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} /></div>
             <div><Label>End Time</Label><Input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} /></div>
             <div><Label>Total Hours</Label><Input value={`${hours.toFixed(2)} hrs`} disabled /></div>
-            <div><Label>Your Rate</Label><Input value={approvedRate ? `${formatCurrency(approvedRate.amount, approvedRate.currency)}${approvedRate.pay_type === "hourly" ? "/hr" : " flat"}` : "No approved rate — set in My Rates"} disabled /></div>
-            <div><Label>Estimated Pay</Label><Input value={estimatedPay} disabled /></div>
+            {showMoney && (
+              <>
+                <div><Label>Your Rate</Label><Input value={approvedRate ? `${formatCurrency(approvedRate.amount, approvedRate.currency)}${approvedRate.pay_type === "hourly" ? "/hr" : " flat"}` : "No approved rate — set in My Rates"} disabled /></div>
+                <div><Label>Estimated Pay</Label><Input value={estimatedPay} disabled /></div>
+              </>
+            )}
           </div>
           <div>
             <div className="mb-1 flex items-center justify-between gap-2">
@@ -303,15 +317,14 @@ export function VATimeLogPage() {
         <CardHeader className="pb-2"><CardTitle>Your Entries</CardTitle></CardHeader>
         <CardContent>
           <table className="w-full text-xs">
-            <thead><tr className="border-b border-border text-left text-muted-foreground"><th className="p-2">Date</th><th className="p-2">Client</th><th className="p-2">Time</th><th className="p-2">Hours</th><th className="p-2">Rate</th><th className="p-2">Pay</th><th className="p-2">Status</th><th className="p-2"></th></tr></thead>
+            <thead><tr className="border-b border-border text-left text-muted-foreground"><th className="p-2">Date</th><th className="p-2">Client</th><th className="p-2">Time</th><th className="p-2">Hours</th>{showMoney && <><th className="p-2">Rate</th><th className="p-2">Pay</th></>}<th className="p-2">Status</th><th className="p-2"></th></tr></thead>
             <tbody>{logs.map((log) => (
               <tr key={log.id} className="border-b border-border">
                 <td className="p-2">{log.work_date}</td>
                 <td className="p-2">{log.client_name}{log.task_title && <span className="block text-[10px] text-muted-foreground">{log.task_title}</span>}</td>
                 <td className="p-2 whitespace-nowrap">{log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}<span className="block text-[10px] text-muted-foreground">{log.source === "clock" ? "clock" : "manual"}</span></td>
                 <td className="p-2">{log.hours}</td>
-                <td className="p-2">{formatCurrency(log.va_rate)}</td>
-                <td className="p-2">{formatCurrency(log.va_pay)}</td>
+                {showMoney && <><td className="p-2">{formatCurrency(log.va_rate)}</td><td className="p-2">{formatCurrency(log.va_pay)}</td></>}
                 <td className="p-2"><StatusBadge status={log.status} />{(log.attachment_count ?? 0) > 0 && <span className="ml-1 text-[10px] text-muted-foreground">📎{log.attachment_count}</span>}</td>
                 <td className="p-2 whitespace-nowrap">
                   {(log.status === "submitted" || log.status === "rejected") ? <>
@@ -337,7 +350,7 @@ export function VATimeLogPage() {
                 <div><Label>Start</Label><Input type="time" value={editTimes.start_time} onChange={e => setEditTimes({ ...editTimes, start_time: e.target.value })} /></div>
                 <div><Label>End</Label><Input type="time" value={editTimes.end_time} onChange={e => setEditTimes({ ...editTimes, end_time: e.target.value })} /></div>
               </div>
-              <p className="text-[11px] text-muted-foreground">Hours & pay recalculate from your approved rate.{editingLog.status === "rejected" ? " Saving resubmits this log." : ""}</p>
+              <p className="text-[11px] text-muted-foreground">{showMoney ? "Hours & pay recalculate from your approved rate." : "Hours recalculate from start and end time."}{editingLog.status === "rejected" ? " Saving resubmits this log." : ""}</p>
               <div className="flex gap-2"><Button variant="gold" className="flex-1" disabled={!editDesc || editLog.isPending} onClick={() => editLog.mutate()}>Save</Button><Button variant="outline" onClick={() => setEditingLog(null)}>Cancel</Button></div>
             </div>
           </div>

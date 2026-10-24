@@ -19,9 +19,11 @@ export function ProjectsPage() {
   const [searchParams] = useSearchParams()
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
+  const isAuditor = user?.role === "auditor"
   const isVA = user?.role === "va"
-  const canCreate = isAdmin || isVA
-  const canManage = isAdmin
+  const isStaff = isAdmin || isAuditor
+  const canCreate = isAdmin || isAuditor || isVA
+  const canManage = isStaff
   const deepProjectId = searchParams.get("project")
   const deepCommentId = searchParams.get("comment")
   const [search, setSearch] = useState("")
@@ -38,6 +40,7 @@ export function ProjectsPage() {
   const clientsKey = isVA ? "va-clients" : "clients"
   const clientsPath = isVA ? "/va/clients" : "/clients?active_only=true"
   const { data: clients = [] } = useQuery({ queryKey: [clientsKey], queryFn: () => apiFetch<Client[]>(clientsPath) })
+  // canManage already includes auditor — advanced fields shown for staff
 
   useEffect(() => {
     if (!deepProjectId || !projects.length) return

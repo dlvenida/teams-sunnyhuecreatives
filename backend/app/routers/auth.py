@@ -31,6 +31,24 @@ from app.schemas import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _ensure_worker_profile(db: Session, user: User) -> VA | None:
+    """VA users must have a VA row. Admin/auditor also get one so they can clock their own time."""
+    va = db.query(VA).filter(VA.user_id == user.id).first()
+    if va:
+        return va
+    if user.role == UserRole.va:
+        return None
+    if user.role not in (UserRole.admin, UserRole.auditor):
+        return None
+    from app.models import Currency
+    name = (user.display_name or user.email.split("@")[0]).strip() or "Team member"
+    va = VA(user_id=user.id, name=name, currency=Currency.PHP, is_active=True)
+    db.add(va)
+    db.commit()
+    db.refresh(va)
+    return va
+
+
 def _issue_tokens(user: User, db: Session) -> TokenResponse:
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account disabled")
@@ -42,6 +60,12 @@ def _issue_tokens(user: User, db: Session) -> TokenResponse:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VA profile not found")
         va_id = va.id
         name = va.name
+    elif user.role in (UserRole.admin, UserRole.auditor):
+        va = _ensure_worker_profile(db, user)
+        if va:
+            va_id = va.id
+            if not name:
+                name = va.name
     if not name:
         name = user.email.split("@")[0]
     payload = create_token_payload(user.id, user.role.value, va_id)
@@ -389,6 +413,10 @@ def create_app_user(
     db.flush()
     if body.role == "va":
         db.add(VA(user_id=user.id, name=body.name, currency=body.currency))
+    elif body.role in ("admin", "auditor"):
+        # Staff also get a worker profile so they can clock in / log their own time
+        from app.models import Currency
+        db.add(VA(user_id=user.id, name=body.name, currency=body.currency or Currency.PHP))
     db.commit()
     db.refresh(user)
     return _app_user(db, user)

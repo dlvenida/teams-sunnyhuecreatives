@@ -29,6 +29,7 @@ export function TasksPage() {
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
   const isAuditor = user?.role === "auditor"
+  const isStaff = isAdmin || isAuditor
   const [searchParams] = useSearchParams()
   const deepTaskId = searchParams.get("task")
   const deepCommentId = searchParams.get("comment")
@@ -60,11 +61,14 @@ export function TasksPage() {
     const s = p.toString(); return s ? `?${s}` : ""
   }, [clientId, projectId, assigneeId, statusFilter, priorityFilter, search, showOverdueOnly])
 
-  const { data: tasks = [], isLoading } = useQuery({ queryKey: ["tasks", query, isAdmin], queryFn: () => apiFetch<TaskItem[]>(`/tasks${query}`) })
+  const { data: tasks = [], isLoading } = useQuery({ queryKey: ["tasks", query, isStaff], queryFn: () => apiFetch<TaskItem[]>(`/tasks${query}`) })
   const { data: stats } = useQuery({ queryKey: ["task-stats"], queryFn: () => apiFetch<{ total: number; by_status: Record<string, number>; overdue: number; due_today: number; unassigned: number }>("/tasks/stats") })
-  const { data: clients = [] } = useQuery({ queryKey: [isAdmin ? "clients" : "va-clients"], queryFn: () => apiFetch<Client[]>(isAdmin ? "/clients?active_only=true" : "/va/clients") })
+  const { data: clients = [] } = useQuery({
+    queryKey: [isStaff ? "clients" : "va-clients"],
+    queryFn: () => apiFetch<Client[]>(isStaff ? "/clients?active_only=true" : "/va/clients"),
+  })
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false") })
-  const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas"), enabled: isAdmin })
+  const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas"), enabled: isStaff })
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks"] }); qc.invalidateQueries({ queryKey: ["task-stats"] }); qc.invalidateQueries({ queryKey: ["projects"] }) }
 
   // Deep-link from mention / comment notifications: ?task=&comment=
@@ -157,12 +161,12 @@ export function TasksPage() {
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-base font-semibold tracking-tight">{isAdmin ? "Task Board — All Tasks" : isAuditor ? "Task Board — Auditor View (view & comment)" : "Task Board — My Tasks"}</h1>
+          <h1 className="text-base font-semibold tracking-tight">{isStaff ? "Task Board — All Tasks" : "Task Board — My Tasks"}</h1>
           <p className="text-xs text-muted-foreground">Manage work per client & project · Kanban, list, or timeline by week / bi-week / month</p>
         </div>
         <div className="flex gap-2">
           <Link to={user?.role === "va" ? "/va/projects" : "/admin/projects"} className="text-xs underline text-primary self-center">Projects →</Link>
-          {!isAuditor && <Button variant="gold" size="sm" onClick={() => openCreate()}><Plus className="h-3.5 w-3.5" /> New Task</Button>}
+          <Button variant="gold" size="sm" onClick={() => openCreate()}><Plus className="h-3.5 w-3.5" /> New Task</Button>
         </div>
       </div>
 
@@ -181,7 +185,7 @@ export function TasksPage() {
           <div className="relative min-w-[180px] flex-1"><Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" /><Input className="pl-8" placeholder="Search tasks…" value={search} onChange={e => setSearch(e.target.value)} /></div>
           <Select value={clientId} onChange={e => { setClientId(e.target.value); setProjectId("") }} className="w-auto"><option value="">All Clients</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select>
           <Select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-auto"><option value="">All Projects</option>{projects.filter(p => !clientId || p.client_id === clientId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Select>
-          {isAdmin && <Select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} className="w-auto"><option value="">All Assignees</option>{vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</Select>}
+          {isStaff && <Select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} className="w-auto"><option value="">All Assignees</option>{vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</Select>}
           <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-auto"><option value="">Any Status</option>{TASK_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select>
           <Select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} className="w-auto"><option value="">Any Priority</option>{Object.entries(PRIORITY_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select>
           <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={showOverdueOnly} onChange={e => setShowOverdueOnly(e.target.checked)} /> Overdue only</label>
@@ -208,7 +212,7 @@ export function TasksPage() {
                 <div className="flex items-center justify-between px-3 py-2.5"><span className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide"><span className="h-2.5 w-2.5 rounded-full" style={{ background: col.color }} />{col.label}</span><span className="rounded-full px-2 py-0.5 text-[11px] font-bold text-white" style={{ background: col.color }}>{colTasks.length}</span></div>
                 <div className="space-y-2 px-2 pb-2">
                   {colTasks.map(t => <TaskCard key={t.id} t={t} onComments={() => setCommentTask(t)} draggable onDragStart={() => setDragId(t.id)} />)}
-                  {!isAuditor && <button onClick={() => openCreate(col.id)} className="w-full rounded-lg border border-dashed py-2 text-xs text-muted-foreground hover:bg-white">+ Add task</button>}
+                  <button onClick={() => openCreate(col.id)} className="w-full rounded-lg border border-dashed py-2 text-xs text-muted-foreground hover:bg-white">+ Add task</button>
                 </div>
               </div>
             )
@@ -227,7 +231,7 @@ export function TasksPage() {
               <td className="p-3">{t.due_date ? formatDate(t.due_date) : "—"}</td>
               <td className="p-3">{t.recurrence_label || "—"}</td>
               <td className="p-3">{t.logged_hours} / {t.estimated_hours || "—"}</td>
-              <td className="p-3 whitespace-nowrap"><Button size="sm" variant="outline" onClick={() => setCommentTask(t)}>Comments</Button>{isAdmin && <Button size="sm" variant="ghost" onClick={() => { if (confirm("Delete this task?")) remove.mutate(t.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></Button>}</td>
+              <td className="p-3 whitespace-nowrap"><Button size="sm" variant="outline" onClick={() => setCommentTask(t)}>Comments</Button>{isStaff && <Button size="sm" variant="ghost" onClick={() => { if (confirm("Delete this task?")) remove.mutate(t.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></Button>}</td>
             </tr>
           ))}{tasks.length === 0 && <tr><td colSpan={9} className="p-8 text-center text-muted-foreground">No tasks match. Create one to get started.</td></tr>}</tbody>
         </table></CardContent></Card>
@@ -253,7 +257,7 @@ export function TasksPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div><Label>Client *</Label><Select value={form.client_id} onChange={e => setForm({ ...form, client_id: e.target.value, project_id: "" })}><option value="">Select client</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
                 <div><Label>Project</Label><Select value={form.project_id} onChange={e => setForm({ ...form, project_id: e.target.value })}><option value="">No project</option>{filteredProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></div>
-                {isAdmin && <div><Label>Assignee</Label><Select value={form.assignee_va_id} onChange={e => setForm({ ...form, assignee_va_id: e.target.value })}><option value="">Unassigned</option>{vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</Select></div>}
+                {isStaff && <div><Label>Assignee</Label><Select value={form.assignee_va_id} onChange={e => setForm({ ...form, assignee_va_id: e.target.value })}><option value="">Unassigned</option>{vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</Select></div>}
                 <div><Label>Status</Label><Select value={form.status} onChange={e => setForm({ ...form, status: e.target.value as TaskStatus })}>{TASK_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select></div>
                 <div><Label>Priority</Label><Select value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value as TaskPriority })}>{Object.entries(PRIORITY_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select></div>
                 <div><Label>Est. hours</Label><Input type="number" step="0.5" value={form.estimated_hours} onChange={e => setForm({ ...form, estimated_hours: e.target.value })} /></div>
@@ -321,7 +325,7 @@ export function TasksPage() {
                   }
                   onClick={() => save.mutate()}
                 >{save.isPending ? "Saving…" : modal.mode === "edit" ? "Save changes" : "Create task"}</Button>
-                {modal.mode === "edit" && isAdmin && <Button variant="outline" onClick={() => { if (confirm("Delete this task?")) { remove.mutate(modal.task!.id); setModal(null) } }}>Delete</Button>}
+                {modal.mode === "edit" && isStaff && <Button variant="outline" onClick={() => { if (confirm("Delete this task?")) { remove.mutate(modal.task!.id); setModal(null) } }}>Delete</Button>}
               </div>
               {user?.role === "va" && <p className="text-[11px] text-muted-foreground flex items-center gap-1"><Timer className="h-3 w-3" /> Tip: clock in on this task from Time Clock to auto-log your hours.</p>}
             </div>
@@ -338,7 +342,7 @@ export function TasksPage() {
                 <h2 className="text-base font-semibold leading-snug">{commentTask.title}</h2>
               </div>
               <span className="flex gap-1">
-                {!isAuditor && <Button size="sm" variant="outline" onClick={() => openEdit(commentTask)}><Pencil className="h-3 w-3" /> Edit Task</Button>}
+                <Button size="sm" variant="outline" onClick={() => openEdit(commentTask)}><Pencil className="h-3 w-3" /> Edit Task</Button>
                 <button onClick={() => { setCommentTask(null); setHighlightCommentId(null) }} className="p-1"><X className="h-4 w-4" /></button>
               </span>
             </div>

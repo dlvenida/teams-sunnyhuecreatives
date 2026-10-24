@@ -8,7 +8,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, get_current_user, require_admin
+from app.deps import CurrentUser, get_current_user, require_admin_or_auditor
 from app.models import Client, CommentAttachment, CommentReaction, Project, SubClient, Task, TaskComment, TaskPriority, TaskRecurrence, TaskStatus, UserRole, VA, WorkLog
 from app.schemas import LinkAttachmentCreate, ReactionToggle, TaskCommentCreate, TaskCommentResponse, TaskCommentUpdate, TaskCreate, TaskResponse, TaskUpdate
 from app.services import comments as comment_svc
@@ -189,7 +189,7 @@ def task_stats(current: Annotated[CurrentUser, Depends(get_current_user)], db: A
     by_status = {s.value: q.filter(Task.status == s).count() for s in TaskStatus}
     overdue = q.filter(Task.due_date < date.today(), Task.status != TaskStatus.done).count()
     due_today = q.filter(Task.due_date == date.today(), Task.status != TaskStatus.done).count()
-    unassigned = q.filter(Task.assignee_va_id.is_(None)).count() if current.role == UserRole.admin else 0
+    unassigned = q.filter(Task.assignee_va_id.is_(None)).count() if current.role in (UserRole.admin, UserRole.auditor) else 0
     return {"total": total, "by_status": by_status, "overdue": overdue, "due_today": due_today, "unassigned": unassigned}
 
 
@@ -237,8 +237,6 @@ def get_task(task_id: UUID, current: Annotated[CurrentUser, Depends(get_current_
 
 @router.patch("/{task_id}", response_model=TaskResponse)
 def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
-    if current.role == UserRole.auditor:
-        raise HTTPException(403, "Auditors can view and comment on tasks, but cannot change them")
     t = db.query(Task).filter(Task.id == task_id).first()
     if not t: raise HTTPException(404, "Task not found")
     if current.role == UserRole.va and t.assignee_va_id != current.va_id and t.created_by != current.user.id:
@@ -303,7 +301,7 @@ def move_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser, D
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_task(task_id: UUID, _: Annotated[CurrentUser, Depends(require_admin)], db: Annotated[Session, Depends(get_db)]):
+def delete_task(task_id: UUID, _: Annotated[CurrentUser, Depends(require_admin_or_auditor)], db: Annotated[Session, Depends(get_db)]):
     t = db.query(Task).filter(Task.id == task_id).first()
     if not t: raise HTTPException(404, "Task not found")
     db.delete(t); db.commit()

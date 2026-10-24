@@ -213,7 +213,9 @@ export interface PayrollRun {
   id: string; va_id: string; va_name?: string | null
   period_start: string; period_end: string
   total_hours: string; total_pay: string; currency: string
-  method?: string | null; notes?: string | null; paid_at: string
+  method?: string | null; notes?: string | null
+  usd_php_rate?: string | null
+  paid_at: string
 }
 
 export interface ReportLineItem {

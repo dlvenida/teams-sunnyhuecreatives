@@ -8,7 +8,24 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
-from app.models import Client, ClientApprovalStatus, Invoice, InvoiceStatus, Project, Task, TaskComment, TaskStatus, TimeClockEntry, ClockStatus, UserRole, VA, WorkLog, WorkLogStatus
+from app.models import (
+    BusinessExpense,
+    Client,
+    ClientApprovalStatus,
+    Invoice,
+    InvoiceStatus,
+    PayrollRun,
+    Project,
+    Task,
+    TaskComment,
+    TaskStatus,
+    TimeClockEntry,
+    ClockStatus,
+    UserRole,
+    VA,
+    WorkLog,
+    WorkLogStatus,
+)
 from app.routers.work_logs import _serialize_log
 from app.schemas import DashboardSummary
 from app.services.billing import get_week_period
@@ -402,3 +419,128 @@ def get_dashboard_summary(
         ],
         pending_logs=[_serialize_log(log) for log in pending_logs],
     )
+
+
+@router.get("/owner-finance")
+def owner_finance(
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+    date_from: date | None = None,
+    date_to: date | None = None,
+    usd_php_rate: Decimal | None = None,
+):
+    """Admin-only owner earnings + expenses overview for a date range.
+
+    Income = invoices issued in range (client currency, typically USD).
+    VA payroll = payroll runs paid in range (mixed USD/PHP — converted with rate).
+    Expenses = manual business expenses in range.
+    """
+    today = date.today()
+    if not date_from:
+        date_from = date(today.year, today.month, 1)
+    if not date_to:
+        date_to = today
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+
+    rate = Decimal(str(usd_php_rate)) if usd_php_rate and usd_php_rate > 0 else None
+
+    def to_usd(amount: Decimal, currency: str) -> Decimal:
+        c = (currency or "USD").upper()
+        if c == "USD":
+            return amount
+        if c == "PHP" and rate:
+            return (amount / rate).quantize(Decimal("0.01"))
+        return amount  # unknown — leave as-is
+
+    def to_php(amount: Decimal, currency: str) -> Decimal | None:
+        if not rate:
+            return None
+        c = (currency or "USD").upper()
+        if c == "PHP":
+            return amount
+        if c == "USD":
+            return (amount * rate).quantize(Decimal("0.01"))
+        return None
+
+    invoices = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.client))
+        .filter(Invoice.issue_date >= date_from, Invoice.issue_date <= date_to)
+        .all()
+    )
+    by_client: dict[str, dict] = {}
+    total_earned = Decimal("0")
+    for inv in invoices:
+        name = inv.client.name if inv.client else "Client"
+        row = by_client.setdefault(name, {"client_name": name, "earned": Decimal("0"), "invoices": 0})
+        row["earned"] += inv.amount
+        row["invoices"] += 1
+        total_earned += inv.amount
+
+    runs = (
+        db.query(PayrollRun)
+        .filter(
+            func.date(PayrollRun.paid_at) >= date_from,
+            func.date(PayrollRun.paid_at) <= date_to,
+        )
+        .all()
+    )
+    # Also include runs whose period overlaps if paid_at filter is empty edge-case —
+    # primary filter is paid_at date for "what left the business this period".
+    total_va_usd = Decimal("0")
+    total_va_php_equiv = Decimal("0") if rate else None
+    for run in runs:
+        total_va_usd += to_usd(run.total_pay, run.currency)
+        php = to_php(run.total_pay, run.currency)
+        if php is not None and total_va_php_equiv is not None:
+            total_va_php_equiv += php
+
+    expenses = (
+        db.query(BusinessExpense)
+        .filter(BusinessExpense.expense_date >= date_from, BusinessExpense.expense_date <= date_to)
+        .order_by(BusinessExpense.expense_date.desc())
+        .all()
+    )
+    # Treat expense currency as USD unless PHP (convert if rate given)
+    total_expenses_usd = Decimal("0")
+    for e in expenses:
+        total_expenses_usd += to_usd(e.amount, e.currency)
+
+    net_usd = total_earned - total_va_usd - total_expenses_usd
+    net_php = (net_usd * rate).quantize(Decimal("0.01")) if rate else None
+
+    return {
+        "period_start": str(date_from),
+        "period_end": str(date_to),
+        "usd_php_rate": str(rate) if rate else None,
+        "total_earned": str(total_earned),
+        "total_earned_php": str((total_earned * rate).quantize(Decimal("0.01"))) if rate else None,
+        "total_va_payroll": str(total_va_usd),
+        "total_va_payroll_php": str(total_va_php_equiv) if total_va_php_equiv is not None else None,
+        "total_expenses": str(total_expenses_usd),
+        "total_expenses_php": str((total_expenses_usd * rate).quantize(Decimal("0.01"))) if rate else None,
+        "net_profit": str(net_usd),
+        "net_profit_php": str(net_php) if net_php is not None else None,
+        "by_client": [
+            {
+                "client_name": r["client_name"],
+                "earned": str(r["earned"]),
+                "earned_php": str((r["earned"] * rate).quantize(Decimal("0.01"))) if rate else None,
+                "invoices": r["invoices"],
+            }
+            for r in sorted(by_client.values(), key=lambda x: x["earned"], reverse=True)
+        ],
+        "expenses": [
+            {
+                "id": str(e.id),
+                "expense_date": str(e.expense_date),
+                "description": e.description,
+                "amount": str(e.amount),
+                "currency": e.currency,
+            }
+            for e in expenses
+        ],
+        "va_runs_count": len(runs),
+        "invoices_count": len(invoices),
+    }

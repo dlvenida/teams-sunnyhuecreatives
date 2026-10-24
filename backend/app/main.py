@@ -12,6 +12,7 @@ from app.routers import (
     clients,
     collaboration,
     dashboard,
+    expenses,
     invoices,
     notifications,
     payroll,
@@ -143,6 +144,7 @@ app.include_router(work_logs.router)
 app.include_router(va_portal.router)
 app.include_router(va_rates.router)
 app.include_router(dashboard.router)
+app.include_router(expenses.router)
 app.include_router(payroll.router)
 app.include_router(reports.router)
 app.include_router(invoices.router)

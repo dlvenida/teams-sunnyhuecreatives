@@ -42,6 +42,11 @@ export function PayrollPage() {
   const [markPaidError, setMarkPaidError] = useState("")
   const [pdfError, setPdfError] = useState("")
   const [reviewTimesheetId, setReviewTimesheetId] = useState<string | null>(null)
+  const [usdPhpRate, setUsdPhpRate] = useState("")
+  const parsedRate = (() => {
+    const r = parseFloat(usdPhpRate)
+    return usdPhpRate && !Number.isNaN(r) && r > 0 ? r : null
+  })()
 
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => apiFetch<Settings>("/settings") })
@@ -143,7 +148,9 @@ export function PayrollPage() {
         ? doc.vas[0].va_name
         : "Team"
     setPdfFilename(payrollPdfFilename(nameForFile, payroll.period_start, payroll.period_end))
-    setPdfBlob(await generatePdfBlob(<PayrollDocument payroll={doc} settings={settings} showPricing={pdfShowPricing} />))
+    setPdfBlob(await generatePdfBlob(
+      <PayrollDocument payroll={doc} settings={settings} showPricing={pdfShowPricing} usdPhpRate={parsedRate} />,
+    ))
   }
   const exportCsv = () => {
     if (!payroll) return
@@ -213,10 +220,28 @@ export function PayrollPage() {
       )}
 
       {/* Filters — results update live */}
-      <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-5">
         <div><Label>VA</Label><Select value={vaId} onChange={(e) => setVaId(e.target.value)}><option value="">All VAs</option>{vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</Select></div>
         <div><Label>Period</Label><Select value={period} onChange={(e) => setPeriod(e.target.value)}>{PERIODS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</Select></div>
         {period === "custom" && <><div><Label>From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div><div><Label>To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div></>}
+        {isAdmin && (
+          <div>
+            <Label>USD to PHP Rate</Label>
+            <Input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="e.g. 58.50"
+              value={usdPhpRate}
+              onChange={(e) => setUsdPhpRate(e.target.value)}
+            />
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              {parsedRate
+                ? `1 USD = ${parsedRate.toFixed(2)} PHP · saved on Mark Paid & shown on PDF`
+                : "Enter today’s rate — PHP equivalent calculates automatically"}
+            </p>
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <Button variant="outline" onClick={exportCsv} disabled={!payroll}><FileSpreadsheet className="h-4 w-4" /> CSV</Button>
           <Button variant="gold" onClick={() => exportPdf()} disabled={!payroll}><FileDown className="h-4 w-4" /> Payroll PDF</Button>
@@ -281,8 +306,15 @@ export function PayrollPage() {
                     )}
                   </div>
                   <div className="mt-3 flex items-end justify-between">
-                    <div><p className="text-2xl font-extrabold leading-none">{showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`}</p>
-                    <p className="mt-1 text-[11px] text-muted-foreground">{va.total_hours} hrs · {va.entry_count} entries · {va.days_worked} days · avg {va.avg_hours_per_day}/day</p></div>
+                    <div>
+                      <p className="text-2xl font-extrabold leading-none">{showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`}</p>
+                      {showPricing && parsedRate && va.currency === "USD" && (
+                        <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
+                          ≈ {formatCurrency(n(va.total_pay) * parsedRate, "PHP")}
+                        </p>
+                      )}
+                      <p className="mt-1 text-[11px] text-muted-foreground">{va.total_hours} hrs · {va.entry_count} entries · {va.days_worked} days · avg {va.avg_hours_per_day}/day</p>
+                    </div>
                     {va.is_paid
                       ? <span className="flex items-center gap-1 rounded-full bg-green-100 px-2 py-1 text-[10px] font-bold text-green-700"><BadgeCheck className="h-3.5 w-3.5" /> Paid</span>
                       : <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-700">Unpaid</span>}
@@ -326,7 +358,16 @@ export function PayrollPage() {
                             ? "Approve the timesheet in Timesheet Review first"
                             : undefined
                       }
-                      onClick={() => markPaid.mutate({ va_id: va.va_id, period_start: payroll.period_start, period_end: payroll.period_end, total_hours: va.total_hours, total_pay: va.total_pay, currency: va.currency, method: va.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer" })}
+                      onClick={() => markPaid.mutate({
+                        va_id: va.va_id,
+                        period_start: payroll.period_start,
+                        period_end: payroll.period_end,
+                        total_hours: va.total_hours,
+                        total_pay: va.total_pay,
+                        currency: va.currency,
+                        method: va.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer",
+                        usd_php_rate: parsedRate,
+                      })}
                     >
                       <Wallet className="h-3.5 w-3.5" /> Mark Paid
                     </Button>
@@ -387,18 +428,28 @@ export function PayrollPage() {
           <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><Banknote className="h-4 w-4 text-primary" /> Payment History</CardTitle></CardHeader>
           <CardContent className="overflow-x-auto p-0">
             <table className="w-full text-xs">
-              <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Paid On</th><th className="p-3">VA</th><th className="p-3">Period</th><th className="p-3">Hours</th>{showPricing && <th className="p-3">Amount</th>}<th className="p-3">Method</th><th className="p-3 text-right">Actions</th></tr></thead>
-              <tbody>{runs.map(r => (
+              <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Paid On</th><th className="p-3">VA</th><th className="p-3">Period</th><th className="p-3">Hours</th>{showPricing && <th className="p-3">Amount</th>}{showPricing && <th className="p-3">USD→PHP</th>}<th className="p-3">Method</th><th className="p-3 text-right">Actions</th></tr></thead>
+              <tbody>{runs.map(r => {
+                const rate = r.usd_php_rate ? Number(r.usd_php_rate) : null
+                const phpEq = showPricing && rate && r.currency === "USD" ? n(r.total_pay) * rate : null
+                return (
                 <tr key={r.id} className="border-b last:border-0 hover:bg-muted/30">
                   <td className="whitespace-nowrap p-3">{formatDate(r.paid_at.slice(0, 10))}</td>
                   <td className="p-3 font-semibold">{r.va_name}</td>
                   <td className="whitespace-nowrap p-3 text-muted-foreground">{formatDate(r.period_start)} – {formatDate(r.period_end)}</td>
                   <td className="p-3">{r.total_hours} hrs</td>
-                  {showPricing && <td className="p-3 font-semibold">{formatCurrency(r.total_pay, r.currency as "PHP" | "USD")}</td>}
+                  {showPricing && (
+                    <td className="p-3 font-semibold">
+                      {formatCurrency(r.total_pay, r.currency as "PHP" | "USD")}
+                      {phpEq != null && <span className="block text-[10px] font-medium text-muted-foreground">{formatCurrency(phpEq, "PHP")}</span>}
+                    </td>
+                  )}
+                  {showPricing && <td className="p-3 text-muted-foreground">{rate ? rate.toFixed(2) : "—"}</td>}
                   <td className="p-3 capitalize">{r.method?.replace("_", " ") ?? "—"}</td>
                   <td className="p-3"><div className="flex justify-end"><Button size="sm" variant="ghost" title="Void this payment record" onClick={() => { if (confirm("Void this payment record? The VA will show as unpaid for that period.")) voidRun.mutate(r.id) }}><Trash2 className="h-3.5 w-3.5 text-red-600" /></Button></div></td>
-                </tr>))}
-                {runs.length === 0 && <tr><td colSpan={showPricing ? 7 : 6} className="p-6 text-center text-muted-foreground"><CheckCircle2 className="mr-1 inline h-4 w-4" /> No payments recorded yet — use “Mark Paid” on a VA card after you send payroll.</td></tr>}
+                </tr>
+              )})}
+                {runs.length === 0 && <tr><td colSpan={showPricing ? 8 : 6} className="p-6 text-center text-muted-foreground"><CheckCircle2 className="mr-1 inline h-4 w-4" /> No payments recorded yet — use “Mark Paid” on a VA card after you send payroll.</td></tr>}
               </tbody>
             </table>
           </CardContent>

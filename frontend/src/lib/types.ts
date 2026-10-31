@@ -74,8 +74,9 @@ export interface WorkLog {
   sub_client_name?: string | null
   description_lexical?: Record<string, unknown> | null
   description_plain: string
-  start_time: string
-  end_time: string
+  entry_mode?: "range" | "duration"
+  start_time?: string | null
+  end_time?: string | null
   hours: string
   va_rate: string
   va_pay: string

@@ -22,7 +22,7 @@ from app.models import (
 from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionResponse, TimesheetSubmitRequest, VAWorkLogUpdate
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
-from app.services.calculations import calculate_hours
+from app.services.calculations import resolve_manual_time
 from app.services.email import send_timesheet_submitted_notification, send_va_submission_notification
 from app.services.notifications import admin_and_auditor_user_ids, push
 from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay, whole_va_package_amount
@@ -45,6 +45,7 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         sub_client_name=log.sub_client.name if log.sub_client else None,
         description_lexical=log.description_lexical,
         description_plain=log.description_plain,
+        entry_mode=getattr(log, "entry_mode", None) or "range",
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
@@ -214,21 +215,48 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
             detail="This entry is in an approved timesheet and is locked. Add a new late entry instead — it will roll to the next payroll.",
         )
     data = body.model_dump(exclude_unset=True)
+    time_keys = {"entry_mode", "start_time", "end_time", "duration_hours", "duration_minutes"}
+    time_changed = bool(time_keys & body.model_fields_set) or body.work_date is not None
+    for key in time_keys:
+        data.pop(key, None)
     for k, v in data.items():
         setattr(log, k, v)
-    if body.start_time or body.end_time or body.work_date:
-        start = body.start_time or log.start_time
-        end = body.end_time or log.end_time
+    if time_changed:
+        mode = body.entry_mode or getattr(log, "entry_mode", None) or "range"
+        try:
+            if mode == "duration" and "duration_hours" not in body.model_fields_set and "duration_minutes" not in body.model_fields_set:
+                total = int((log.hours or 0) * 60)
+                mode, start, end, hours = resolve_manual_time(
+                    entry_mode="duration",
+                    start=None,
+                    end=None,
+                    duration_hours=total // 60,
+                    duration_minutes=total % 60,
+                )
+            else:
+                mode, start, end, hours = resolve_manual_time(
+                    entry_mode=mode,
+                    start=body.start_time if "start_time" in body.model_fields_set else log.start_time,
+                    end=body.end_time if "end_time" in body.model_fields_set else log.end_time,
+                    duration_hours=body.duration_hours,
+                    duration_minutes=body.duration_minutes,
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         work_date = body.work_date or log.work_date
-        assert_no_time_overlap(
-            db,
-            va_id=current.va_id,
-            work_date=work_date,
-            start_time=start,
-            end_time=end,
-            exclude_id=log.id,
-        )
-        log.hours = calculate_hours(start, end)
+        if mode == "range":
+            assert_no_time_overlap(
+                db,
+                va_id=current.va_id,
+                work_date=work_date,
+                start_time=start,
+                end_time=end,
+                exclude_id=log.id,
+            )
+        log.entry_mode = mode
+        log.start_time = start
+        log.end_time = end
+        log.hours = hours
         rate, pay, _ = resolve_log_pay(db, current.va_id, log.client_id, log.hours)
         log.va_rate = rate
         log.va_pay = pay
@@ -552,14 +580,24 @@ def submit_work_log(
 ):
     from app.services.payroll_calendar import resolve_payable_on
 
-    hours = calculate_hours(body.start_time, body.end_time)
-    assert_no_time_overlap(
-        db,
-        va_id=current.va_id,
-        work_date=body.work_date,
-        start_time=body.start_time,
-        end_time=body.end_time,
-    )
+    try:
+        mode, start, end, hours = resolve_manual_time(
+            entry_mode=body.entry_mode,
+            start=body.start_time,
+            end=body.end_time,
+            duration_hours=body.duration_hours,
+            duration_minutes=body.duration_minutes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if mode == "range":
+        assert_no_time_overlap(
+            db,
+            va_id=current.va_id,
+            work_date=body.work_date,
+            start_time=start,
+            end_time=end,
+        )
     rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
     payable_on = resolve_payable_on(db, current.va_id, body.work_date)
 
@@ -572,8 +610,9 @@ def submit_work_log(
         task_id=body.task_id,
         description_lexical=body.description_lexical,
         description_plain=body.description_plain,
-        start_time=body.start_time,
-        end_time=body.end_time,
+        entry_mode=mode,
+        start_time=start,
+        end_time=end,
         hours=hours,
         va_rate=rate,
         va_pay=pay,

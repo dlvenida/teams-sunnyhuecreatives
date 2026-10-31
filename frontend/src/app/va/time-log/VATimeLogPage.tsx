@@ -7,7 +7,7 @@ import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/ui/badge"
 import { RichTextEditor } from "@/components/lexical/RichTextEditor"
-import { calculateHoursFromTimes, formatCurrency } from "@/lib/utils"
+import { calculateHoursFromTimes, formatCurrency, formatDurationLabel, hoursFromDuration, splitHours } from "@/lib/utils"
 import { Paperclip, Plus, X } from "lucide-react"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
 
@@ -58,6 +58,8 @@ export function VATimeLogPage() {
     end_time: "17:00",
     notes: "",
   })
+  const [timeMode, setTimeMode] = useState<"range" | "duration">("range")
+  const [duration, setDuration] = useState({ hours: "2", minutes: "30" })
   const [descriptionLexical, setDescriptionLexical] = useState<Record<string, unknown> | null>(null)
   const [descriptionPlain, setDescriptionPlain] = useState("")
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
@@ -104,7 +106,10 @@ export function VATimeLogPage() {
     onError: (e: Error) => setProjectError(e.message),
   })
 
-  const hours = calculateHoursFromTimes(form.start_time, form.end_time)
+  const durationHours = Math.max(0, parseInt(duration.hours || "0", 10) || 0)
+  const durationMinutes = Math.max(0, parseInt(duration.minutes || "0", 10) || 0)
+  const durationValid = timeMode === "range" || (durationHours <= 24 && durationMinutes <= 59 && hoursFromDuration(durationHours, durationMinutes) > 0 && hoursFromDuration(durationHours, durationMinutes) <= 24)
+  const hours = timeMode === "duration" ? hoursFromDuration(durationHours, durationMinutes) : calculateHoursFromTimes(form.start_time, form.end_time)
   const rateAmt = approvedRate ? parseFloat(approvedRate.amount) : null
   const estimatedPay =
     approvedRate?.pay_type === "package"
@@ -116,6 +121,8 @@ export function VATimeLogPage() {
   const [editingLog, setEditingLog] = useState<WorkLog | null>(null)
   const [editDesc, setEditDesc] = useState("")
   const [editTimes, setEditTimes] = useState({ start_time: "09:00", end_time: "17:00" })
+  const [editMode, setEditMode] = useState<"range" | "duration">("range")
+  const [editDuration, setEditDuration] = useState({ hours: "0", minutes: "0" })
   const [viewingLog, setViewingLog] = useState<WorkLog | null>(null)
 
   const addFiles = (list: FileList | File[] | null) => {
@@ -128,7 +135,16 @@ export function VATimeLogPage() {
     mutationFn: () =>
       apiFetch(`/va/work-logs/${editingLog!.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ description_plain: editDesc, start_time: editTimes.start_time, end_time: editTimes.end_time }),
+        body: JSON.stringify(
+          editMode === "duration"
+            ? {
+                description_plain: editDesc,
+                entry_mode: "duration",
+                duration_hours: Math.max(0, parseInt(editDuration.hours || "0", 10) || 0),
+                duration_minutes: Math.max(0, parseInt(editDuration.minutes || "0", 10) || 0),
+              }
+            : { description_plain: editDesc, entry_mode: "range", start_time: editTimes.start_time, end_time: editTimes.end_time },
+        ),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["va-logs"] })
@@ -147,13 +163,18 @@ export function VATimeLogPage() {
       const log = await apiFetch<WorkLog>("/va/work-logs", {
         method: "POST",
         body: JSON.stringify({
-          ...form,
+          work_date: form.work_date,
+          client_id: form.client_id,
           sub_client_id: form.sub_client_id || null,
           project_id: form.project_id || null,
           task_id: form.task_id || null,
           description_lexical: descriptionLexical,
           description_plain: descriptionPlain,
           notes: form.notes || null,
+          entry_mode: timeMode,
+          ...(timeMode === "duration"
+            ? { duration_hours: durationHours, duration_minutes: durationMinutes }
+            : { start_time: form.start_time, end_time: form.end_time }),
         }),
       })
       const uploadErrors: string[] = []
@@ -195,7 +216,7 @@ export function VATimeLogPage() {
         <p className="text-[11px] text-muted-foreground">
           {showMoney
             ? "Rate auto-fills from your approved My Rates profile"
-            : "Log your own hours — date, start/end, and task or service performed."}
+            : "Log your own hours — date, a time range or a duration, and the task or service performed."}
         </p>
       </div>
 
@@ -272,9 +293,31 @@ export function VATimeLogPage() {
                 ))}
               </Select>
             </div>
-            <div><Label>Start Time</Label><Input type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} /></div>
-            <div><Label>End Time</Label><Input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} /></div>
-            <div><Label>Total Hours</Label><Input value={`${hours.toFixed(2)} hrs`} disabled /></div>
+            <div className="sm:col-span-2">
+              <Label>How did you track this time?</Label>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                <button type="button" className={`rounded-xl border px-3 py-2 text-left text-xs ${timeMode === "range" ? "border-primary bg-primary/10 font-semibold" : "border-border"}`} onClick={() => setTimeMode("range")}>
+                  Start and end time
+                  <span className="mt-0.5 block font-normal text-muted-foreground">Clock times for this entry</span>
+                </button>
+                <button type="button" className={`rounded-xl border px-3 py-2 text-left text-xs ${timeMode === "duration" ? "border-primary bg-primary/10 font-semibold" : "border-border"}`} onClick={() => setTimeMode("duration")}>
+                  Hours and minutes
+                  <span className="mt-0.5 block font-normal text-muted-foreground">Type how long the task took</span>
+                </button>
+              </div>
+            </div>
+            {timeMode === "range" ? (
+              <>
+                <div><Label>Start Time</Label><Input type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} /></div>
+                <div><Label>End Time</Label><Input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} /></div>
+              </>
+            ) : (
+              <>
+                <div><Label>Hours</Label><Input type="number" min={0} max={24} value={duration.hours} onChange={(e) => setDuration({ ...duration, hours: e.target.value })} /></div>
+                <div><Label>Minutes</Label><Input type="number" min={0} max={59} value={duration.minutes} onChange={(e) => setDuration({ ...duration, minutes: e.target.value })} /></div>
+              </>
+            )}
+            <div><Label>Total Hours</Label><Input value={timeMode === "duration" ? `${formatDurationLabel(hours)} (${hours.toFixed(2)} hrs)` : `${hours.toFixed(2)} hrs`} disabled /></div>
             {showMoney && (
               <>
                 <div><Label>Your Rate</Label><Input value={approvedRate ? `${formatCurrency(approvedRate.amount, approvedRate.currency)}${approvedRate.pay_type === "hourly" ? "/hr" : " flat"}` : "No approved rate — set in My Rates"} disabled /></div>
@@ -326,7 +369,7 @@ export function VATimeLogPage() {
             )}
           </div>
           {error && <p className="text-[11px] text-red-600">{error}</p>}
-          <Button variant="gold" className="w-full" onClick={() => submit.mutate()} disabled={!form.client_id || !descriptionPlain || submit.isPending}>
+          <Button variant="gold" className="w-full" onClick={() => submit.mutate()} disabled={!form.client_id || !descriptionPlain || !durationValid || submit.isPending}>
             {submit.isPending ? "Submitting..." : "Submit Entry"}
           </Button>
         </CardContent>
@@ -349,13 +392,13 @@ export function VATimeLogPage() {
                     </span>
                   )}
                 </td>
-                <td className="p-2 whitespace-nowrap">{log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}<span className="block text-[10px] text-muted-foreground">{log.source === "clock" ? "clock" : "manual"}</span></td>
+                <td className="p-2 whitespace-nowrap">{log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "…"}` : log.entry_mode === "duration" ? formatDurationLabel(log.hours) : `${log.start_time?.slice(0, 5) || "—"}–${log.end_time?.slice(0, 5) || "—"}`}<span className="block text-[10px] text-muted-foreground">{log.source === "clock" ? "clock" : log.entry_mode === "duration" ? "duration" : "manual"}</span></td>
                 <td className="p-2">{log.hours}</td>
                 {showMoney && <><td className="p-2">{formatCurrency(log.va_rate)}</td><td className="p-2">{formatCurrency(log.va_pay)}</td></>}
                 <td className="p-2"><StatusBadge status={log.status} />{(log.attachment_count ?? 0) > 0 && <span className="ml-1 text-[10px] text-muted-foreground">📎{log.attachment_count}</span>}</td>
                 <td className="p-2 whitespace-nowrap">
                   {(log.status === "submitted" || log.status === "rejected") ? <>
-                    <button className="underline mr-2" onClick={() => { setEditingLog(log); setEditDesc(log.description_plain); setEditTimes({ start_time: log.start_time?.slice(0, 5) || "09:00", end_time: log.end_time?.slice(0, 5) || "17:00" }) }}>Edit</button>
+                    <button className="underline mr-2" onClick={() => { setEditingLog(log); setEditDesc(log.description_plain); setEditMode(log.entry_mode === "duration" ? "duration" : "range"); setEditTimes({ start_time: log.start_time?.slice(0, 5) || "09:00", end_time: log.end_time?.slice(0, 5) || "17:00" }); setEditDuration(splitHours(log.hours)) }}>Edit</button>
                     <button className="underline text-red-600" onClick={() => { if (confirm("Delete this log entry?")) deleteLog.mutate(log.id) }}>Delete</button>
                   </> : <span className="text-[10px] text-muted-foreground">locked</span>}
                   {(log.attachment_count ?? 0) > 0 && <button className="ml-2 underline" onClick={() => setViewingLog(log)}>Files</button>}
@@ -373,11 +416,22 @@ export function VATimeLogPage() {
             <h2 className="text-sm font-semibold mb-3">Edit Log — {editingLog.work_date}</h2>
             <div className="space-y-3">
               <div><Label>Description</Label><Input value={editDesc} onChange={e => setEditDesc(e.target.value)} /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><Label>Start</Label><Input type="time" value={editTimes.start_time} onChange={e => setEditTimes({ ...editTimes, start_time: e.target.value })} /></div>
-                <div><Label>End</Label><Input type="time" value={editTimes.end_time} onChange={e => setEditTimes({ ...editTimes, end_time: e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" className={`rounded-xl border px-3 py-2 text-xs ${editMode === "range" ? "border-primary bg-primary/10 font-semibold" : "border-border"}`} onClick={() => setEditMode("range")}>Start and end</button>
+                <button type="button" className={`rounded-xl border px-3 py-2 text-xs ${editMode === "duration" ? "border-primary bg-primary/10 font-semibold" : "border-border"}`} onClick={() => setEditMode("duration")}>Hours and minutes</button>
               </div>
-              <p className="text-[11px] text-muted-foreground">{showMoney ? "Hours & pay recalculate from your approved rate." : "Hours recalculate from start and end time."}{editingLog.status === "rejected" ? " Saving resubmits this log." : ""}</p>
+              {editMode === "range" ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Start</Label><Input type="time" value={editTimes.start_time} onChange={e => setEditTimes({ ...editTimes, start_time: e.target.value })} /></div>
+                  <div><Label>End</Label><Input type="time" value={editTimes.end_time} onChange={e => setEditTimes({ ...editTimes, end_time: e.target.value })} /></div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Hours</Label><Input type="number" min={0} max={24} value={editDuration.hours} onChange={e => setEditDuration({ ...editDuration, hours: e.target.value })} /></div>
+                  <div><Label>Minutes</Label><Input type="number" min={0} max={59} value={editDuration.minutes} onChange={e => setEditDuration({ ...editDuration, minutes: e.target.value })} /></div>
+                </div>
+              )}
+              <p className="text-[11px] text-muted-foreground">{showMoney ? "Hours and pay recalculate from your approved rate." : "Hours are saved from the method you pick."}{editingLog.status === "rejected" ? " Saving resubmits this log." : ""}</p>
               <div className="flex gap-2"><Button variant="gold" className="flex-1" disabled={!editDesc || editLog.isPending} onClick={() => editLog.mutate()}>Save</Button><Button variant="outline" onClick={() => setEditingLog(null)}>Cancel</Button></div>
             </div>
           </div>

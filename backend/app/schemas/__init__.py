@@ -576,8 +576,11 @@ class VAWorkLogUpdate(BaseModel):
     task_id: UUID | None = None
     description_plain: str | None = None
     description_lexical: dict[str, Any] | None = None
+    entry_mode: str | None = None
     start_time: time | None = None
     end_time: time | None = None
+    duration_hours: int | None = None
+    duration_minutes: int | None = None
     notes: str | None = None
 
 
@@ -717,8 +720,11 @@ class WorkLogCreate(BaseModel):
     task_id: UUID | None = None
     description_lexical: dict[str, Any] | None = None
     description_plain: str
-    start_time: time
-    end_time: time
+    entry_mode: str = "range"
+    start_time: time | None = None
+    end_time: time | None = None
+    duration_hours: int | None = None
+    duration_minutes: int | None = None
     va_rate: Decimal | None = None  # ignored — resolved from approved VARate
     notes: str | None = None
 
@@ -852,8 +858,9 @@ class WorkLogResponse(BaseModel):
     sub_client_name: str | None = None
     description_lexical: dict[str, Any] | None
     description_plain: str
-    start_time: time
-    end_time: time
+    entry_mode: str = "range"
+    start_time: time | None = None
+    end_time: time | None = None
     hours: Decimal
     va_rate: Decimal | None = None
     va_pay: Decimal | None = None

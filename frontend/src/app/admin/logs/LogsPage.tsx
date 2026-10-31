@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
-import { cn, formatCurrency, formatDate } from "@/lib/utils"
+import { cn, formatCurrency, formatDate, formatDurationLabel } from "@/lib/utils"
 import { Check, X, Pencil, Trash2, Download, Search, Clock3, Hand, Paperclip } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
@@ -217,7 +217,7 @@ export function LogsPage() {
                       {log.task_title && <span className="block text-[11px] text-muted-foreground">Task: {log.task_title}</span>}
                     </td>
                     <td className="whitespace-nowrap p-3 text-xs text-muted-foreground">
-                      {log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} → ${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}
+                      {log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} → ${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "…"}` : log.entry_mode === "duration" ? formatDurationLabel(log.hours) : `${log.start_time?.slice(0, 5) || "—"}–${log.end_time?.slice(0, 5) || "—"}`}
                       <span className={cn("ml-1.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", log.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{log.source === "clock" ? <><Clock3 className="h-2.5 w-2.5" /> Clock</> : <><Hand className="h-2.5 w-2.5" /> Manual</>}</span>
                     </td>
                     <td className="p-3 text-xs font-extrabold">{Number(log.hours).toFixed(2)}</td>

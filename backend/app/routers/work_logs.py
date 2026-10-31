@@ -44,6 +44,7 @@ def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
         sub_client_name=log.sub_client.name if log.sub_client else None,
         description_lexical=log.description_lexical,
         description_plain=log.description_plain,
+        entry_mode=getattr(log, "entry_mode", None) or "range",
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
@@ -180,17 +181,18 @@ def update_work_log(
         start = body.start_time or log.start_time
         end = body.end_time or log.end_time
         work_date = body.work_date or log.work_date
-        from app.services.work_log_overlap import assert_no_time_overlap
-        assert_no_time_overlap(
-            db,
-            va_id=log.va_id,
-            work_date=work_date,
-            start_time=start,
-            end_time=end,
-            exclude_id=log.id,
-        )
         rate = body.va_rate if (body.va_rate is not None and current.role == UserRole.admin) else log.va_rate
-        log.hours = calculate_hours(start, end)
+        if start and end and getattr(log, "entry_mode", "range") != "duration":
+            from app.services.work_log_overlap import assert_no_time_overlap
+            assert_no_time_overlap(
+                db,
+                va_id=log.va_id,
+                work_date=work_date,
+                start_time=start,
+                end_time=end,
+                exclude_id=log.id,
+            )
+            log.hours = calculate_hours(start, end)
         log.va_pay = calculate_pay(log.hours, rate)
 
     db.commit()

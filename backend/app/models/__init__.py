@@ -450,8 +450,10 @@ class WorkLog(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     description_lexical: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     description_plain: Mapped[str] = mapped_column(Text)
-    start_time: Mapped[time] = mapped_column(Time)
-    end_time: Mapped[time] = mapped_column(Time)
+    # range = start/end clock times; duration = hours and minutes with no clock range
+    entry_mode: Mapped[str] = mapped_column(String(20), default="range", server_default="range")
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     hours: Mapped[Decimal] = mapped_column(Numeric(8, 2))
     va_rate: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     va_pay: Mapped[Decimal] = mapped_column(Numeric(12, 2))

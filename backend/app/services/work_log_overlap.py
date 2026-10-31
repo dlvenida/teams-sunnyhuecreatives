@@ -35,8 +35,8 @@ def assert_no_time_overlap(
     *,
     va_id: UUID,
     work_date: date,
-    start_time: time,
-    end_time: time,
+    start_time: time | None,
+    end_time: time | None,
     exclude_id: UUID | None = None,
 ) -> None:
     q = db.query(WorkLog).filter(
@@ -47,7 +47,12 @@ def assert_no_time_overlap(
     if exclude_id is not None:
         q = q.filter(WorkLog.id != exclude_id)
 
+    if start_time is None or end_time is None:
+        return
+
     for other in q.all():
+        if getattr(other, "entry_mode", "range") == "duration" or other.start_time is None or other.end_time is None:
+            continue
         if ranges_overlap(start_time, end_time, other.start_time, other.end_time):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

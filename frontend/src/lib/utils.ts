@@ -88,6 +88,33 @@ export function formatInvoiceDate(d: string) {
   })
 }
 
+export function hoursFromDuration(hours: number, minutes: number): number {
+  const h = Number.isFinite(hours) ? hours : 0
+  const m = Number.isFinite(minutes) ? minutes : 0
+  return Math.round((h + m / 60) * 100) / 100
+}
+
+export function splitHours(total: string | number): { hours: string; minutes: string } {
+  const n = typeof total === "number" ? total : parseFloat(total)
+  if (!Number.isFinite(n) || n <= 0) return { hours: "0", minutes: "0" }
+  let h = Math.floor(n)
+  let m = Math.round((n - h) * 60)
+  if (m === 60) {
+    h += 1
+    m = 0
+  }
+  return { hours: String(h), minutes: String(m) }
+}
+
+export function formatDurationLabel(total: string | number): string {
+  const { hours, minutes } = splitHours(total)
+  const h = Number(hours)
+  const m = Number(minutes)
+  if (h && m) return `${h}h ${m}m`
+  if (h) return `${h}h`
+  return `${m}m`
+}
+
 export function calculateHoursFromTimes(start: string, end: string): number {
   const [sh, sm] = start.split(":").map(Number)
   const [eh, em] = end.split(":").map(Number)

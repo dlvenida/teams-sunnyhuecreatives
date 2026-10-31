@@ -73,6 +73,7 @@ def get_project(project_id: UUID, _: Annotated[CurrentUser, Depends(get_current_
 
 @router.patch("/{project_id}", response_model=ProjectResponse)
 def update_project(project_id: UUID, body: ProjectUpdate, _: Annotated[CurrentUser, Depends(require_admin_or_auditor)], db: Annotated[Session, Depends(get_db)]):
+    """Admin and auditor (Project Manager) can update a project. No financial fields on this model."""
     p = db.query(Project).filter(Project.id == project_id).first()
     if not p: raise HTTPException(404, "Project not found")
     data = body.model_dump(exclude_unset=True)

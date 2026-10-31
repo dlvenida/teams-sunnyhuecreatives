@@ -1,16 +1,39 @@
 export type NotificationSoundId = "chime" | "bell" | "ping" | "loud"
 
+export type NotificationDelivery = "both" | "popup" | "sound" | "bell"
+
+export interface EmailNotificationTypes {
+  comment: boolean
+  mention: boolean
+  task_assigned: boolean
+  task_updated: boolean
+  timesheet: boolean
+}
+
 export interface NotificationPreferences {
   popup_enabled: boolean
   sound_enabled: boolean
   sound_id: NotificationSoundId
   popup_types: Record<string, boolean>
+  /** Per type: pop-up and sound, pop-up only, sound only, or bell only. */
+  delivery?: Partial<Record<string, NotificationDelivery>>
+  email_enabled: boolean
+  email_types: EmailNotificationTypes
 }
 
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPreferences = {
   popup_enabled: true,
   sound_enabled: true,
-  sound_id: "chime",
+  sound_id: "loud",
+  delivery: {
+    comment: "both",
+    task: "both",
+    log: "both",
+    clock: "both",
+    delegation: "both",
+    invoice: "both",
+    system: "both",
+  },
   popup_types: {
     comment: true,
     task: true,
@@ -19,6 +42,14 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPreferences = {
     delegation: true,
     invoice: true,
     system: true,
+  },
+  email_enabled: true,
+  email_types: {
+    comment: true,
+    mention: true,
+    task_assigned: true,
+    task_updated: true,
+    timesheet: true,
   },
 }
 
@@ -55,11 +86,16 @@ export interface UserProfile {
   portfolio_url?: string | null
   status_message?: string | null
   notification_preferences?: NotificationPreferences | null
+  legal_name?: string | null
+  compensation_mode?: string | null
+  va_package_amount?: string | number | null
+  va_package_currency?: string | null
   created_at?: string | null
 }
 
 export interface ProfileFormData {
   display_name: string
+  legal_name: string
   phone: string
   address: string
   wise_email: string
@@ -83,6 +119,7 @@ export interface ProfileFormData {
 export function profileToForm(p: UserProfile): ProfileFormData {
   return {
     display_name: p.display_name,
+    legal_name: p.legal_name || "",
     phone: p.phone || "",
     address: p.address || "",
     wise_email: p.wise_email || "",

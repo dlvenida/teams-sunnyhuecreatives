@@ -63,15 +63,12 @@ export default function App() {
               <Route element={<AppShell />}>
                 <Route path="/admin/dashboard" element={<DashboardPage />} />
                 <Route path="/admin/logs" element={<LogsPage />} />
-                <Route path="/admin/payroll" element={<PayrollPage />} />
                 <Route path="/admin/clients" element={<ClientsPage />} />
                 <Route path="/admin/user-reports" element={<UserReportsPage />} />
                 <Route path="/admin/tasks" element={<TasksPage />} />
                 <Route path="/admin/projects" element={<ProjectsPage />} />
                 <Route path="/admin/time-clock" element={<TimeClockPage />} />
                 <Route path="/admin/log-time" element={<VATimeLogPage />} />
-                <Route path="/admin/reports" element={<ReportsPage />} />
-                <Route path="/admin/analytics" element={<AnalyticsPage />} />
                 <Route path="/admin/users" element={<UsersPage />} />
                 <Route path="/admin/profile" element={<ProfilePage />} />
               </Route>
@@ -79,6 +76,9 @@ export default function App() {
 
             <Route element={<ProtectedRoute role="admin" />}>
               <Route element={<AppShell />}>
+                <Route path="/admin/payroll" element={<PayrollPage />} />
+                <Route path="/admin/reports" element={<ReportsPage />} />
+                <Route path="/admin/analytics" element={<AnalyticsPage />} />
                 <Route path="/admin/va-rates" element={<VARatesAdminPage />} />
                 <Route path="/admin/invoices" element={<InvoicesPage />} />
                 <Route path="/admin/settings" element={<SettingsPage />} />

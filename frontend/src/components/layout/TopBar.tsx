@@ -168,7 +168,7 @@ function AdminUserSwitcher() {
                 <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{roleLabel(u.role)}</span>
               </button>
             ))}
-            {targets.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No active VA/auditor accounts to switch into.</p>}
+            {targets.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No active VA or project manager accounts to switch into.</p>}
           </div>
           <p className="border-t px-4 py-2 text-[10px] text-muted-foreground">An amber banner will let you exit back to Admin at any time.</p>
         </div>
@@ -188,7 +188,7 @@ export function TopBar({ onMenu }: { onMenu?: () => void }) {
       <button className="shrink-0 rounded-lg p-1.5 hover:bg-muted lg:hidden" onClick={onMenu} aria-label="Open menu"><Menu className="h-5 w-5" /></button>
       <div className="flex-1 min-[420px]:hidden" />
       <div className="hidden min-w-0 flex-1 min-[420px]:block">
-        <p className="truncate text-[13px] font-semibold">Sunny Hue Creatives <span className="font-normal text-muted-foreground">/ {isAdmin ? "Admin" : user?.role === "auditor" ? "Auditor" : "My workspace"}</span></p>
+        <p className="truncate text-[13px] font-semibold">Sunny Hue Creatives <span className="font-normal text-muted-foreground">/ {isAdmin ? "Admin" : user?.role === "auditor" ? "Project Manager" : "My workspace"}</span></p>
         <p className="hidden text-[10px] text-muted-foreground sm:block">{!isAdmin && current ? "You're on the clock — keep going!" : "Let's make today productive"}</p>
       </div>
       {isAdmin && !isImpersonating() && <AdminUserSwitcher />}

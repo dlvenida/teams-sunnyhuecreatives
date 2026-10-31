@@ -13,7 +13,7 @@ const FEATURES = [
   { icon: KanbanSquare, text: "Monday-style boards, projects & client work in one place" },
   { icon: Timer, text: "One-tap time clock with live team presence" },
   { icon: BellRing, text: "Instant notifications for comments, approvals & updates" },
-  { icon: ShieldCheck, text: "Auditor oversight keeps every VA's week on track" },
+  { icon: ShieldCheck, text: "Project Manager oversight keeps every VA's week on track" },
 ]
 
 function greeting() {

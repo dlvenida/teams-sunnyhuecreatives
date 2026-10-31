@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
+import type { UserProfile } from "@/lib/profile"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
@@ -14,6 +15,11 @@ import { BadgeCheck, CheckCircle2, FileDown, Send, Wallet } from "lucide-react"
 interface EarningsResponse {
   currency: string
   va_name?: string | null
+  usd_php_rate?: string | null
+  legal_name?: string | null
+  compensation_mode?: string | null
+  va_package_amount?: string | null
+  va_package_currency?: string | null
   company_name?: string
   this_week: { hours: string; earned: string; entries: number; currency: string }
   this_month: { hours: string; earned: string; entries: number; currency: string }
@@ -96,6 +102,10 @@ export function VAPayrollPage() {
   const [submitErr, setSubmitErr] = useState("")
 
   const rangeReady = !!dateFrom && !!dateTo
+  const { data: profile } = useQuery({
+    queryKey: ["profile"],
+    queryFn: () => apiFetch<UserProfile>("/profile/me"),
+  })
   const { data: earnings, isLoading } = useQuery({
     queryKey: ["va-payroll", dateFrom, dateTo],
     queryFn: () => apiFetch<EarningsResponse>(`/va/earnings?date_from=${dateFrom}&date_to=${dateTo}`),
@@ -111,6 +121,12 @@ export function VAPayrollPage() {
     queryFn: () => apiFetch<HistoryResponse>(`/va/payroll-history?year=${year}`),
   })
   const submitted = sheets[0]
+  const packageAmount = earnings?.va_package_amount ?? profile?.va_package_amount
+  const packageMode = (earnings?.compensation_mode || profile?.compensation_mode) === "va_package"
+    && packageAmount != null
+    && String(packageAmount) !== ""
+  const packageCurrency = ((earnings?.va_package_currency || profile?.va_package_currency) === "PHP" ? "PHP" : "USD") as "PHP" | "USD"
+  const legalName = earnings?.legal_name?.trim() || profile?.legal_name?.trim() || ""
 
   const yearOptions = useMemo(() => {
     const y = new Date().getFullYear()
@@ -125,7 +141,7 @@ export function VAPayrollPage() {
       }),
     onSuccess: () => {
       setSubmitErr("")
-      setSubmitMsg("Timesheet submitted! Admin and auditor can review it for payroll.")
+      setSubmitMsg("Timesheet submitted! Admin and the Project Manager can review it for payroll.")
       qc.invalidateQueries({ queryKey: ["va-timesheets"] })
       qc.invalidateQueries({ queryKey: ["va-payroll-history"] })
     },
@@ -144,13 +160,23 @@ export function VAPayrollPage() {
         <VAEarningsDocument
           data={{
             va_name: earnings.va_name,
-            currency: earnings.currency,
+            legal_name: legalName || null,
+            usd_php_rate: earnings.usd_php_rate,
+            compensation_mode: packageMode ? "va_package" : earnings.compensation_mode,
+            currency: packageMode ? packageCurrency : earnings.currency,
             date_from: dateFrom,
             date_to: dateTo,
             company_name: earnings.company_name || "Sunny Hue Creatives",
             principal_name: "Jane Laurine Venida",
             location: "Dumaguete City, Philippines",
-            range: earnings.range,
+            range: packageMode
+              ? {
+                  hours: earnings.range?.hours ?? "0",
+                  entries: earnings.range?.entries ?? (earnings.entries?.length ?? 0),
+                  currency: packageCurrency,
+                  earned: String(packageAmount),
+                }
+              : earnings.range,
             by_client: earnings.by_client,
             entries: earnings.entries ?? [],
           }}
@@ -309,8 +335,14 @@ export function VAPayrollPage() {
             </Button>
           </div>
           <div className="flex items-end">
-            <Button variant="outline" className="w-full" onClick={exportPdf} disabled={!earnings?.range}>
-              <FileDown className="h-4 w-4" /> Download PDF
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={exportPdf}
+              disabled={!earnings?.range || submitted?.status !== "reviewed"}
+              title={submitted?.status === "reviewed" ? "Download your approved payroll PDF" : "Available after the timesheet is approved"}
+            >
+              <FileDown className="h-4 w-4" /> {submitted?.status === "reviewed" ? "Download PDF" : "PDF after approval"}
             </Button>
           </div>
         </div>
@@ -353,16 +385,30 @@ export function VAPayrollPage() {
               </p>
             </div>
 
+            {packageMode && (
+              <p className="rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-foreground">
+                Your pay for this period is a fixed package of {formatCurrency(packageAmount ?? 0, packageCurrency)}. Hours are a record of work, not hours × rate.
+              </p>
+            )}
+
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <StatCard
-                title="Range total"
-                value={formatCurrency(earnings.range?.earned ?? 0, earnings.currency)}
-                subtitle={`${earnings.range?.hours ?? 0} hrs approved`}
+                title={packageMode ? "Period pay" : "Range total"}
+                value={packageMode ? formatCurrency(packageAmount ?? 0, packageCurrency) : formatCurrency(earnings.range?.earned ?? 0, earnings.currency)}
+                subtitle={packageMode ? "Fixed package · not hours × rate" : `${earnings.range?.hours ?? 0} hrs approved`}
                 className="border-primary/30"
               />
               <StatCard title="Entries" value={earnings.range?.entries ?? 0} subtitle="Approved in this range" />
-              <StatCard title="This week" value={formatCurrency(earnings.this_week.earned, earnings.this_week.currency)} subtitle={`${earnings.this_week.hours} hrs`} />
-              <StatCard title="This month" value={formatCurrency(earnings.this_month.earned, earnings.this_month.currency)} subtitle={`${earnings.this_month.hours} hrs`} />
+              <StatCard
+                title="This week"
+                value={packageMode ? `${earnings.this_week.hours} hrs` : formatCurrency(earnings.this_week.earned, earnings.this_week.currency)}
+                subtitle={packageMode ? "Hours tracked" : `${earnings.this_week.hours} hrs`}
+              />
+              <StatCard
+                title="This month"
+                value={packageMode ? `${earnings.this_month.hours} hrs` : formatCurrency(earnings.this_month.earned, earnings.this_month.currency)}
+                subtitle={packageMode ? "Hours tracked · pay is the monthly package" : `${earnings.this_month.hours} hrs`}
+              />
             </div>
 
             <Card>
@@ -379,7 +425,7 @@ export function VAPayrollPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {earnings.by_client.map((r) => (
+                    {(earnings.by_client ?? []).map((r) => (
                       <tr key={r.client_id} className="border-b last:border-0">
                         <td className="p-3 font-semibold">{r.client_name}</td>
                         <td className="p-3 capitalize">{r.pay_type}</td>
@@ -388,7 +434,7 @@ export function VAPayrollPage() {
                         <td className="p-3">{r.status}</td>
                       </tr>
                     ))}
-                    {earnings.by_client.length === 0 && (
+                    {(earnings.by_client ?? []).length === 0 && (
                       <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">No approved work in this range yet.</td></tr>
                     )}
                   </tbody>
@@ -398,6 +444,7 @@ export function VAPayrollPage() {
 
             <Card>
               <CardHeader className="pb-2"><CardTitle>Timesheet detail</CardTitle></CardHeader>
+              {packageMode && <p className="px-5 pb-2 text-xs text-muted-foreground">Tasks and hours only. Pay is the fixed package above, not hours × rate.</p>}
               <CardContent className="overflow-x-auto p-0">
                 <table className="w-full text-xs">
                   <thead>
@@ -406,8 +453,8 @@ export function VAPayrollPage() {
                       <th className="p-3">Client</th>
                       <th className="p-3">Description</th>
                       <th className="p-3">Hours</th>
-                      <th className="p-3">Rate</th>
-                      <th className="p-3">Pay</th>
+                      {!packageMode && <th className="p-3">Rate</th>}
+                      {!packageMode && <th className="p-3">Pay</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -417,12 +464,12 @@ export function VAPayrollPage() {
                         <td className="p-3 font-medium">{e.client_name}</td>
                         <td className="max-w-xs p-3"><span className="line-clamp-2">{e.description || e.task_title || "—"}</span></td>
                         <td className="p-3 font-bold">{e.hours}</td>
-                        <td className="p-3">{formatCurrency(e.rate, earnings.currency)}</td>
-                        <td className="p-3 font-semibold">{formatCurrency(e.pay, earnings.currency)}</td>
+                        {!packageMode && <td className="p-3">{(earnings.by_client ?? []).find((c) => c.client_name === e.client_name)?.pay_type === "package" ? "Flat" : formatCurrency(e.rate, earnings.currency)}</td>}
+                        {!packageMode && <td className="p-3 font-semibold">{(earnings.by_client ?? []).find((c) => c.client_name === e.client_name)?.pay_type === "package" ? "—" : formatCurrency(e.pay, earnings.currency)}</td>}
                       </tr>
                     ))}
                     {(earnings.entries ?? []).length === 0 && (
-                      <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No approved entries in this range.</td></tr>
+                      <tr><td colSpan={packageMode ? 4 : 6} className="p-6 text-center text-muted-foreground">No approved entries in this range.</td></tr>
                     )}
                   </tbody>
                 </table>

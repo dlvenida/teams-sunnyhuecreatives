@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
@@ -33,6 +33,27 @@ const MONTHS = Array.from({ length: 12 }, (_, i) => ({
   label: new Date(2000, i).toLocaleString("en", { month: "long" }),
 }))
 
+type BillingOption = "hourly" | "fixed" | "retainer" | "manual"
+
+const BILLING_OPTIONS: { value: BillingOption; label: string }[] = [
+  { value: "hourly", label: "Hourly" },
+  { value: "fixed", label: "Fixed Monthly Package" },
+  { value: "retainer", label: "Retainer" },
+  { value: "manual", label: "Custom / Manual" },
+]
+
+function optionFromClientBilling(billing: string | null | undefined): BillingOption {
+  if (billing === "fixed") return "fixed"
+  if (billing === "package_hours") return "retainer"
+  return "hourly"
+}
+
+function apiBillingType(option: BillingOption): "hourly" | "fixed" | "package_hours" {
+  if (option === "hourly") return "hourly"
+  if (option === "retainer") return "package_hours"
+  return "fixed"
+}
+
 export function InvoicesPage() {
   const [searchParams] = useSearchParams()
   const qc = useQueryClient()
@@ -43,11 +64,10 @@ export function InvoicesPage() {
     year: new Date().getFullYear(),
     month: new Date().getMonth() + 1,
     cutoff: 30,
-    billing_type: "hourly" as "hourly" | "fixed" | "package_hours",
+    billing_option: "hourly" as BillingOption,
     rate: "",
     included_hours: "",
     overage_rate: "",
-    package_id: "",
     invoice_number: "",
     payment_method: "wise" as "wise" | "paypal" | "bank_transfer",
     bank_details: "",
@@ -60,6 +80,11 @@ export function InvoicesPage() {
   const [pdfFilename, setPdfFilename] = useState("invoice.pdf")
   const [generateError, setGenerateError] = useState("")
   const [generateSuccess, setGenerateSuccess] = useState("")
+  const [extractedHours, setExtractedHours] = useState<number | null>(null)
+  const [amountManual, setAmountManual] = useState(false)
+  const [amountDraft, setAmountDraft] = useState("")
+  const [extracting, setExtracting] = useState(false)
+  const [extractError, setExtractError] = useState("")
   const { showPricing } = useDisplaySettings()
 
   const { data: clients = [] } = useQuery({
@@ -81,24 +106,34 @@ export function InvoicesPage() {
   const effectiveRate = rateNum
   const previewEnabled = !!form.client_id && !Number.isNaN(effectiveRate) && effectiveRate > 0
 
-  const { data: packages = [] } = useQuery({
+  const { data: packages = [], isFetched: packagesFetched } = useQuery({
     queryKey: ["client-packages", form.client_id],
     queryFn: () => apiFetch<import("@/lib/types").ClientPackage[]>(`/clients/${form.client_id}/packages`),
     enabled: !!form.client_id,
   })
 
+  const apiBilling = apiBillingType(form.billing_option)
+  const autoAmount =
+    extractedHours != null && !Number.isNaN(rateNum)
+      ? (Math.round(extractedHours * rateNum * 100) / 100).toFixed(2)
+      : null
+  const amountValue = amountManual ? amountDraft : (autoAmount ?? "")
+  const amountToSend =
+    extractedHours != null && amountValue !== "" && !Number.isNaN(parseFloat(amountValue))
+      ? parseFloat(amountValue)
+      : null
+
   const { data: periodPreview, isFetching: previewLoading } = useQuery({
-    queryKey: ["invoice-preview", form.client_id, form.year, form.month, form.cutoff, form.billing_type, form.rate, form.package_id, form.included_hours, form.overage_rate],
+    queryKey: ["invoice-preview", form.client_id, form.year, form.month, form.cutoff, form.billing_option, form.rate, form.included_hours, form.overage_rate],
     queryFn: () => {
       const qs = new URLSearchParams({
         client_id: form.client_id,
         year: String(form.year),
         month: String(form.month),
         cutoff: String(form.cutoff),
-        billing_type: form.billing_type,
+        billing_type: apiBilling,
         rate: form.rate,
       })
-      if (form.package_id) qs.set("package_id", form.package_id)
       if (form.included_hours) qs.set("included_hours", form.included_hours)
       if (form.overage_rate) qs.set("overage_rate", form.overage_rate)
       return apiFetch<InvoicePreview>(`/invoices/preview?${qs}`)
@@ -106,27 +141,53 @@ export function InvoicesPage() {
     enabled: previewEnabled,
   })
 
+  const appliedUrlClient = useRef<string | null>(null)
   useEffect(() => {
     const client = searchParams.get("client")
     if (!client || activeClients.length === 0) return
+    if (appliedUrlClient.current === client) return
     const c = activeClients.find((x) => x.id === client)
+    if (!c) return
+    appliedUrlClient.current = client
     setForm((f) => ({
       ...f,
       client_id: client,
       month: Number(searchParams.get("month") || f.month),
       year: Number(searchParams.get("year") || f.year),
       cutoff: Number(searchParams.get("cutoff") || f.cutoff),
-      billing_type: (c?.billing_type as "hourly" | "fixed") || f.billing_type,
-      rate: c?.default_rate || f.rate,
+      billing_option: optionFromClientBilling(c.billing_type),
+      rate: c.default_rate || f.rate,
     }))
   }, [searchParams, activeClients])
 
   useEffect(() => {
-    if (!form.client_id) return
     apiFetch<{ invoice_number: string }>(`/invoices/next-number?year=${form.year}`)
       .then((d) => setForm((f) => ({ ...f, invoice_number: d.invoice_number })))
       .catch(() => {})
-  }, [form.client_id, form.year])
+  }, [form.year])
+
+  useEffect(() => {
+    setExtractedHours(null)
+    setAmountManual(false)
+    setAmountDraft("")
+  }, [form.client_id, form.year, form.month, form.cutoff])
+
+  useEffect(() => {
+    if (!packagesFetched || !form.client_id || form.billing_option !== "retainer") return
+    if (form.included_hours || form.overage_rate) return
+    const def = packages.find((p) => p.is_default && p.is_active) ?? packages.find((p) => p.is_active)
+    if (!def || (!def.included_hours && !def.overage_rate)) return
+    setForm((f) => {
+      if (f.client_id !== form.client_id || f.billing_option !== "retainer") return f
+      if (f.included_hours || f.overage_rate) return f
+      return {
+        ...f,
+        included_hours: def.included_hours || "",
+        overage_rate: def.overage_rate || "",
+        rate: f.rate || def.amount || "",
+      }
+    })
+  }, [packagesFetched, packages, form.client_id, form.billing_option, form.included_hours, form.overage_rate])
 
   useEffect(() => {
     if (!settings) return
@@ -144,30 +205,61 @@ export function InvoicesPage() {
     setForm((f) => ({
       ...f,
       client_id: clientId,
-      billing_type: (c?.billing_type as "hourly" | "fixed" | "package_hours") || "hourly",
+      billing_option: optionFromClientBilling(c?.billing_type),
       rate,
-      package_id: "",
       included_hours: "",
       overage_rate: "",
     }))
     setGenerateError("")
     setGenerateSuccess("")
+    setExtractError("")
   }
 
-  const onPackageChange = (packageId: string) => {
-    const p = packages.find((x) => x.id === packageId)
-    if (!p) {
-      setForm((f) => ({ ...f, package_id: "" }))
+  const extractLogs = async () => {
+    if (!form.client_id) {
+      setExtractError("Select a client first.")
       return
     }
-    setForm((f) => ({
-      ...f,
-      package_id: packageId,
-      billing_type: p.billing_type,
-      rate: p.amount,
-      included_hours: p.included_hours || "",
-      overage_rate: p.overage_rate || "",
-    }))
+    setExtracting(true)
+    setExtractError("")
+    try {
+      const qs = new URLSearchParams({
+        client_id: form.client_id,
+        year: String(form.year),
+        month: String(form.month),
+        cutoff: String(form.cutoff),
+      })
+      const data = await apiFetch<{
+        description: string
+        total_hours: string | number
+        entry_count?: number
+      }>(`/invoices/extract?${qs}`)
+      const hours = typeof data.total_hours === "number" ? data.total_hours : parseFloat(data.total_hours)
+      if (data.entry_count === 0) {
+        setExtractError("No time logs for this client and period.")
+        setExtractedHours(null)
+        setAmountManual(false)
+        setAmountDraft("")
+        return
+      }
+      const hoursLabel = Number.isNaN(hours) ? String(data.total_hours) : hours.toFixed(2)
+      const description = data.description ?? ""
+      const block = description ? `${description}\n\nTotal hours: ${hoursLabel}` : `Total hours: ${hoursLabel}`
+      setForm((f) => {
+        const existing = f.service_description
+        if (!existing.trim()) return { ...f, service_description: block }
+        const trimmedEnd = existing.replace(/\s+$/, "")
+        if (trimmedEnd.endsWith(block)) return f
+        return { ...f, service_description: `${trimmedEnd}\n\n${block}` }
+      })
+      setExtractedHours(Number.isNaN(hours) ? 0 : hours)
+      setAmountManual(false)
+      setAmountDraft("")
+    } catch (err) {
+      setExtractError(err instanceof Error ? err.message : "Could not extract time logs")
+    } finally {
+      setExtracting(false)
+    }
   }
 
   const generate = useMutation({
@@ -179,16 +271,19 @@ export function InvoicesPage() {
           year: form.year,
           month: form.month,
           cutoff: form.cutoff,
-          billing_type: form.billing_type,
+          billing_type: apiBilling,
           rate: rateNum,
           invoice_number: form.invoice_number || null,
           payment_method: form.payment_method,
           bank_details: form.bank_details || null,
           payment_terms_days: form.payment_terms_days,
-          package_id: form.package_id || null,
-          included_hours: form.included_hours ? parseFloat(form.included_hours) : null,
-          overage_rate: form.overage_rate ? parseFloat(form.overage_rate) : null,
+          package_id: null,
+          included_hours: form.billing_option === "retainer" && form.included_hours ? parseFloat(form.included_hours) : null,
+          overage_rate: form.billing_option === "retainer" && form.overage_rate ? parseFloat(form.overage_rate) : null,
           service_description: form.service_description.trim() || null,
+          ...(amountToSend != null && form.service_description.trim()
+            ? { amount: amountToSend.toFixed(2) }
+            : {}),
         }),
       }),
     onSuccess: (inv) => {
@@ -369,23 +464,25 @@ export function InvoicesPage() {
             </Select>
           </div>
           <div>
-            <Label>Billing type</Label>
-            <Select value={form.billing_type} onChange={(e) => setForm({ ...form, billing_type: e.target.value as "hourly" | "fixed" | "package_hours" })}>
-              <option value="hourly">Hourly</option>
-              <option value="fixed">Fixed package</option>
-              <option value="package_hours">Package + included hours</option>
+            <Label>Billing</Label>
+            <Select
+              value={form.billing_option}
+              onChange={(e) => {
+                const billing_option = e.target.value as BillingOption
+                setForm({
+                  ...form,
+                  billing_option,
+                  included_hours: billing_option === "retainer" ? form.included_hours : "",
+                  overage_rate: billing_option === "retainer" ? form.overage_rate : "",
+                })
+              }}
+            >
+              {BILLING_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
             </Select>
           </div>
-          {packages.length > 0 && (
-            <div>
-              <Label>Client package</Label>
-              <Select value={form.package_id} onChange={(e) => onPackageChange(e.target.value)}>
-                <option value="">Default / manual</option>
-                {packages.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.billing_type})</option>)}
-              </Select>
-            </div>
-          )}
-          {form.billing_type === "package_hours" && (
+          {form.billing_option === "retainer" && (
             <>
               <div>
                 <Label>Included hours</Label>
@@ -399,11 +496,13 @@ export function InvoicesPage() {
           )}
           <div>
             <Label>
-              {form.billing_type === "hourly"
+              {extractedHours != null || form.billing_option === "hourly"
                 ? "Rate per hour ($)"
-                : form.billing_type === "package_hours"
-                  ? "Package amount ($)"
-                  : "Flat amount ($)"}
+                : form.billing_option === "retainer"
+                  ? "Retainer amount ($)"
+                  : form.billing_option === "manual"
+                    ? "Amount ($)"
+                    : "Package amount ($)"}
             </Label>
             <Input
               type="number"
@@ -411,12 +510,39 @@ export function InvoicesPage() {
               step="0.01"
               value={form.rate}
               onChange={(e) => setForm({ ...form, rate: e.target.value })}
-              placeholder={form.billing_type === "hourly" ? "e.g. 13.00" : "e.g. 100.00"}
+              placeholder={extractedHours != null || form.billing_option === "hourly" ? "e.g. 13.00" : "e.g. 100.00"}
             />
+            {form.billing_option === "manual" && extractedHours == null && (
+              <p className="mt-1 text-[10px] text-muted-foreground">Billed as entered. Time logs are not required.</p>
+            )}
           </div>
+          {extractedHours != null && (
+            <div>
+              <Label>Amount ($)</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={amountValue}
+                onChange={(e) => {
+                  setAmountManual(true)
+                  setAmountDraft(e.target.value)
+                }}
+              />
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                {autoAmount
+                  ? `${extractedHours.toFixed(2)} hrs × ${formatCurrency(rateNum)} = ${formatCurrency(autoAmount)}`
+                  : "Enter a rate. Amount = hours × rate."}
+                {amountManual && amountValue !== (autoAmount ?? "")
+                  ? ` Invoice amount is ${amountValue ? formatCurrency(amountValue) : "blank"}.`
+                  : ""}
+              </p>
+            </div>
+          )}
           <div>
             <Label>Invoice #</Label>
             <Input value={form.invoice_number} onChange={(e) => setForm({ ...form, invoice_number: e.target.value })} />
+            <p className="mt-1 text-[10px] text-muted-foreground">Auto-filled as SHC-YYYY-NNN. You can edit it.</p>
           </div>
           <div>
             <Label>Payment terms</Label>
@@ -450,16 +576,24 @@ export function InvoicesPage() {
             </div>
           )}
           <div className="sm:col-span-2 lg:col-span-4">
-            <Label>Service description (appears on the client PDF)</Label>
+            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+              <Label>Service description (appears on the client PDF)</Label>
+              <Button type="button" variant="outline" size="sm" disabled={!form.client_id || extracting} onClick={() => { void extractLogs() }}>
+                {extracting ? "Extracting..." : "Extract from time logs"}
+              </Button>
+            </div>
             <Textarea
               value={form.service_description}
               onChange={(e) => setForm({ ...form, service_description: e.target.value })}
               placeholder={"Hint only — e.g. Social Media VA Services — Melaleuca & Elite Vitality"}
-              rows={3}
+              rows={5}
             />
             <p className="mt-1 text-[10px] text-muted-foreground">
-              Type exactly what the client should see on the PDF. Leave blank to use “Social Media VA Services — [period]” (never “Engagement Package”). The grey hint text never appears on the invoice.
+              Extract copies each time log as written, plus a total-hours line. Edit it before generating. Leave blank to use “Social Media VA Services — [period]” (never “Engagement Package”). The grey hint text never appears on the invoice.
             </p>
+            {extractError && (
+              <p className="mt-1 text-[11px] text-amber-700">{extractError}</p>
+            )}
           </div>
         </div>
 
@@ -471,7 +605,18 @@ export function InvoicesPage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="space-y-1">
                   <p className="font-medium">{periodPreview.period_label}</p>
-                  <p>{periodPreview.message}</p>
+                  <p>
+                    {form.billing_option === "manual"
+                      ? (periodPreview.can_generate
+                        ? "Custom / manual invoice — time logs are not required. Extract descriptions if you want them on the PDF, then set the amount."
+                        : "Enter an amount to generate. Time logs are not required.")
+                      : periodPreview.message}
+                  </p>
+                  {amountToSend != null && form.service_description.trim() && (
+                    <p className="text-[11px]">
+                      Invoice amount {formatCurrency(amountToSend)} ({extractedHours?.toFixed(2)} hrs × rate). Edit the amount or the description before generating.
+                    </p>
+                  )}
                       {periodPreview.approved_entries > 0 && (
                     <p className="text-[11px] opacity-80">
                       {periodPreview.approved_entries} entries · {periodPreview.total_hours} hrs
@@ -630,7 +775,7 @@ export function InvoicesPage() {
             </div>
             <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarClock className="h-3.5 w-3.5" /> Net {detail.payment_terms_days} days via {detail.payment_method}{detail.paid_at ? ` · Paid ${formatDate(detail.paid_at.slice(0, 10))}` : ""}</p>
             <p className="mt-4 text-[11px] text-muted-foreground">
-              Customize each service description before sending the PDF to the client. Time logs stay internal and are not shown on the invoice.
+              The PDF uses this service description exactly as saved.
             </p>
             <div className="mt-2 overflow-x-auto rounded-xl border">
               <table className="w-full text-xs">

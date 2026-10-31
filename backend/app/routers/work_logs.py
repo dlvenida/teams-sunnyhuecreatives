@@ -108,7 +108,7 @@ def _query_logs(
 @router.get("/export/csv")
 @router.get("/export")
 def export_csv(
-    _: Annotated[CurrentUser, Depends(require_admin)],
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
     client_id: UUID | None = None,
     va_id: UUID | None = None,
@@ -116,15 +116,23 @@ def export_csv(
     date_from: date | None = None,
     date_to: date | None = None,
 ):
-    logs = [_serialize_log(log) for log in _query_logs(db, client_id, va_id, status_filter, date_from, date_to)]
+    redact = current.role == UserRole.auditor
+    logs = [_serialize_log(log, redact) for log in _query_logs(db, client_id, va_id, status_filter, date_from, date_to)]
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Date", "VA", "Client", "Sub-client", "Description", "Hours", "VA Rate", "VA Pay", "Status"])
+    header = ["Date", "VA", "Client", "Sub-client", "Description", "Hours", "Status"]
+    if not redact:
+        header = ["Date", "VA", "Client", "Sub-client", "Description", "Hours", "VA Rate", "VA Pay", "Status"]
+    writer.writerow(header)
     for log in logs:
-        writer.writerow([
+        row = [
             log.work_date, log.va_name, log.client_name, log.sub_client_name or "",
-            log.description_plain, log.hours, log.va_rate, log.va_pay, log.status.value,
-        ])
+            log.description_plain, log.hours,
+        ]
+        if not redact:
+            row.extend([log.va_rate, log.va_pay])
+        row.append(log.status.value)
+        writer.writerow(row)
     return Response(
         content=output.getvalue(),
         media_type="text/csv",
@@ -156,11 +164,14 @@ def update_work_log(
 ):
     log = _get_log(db, log_id)
     data = body.model_dump(exclude_unset=True)
-    # Auditors cannot touch money fields
+    # Auditors cannot touch money fields or mark a log invoiced
     if current.role == UserRole.auditor:
         data.pop("va_rate", None)
-        if "status" in data and data["status"] not in (WorkLogStatus.approved, WorkLogStatus.rejected, WorkLogStatus.submitted):
-            raise HTTPException(403, "Auditor cannot set that status")
+        data.pop("va_pay", None)
+        if log.status == WorkLogStatus.invoiced:
+            data.pop("status", None)
+        elif data.get("status") not in (None, WorkLogStatus.approved, WorkLogStatus.rejected, WorkLogStatus.submitted):
+            raise HTTPException(403, "Project Manager cannot set that status")
 
     for k, v in data.items():
         setattr(log, k, v)

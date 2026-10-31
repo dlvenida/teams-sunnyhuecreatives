@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models import Notification, Task, User, UserRole, VA
-from app.services.email import branded_email, detail_rows, render_template, send_email
+from app.services.email import branded_email, detail_rows, email_cta_url, render_template, send_email
 
 BASE = "/va/tasks"
 
@@ -104,77 +104,214 @@ def _task_rows(task: Task, extra: list[tuple[str, str]] | None = None) -> str:
     return detail_rows(rows)
 
 
+def wants_email(user, kind: str) -> bool:
+    """Whether to send this email. Missing prefs default to on. No new columns.
+
+    Skip when notification_preferences.email_enabled is false, or when
+    notification_preferences.email_types[kind] is false.
+    """
+    if user is None or not getattr(user, "is_active", True) or not getattr(user, "email", None):
+        return False
+    prefs = user.notification_preferences if isinstance(getattr(user, "notification_preferences", None), dict) else {}
+    if prefs.get("email_enabled") is False:
+        return False
+    types = prefs.get("email_types")
+    if isinstance(types, dict) and types.get(kind) is False:
+        return False
+    return True
+
+
+def _send_kind_email(db, user, *, kind: str, template_key: str, subject: str, title: str, preheader: str, body_html: str, cta_label: str, link: str, variables: dict) -> None:
+    if not wants_email(user, kind):
+        return
+    url = email_cta_url(getattr(user, "role", None), link)
+    rendered = render_template(db, template_key, variables, url)
+    if rendered:
+        send_email(user.email, rendered[0], rendered[1], template_key=template_key)
+    else:
+        send_email(user.email, subject, branded_email(title, preheader, body_html, cta_label, url), template_key=template_key)
+
+
+def _first_name(user) -> str:
+    raw = (getattr(user, "display_name", None) or getattr(user, "email", None) or "").split("@")[0]
+    return raw.split(" ")[0] or "there"
+
+
+def _actor_user_id(db: Session, actor_name: str):
+    if not actor_name:
+        return None
+    from sqlalchemy import or_
+    rows = db.query(User).filter(or_(User.display_name == actor_name, User.email == actor_name)).all()
+    if len(rows) == 1:
+        return rows[0].id
+    return None
+
+
+def _latest_task_comment(db: Session, task: Task, body: str, comment_id=None):
+    from app.models import TaskComment
+    if comment_id:
+        row = db.query(TaskComment).filter(TaskComment.id == comment_id, TaskComment.task_id == task.id).first()
+        if row:
+            return row
+    return (
+        db.query(TaskComment)
+        .filter(TaskComment.task_id == task.id, TaskComment.body == body)
+        .order_by(TaskComment.created_at.desc())
+        .first()
+    )
+
+
+def _task_participants(db: Session, task: Task, *, exclude_comment_id=None) -> list[User]:
+    """Assignee, creator, and people following the thread (earlier comments and mentions)."""
+    import uuid as _uuid
+    from app.models import TaskComment
+
+    ids: list = []
+    assignee_uid = va_user_id(db, task.assignee_va_id)
+    if assignee_uid:
+        ids.append(assignee_uid)
+    if task.created_by:
+        ids.append(task.created_by)
+    comments = db.query(TaskComment).filter(TaskComment.task_id == task.id).all()
+    for comment in comments:
+        if exclude_comment_id and comment.id == exclude_comment_id:
+            continue
+        if comment.author_user_id:
+            ids.append(comment.author_user_id)
+        for mention in comment.mentions or []:
+            if not isinstance(mention, dict) or not mention.get("user_id"):
+                continue
+            try:
+                ids.append(_uuid.UUID(str(mention.get("user_id"))))
+            except Exception:
+                continue
+    ordered: list = []
+    for uid in ids:
+        if uid and uid not in ordered:
+            ordered.append(uid)
+    if not ordered:
+        return []
+    found = {u.id: u for u in db.query(User).filter(User.id.in_(ordered), User.is_active.is_(True)).all()}
+    return [found[uid] for uid in ordered if uid in found]
+
+
+def _task_email_vars(task: Task, extra: dict | None = None) -> dict:
+    data = {
+        "task_title": task.title,
+        "client": task.client.name if task.client else "",
+        "project": task.project.name if task.project else "",
+        "status": task.status.value.replace("_", " ").title() if task.status else "",
+        "priority": task.priority.value.title() if task.priority else "",
+        "due": str(task.due_date or "no date"),
+    }
+    if extra:
+        data.update(extra)
+    return data
+
+
 def notify_task_assigned(db: Session, task: Task, first_in_project: bool = False) -> None:
     try:
-        contact = _va_contact(db, task.assignee_va_id)
-        if not contact:
-            return
-        email, name = contact
-        if first_in_project and task.project:
-            title = f"🌸 New project for you: {task.project.name}"
-            body = f"<p>Hi {_name(name)},</p><p>You've been assigned to a new project. Your first task is ready:</p>" + _task_rows(task)
-            subject = f"New project assigned: {task.project.name}"
-        else:
-            title = f"📌 New task: {task.title}"
-            body = f"<p>Hi {_name(name)},</p><p>A new task was assigned to you:</p>" + _task_rows(task)
-            subject = f"New task assigned: {task.title}"
-        rendered = render_template(db, "task_assigned", {"name": name, "task_title": task.title, "client": task.client.name if task.client else "", "project": task.project.name if task.project else "", "status": task.status.value.replace("_", " ").title(), "priority": task.priority.value.title(), "due": str(task.due_date or "no date")})
-        if rendered:
-            send_email(email, rendered[0], rendered[1], template_key="task_assigned")
-        else:
-            send_email(email, subject, branded_email(title, subject, body, "Open My Board", f"{settings.app_url}{BASE}"), template_key="task_assigned")
-        push(db, [va_user_id(db, task.assignee_va_id)], "task",
+        user_id = va_user_id(db, task.assignee_va_id)
+        user = db.query(User).filter(User.id == user_id).first() if user_id else None
+        link = task_deep_link(task.id)
+        if user:
+            name = _first_name(user)
+            if first_in_project and task.project:
+                title = f"🌸 New project for you: {task.project.name}"
+                subject = f"New project assigned: {task.project.name}"
+                intro = "You've been assigned to a new project. Your first task is ready."
+            else:
+                title = f"📌 New task: {task.title}"
+                subject = f"New task assigned: {task.title}"
+                intro = "A new task was assigned to you."
+            body = f"<p>Hi {_name(name)},</p><p>{_name(intro)}</p>" + _task_rows(task)
+            _send_kind_email(
+                db, user, kind="task_assigned", template_key="task_assigned",
+                subject=subject, title=title, preheader=intro, body_html=body,
+                cta_label="Open task", link=link,
+                variables=_task_email_vars(task, {"name": name}),
+            )
+        push(db, [user_id], "task",
              f"🌸 New project: {task.project.name}" if first_in_project and task.project else f"📌 New task assigned: {task.title}",
              f"{task.client.name if task.client else ''}{' · ' + task.project.name if task.project else ''} · due {task.due_date or 'no date'}",
-             task_deep_link(task.id))
+             link)
     except Exception:
         pass
 
 
 def notify_task_updated(db: Session, task: Task, change: str, actor_name: str = "") -> None:
+    """Email everyone on the task (assignee, creator, followers) when it is moved or updated."""
     try:
-        contact = _va_contact(db, task.assignee_va_id)
-        if not contact:
-            return
-        email, name = contact
+        link = task_deep_link(task.id)
+        actor_id = _actor_user_id(db, actor_name)
+        participants = [u for u in _task_participants(db, task) if u.id != actor_id]
         title = f"🔔 Task updated: {task.title}"
-        body = f"<p>Hi {_name(name)},</p><p>{_name(change)}</p>" + _task_rows(task, [("Updated by", actor_name)] if actor_name else None)
-        rendered = render_template(db, "task_updated", {"name": name, "task_title": task.title, "client": task.client.name if task.client else "", "project": task.project.name if task.project else "", "change": change, "actor": actor_name})
-        if rendered:
-            send_email(email, rendered[0], rendered[1], template_key="task_updated")
-        else:
-            send_email(email, f"Task updated: {task.title}", branded_email(title, change, body, "View Task", f"{settings.app_url}{BASE}"), template_key="task_updated")
-        push(db, [va_user_id(db, task.assignee_va_id)], "task", f"🔔 Task updated: {task.title}", change, task_deep_link(task.id))
+        for user in participants:
+            name = _first_name(user)
+            body = f"<p>Hi {_name(name)},</p><p>{_name(change)}</p>" + _task_rows(task, [("Updated by", actor_name)] if actor_name else None)
+            try:
+                _send_kind_email(
+                    db, user, kind="task_updated", template_key="task_updated",
+                    subject=f"Task updated: {task.title}", title=title, preheader=change, body_html=body,
+                    cta_label="View task", link=link,
+                    variables=_task_email_vars(task, {"name": name, "change": change, "actor": actor_name}),
+                )
+            except Exception:
+                continue
+        push_ids = [u.id for u in participants]
+        assignee_uid = va_user_id(db, task.assignee_va_id)
+        if assignee_uid and assignee_uid != actor_id:
+            push_ids.append(assignee_uid)
+        push(db, push_ids, "task", title, change, link, exclude_user_id=actor_id)
     except Exception:
         pass
 
 
-def notify_task_comment(db: Session, task: Task, comment_body: str, author_name: str, author_is_assignee: bool) -> None:
-    """Comment by admin → email the VA. Comment by the VA → email the admin."""
+def notify_task_comment(db: Session, task: Task, comment_body: str, author_name: str, author_is_assignee: bool = False, comment_id=None) -> None:
+    """Email people assigned to or following the task. Mention emails are separate."""
     try:
-        if author_is_assignee:
-            title = f"💬 {author_name} commented on: {task.title}"
-            body = f"<p><strong>{_name(author_name)}</strong> added an update:</p><blockquote style='margin:10px 0;padding:10px 14px;background:#fff7fa;border-left:3px solid #ec4899;border-radius:8px;'>{_name(comment_body)}</blockquote>" + _task_rows(task)
-            from app.services.email import _resend_config
-            rendered = render_template(db, "task_comment", {"name": "Admin", "task_title": task.title, "client": task.client.name if task.client else "", "author": author_name, "comment": comment_body})
-            if rendered:
-                send_email(_resend_config()[2], rendered[0], rendered[1], template_key="task_comment")
-            else:
-                send_email(_resend_config()[2], f"Task comment: {task.title}", branded_email(title, comment_body[:120], body, "Open Board", f"{settings.app_url}/admin/tasks"), template_key="task_comment")
-            push(db, admin_user_ids(db), "comment", f"💬 {author_name} commented on: {task.title}", comment_body[:200], task_deep_link(task.id))
-            return
-        contact = _va_contact(db, task.assignee_va_id)
-        if not contact:
-            return
-        email, name = contact
+        comment = _latest_task_comment(db, task, comment_body, comment_id)
+        cid = comment.id if comment else comment_id
+        author_id = comment.author_user_id if comment else None
+        link = task_deep_link(task.id, cid)
+        participants = [u for u in _task_participants(db, task, exclude_comment_id=cid) if u.id != author_id]
         title = f"💬 New comment on: {task.title}"
-        body = f"<p>Hi {_name(name)},</p><p><strong>{_name(author_name)}</strong> commented:</p><blockquote style='margin:10px 0;padding:10px 14px;background:#fff7fa;border-left:3px solid #ec4899;border-radius:8px;'>{_name(comment_body)}</blockquote>" + _task_rows(task)
-        rendered = render_template(db, "task_comment", {"name": name, "task_title": task.title, "client": task.client.name if task.client else "", "author": author_name, "comment": comment_body})
-        if rendered:
-            send_email(email, rendered[0], rendered[1], template_key="task_comment")
+        excerpt = (comment_body or "").strip()
+        quote = (
+            "<blockquote style='margin:10px 0;padding:10px 14px;background:#fff7fa;border-left:3px solid #ec4899;border-radius:8px;'>"
+            f"{_name(excerpt)}</blockquote>"
+        )
+        client = f" ({_name(task.client.name)})" if task.client else ""
+        for user in participants:
+            name = _first_name(user)
+            body = (
+                f"<p>Hi {_name(name)},</p>"
+                f"<p><strong>{_name(author_name)}</strong> commented on <strong>{_name(task.title)}</strong>{client}.</p>"
+                f"{quote}"
+            )
+            try:
+                _send_kind_email(
+                    db, user, kind="comment", template_key="task_comment",
+                    subject=f"New comment: {task.title}", title=title, preheader=excerpt[:120], body_html=body,
+                    cta_label="View comment", link=link,
+                    variables=_task_email_vars(task, {"name": name, "author": author_name, "comment": excerpt}),
+                )
+            except Exception:
+                continue
+        push_ids = [u.id for u in participants]
+        if author_is_assignee:
+            push_ids.extend(admin_user_ids(db))
         else:
-            send_email(email, f"New comment: {task.title}", branded_email(title, comment_body[:120], body, "Reply on My Board", f"{settings.app_url}{BASE}"), template_key="task_comment")
-        push(db, [va_user_id(db, task.assignee_va_id)], "comment", f"💬 New comment on: {task.title}", f"{author_name}: {comment_body[:180]}", task_deep_link(task.id))
+            assignee_uid = va_user_id(db, task.assignee_va_id)
+            if assignee_uid:
+                push_ids.append(assignee_uid)
+        push(
+            db, push_ids, "comment",
+            f"💬 {author_name} commented on: {task.title}",
+            f"{author_name}: {excerpt[:180]}",
+            link,
+            exclude_user_id=author_id,
+        )
     except Exception:
         pass
 

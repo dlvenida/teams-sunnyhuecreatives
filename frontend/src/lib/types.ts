@@ -299,6 +299,7 @@ export interface TaskItem {
   project_color?: string | null
   assignee_va_id?: string | null
   assignee_name?: string | null
+  assignee_role?: string | null
   status: TaskStatus
   priority: TaskPriority
   start_date?: string | null

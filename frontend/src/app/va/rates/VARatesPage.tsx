@@ -1,12 +1,18 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, getAuthUser } from "@/lib/api"
 import type { Client } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/ui/badge"
 import { formatCurrency } from "@/lib/utils"
+
+interface Compensation {
+  compensation_mode: string
+  va_package_amount?: string | number | null
+  va_package_currency?: string | null
+}
 
 interface VARate {
   id: string
@@ -29,6 +35,11 @@ export function VARatesPage() {
 
   const { data: clients = [] } = useQuery({ queryKey: ["va-clients"], queryFn: () => apiFetch<Client[]>("/va/clients") })
   const { data: rates = [] } = useQuery({ queryKey: ["va-rates-mine"], queryFn: () => apiFetch<VARate[]>("/va-rates/mine") })
+  const { data: compensation, isLoading: compensationLoading, isError: compensationError } = useQuery({
+    queryKey: ["va-compensation-mine"],
+    queryFn: () => apiFetch<Compensation>("/va-rates/mine/compensation"),
+  })
+  const isProjectManager = getAuthUser()?.role === "auditor"
 
   const submit = useMutation({
     mutationFn: () =>
@@ -50,6 +61,35 @@ export function VARatesPage() {
         <h1 className="text-2xl font-extrabold tracking-tight">My Rates</h1>
         <p className="text-sm text-muted-foreground">One rate per client. You cannot have two active rates for the same client — a new submission replaces any pending request, and when approved it becomes your only active rate for that client.</p>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle>How you are paid</CardTitle></CardHeader>
+        <CardContent className="space-y-1 text-sm">
+          {compensationLoading && <p className="text-muted-foreground">Loading pay arrangement…</p>}
+          {compensationError && <p className="text-red-600">Could not load pay arrangement.</p>}
+          {compensation?.compensation_mode === "hourly" && (
+            <p>Hourly. Pay is hours × your approved rate. This is read-only — it is not chosen on Log Time.</p>
+          )}
+          {compensation?.compensation_mode === "per_client_package" && (
+            <p>Fixed package per client. An approved package rate is a flat amount for that client in the period, not hours × rate. You cannot change this arrangement here.</p>
+          )}
+          {compensation?.compensation_mode === "va_package" && (
+            <p>
+              Fixed package for all of your clients:{" "}
+              <strong>
+                {compensation.va_package_amount != null
+                  ? formatCurrency(compensation.va_package_amount, compensation.va_package_currency || "USD")
+                  : "not set"}
+              </strong>{" "}
+              once per period.
+              {isProjectManager
+                ? " You set this amount and currency on your Profile. It is not edited here."
+                : " Set by admin. You cannot change it here."}
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">Per-client rates below stay one approved rate per client.</p>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-2"><CardTitle>Submit / update a rate</CardTitle></CardHeader>

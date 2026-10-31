@@ -48,14 +48,14 @@ export function CreateReportModal({ open, onClose, presetClientId = "", presetCa
           <div className="py-4 text-center">
             <CheckCircle2 className="mx-auto h-10 w-10 text-green-500" />
             <h2 className="mt-2 text-base font-bold">Report sent</h2>
-            <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">Your report was sent to the <strong>Administrator and Auditor</strong>. They'll see it in Team Reports and get a notification. Track its status in My Reports.</p>
+            <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">Your report was sent to the <strong>Administrator and Project Manager</strong>. They'll see it in Team Reports and get a notification. Track its status in My Reports.</p>
             <Button variant="gold" className="mt-4" onClick={close}>Done</Button>
           </div>
         ) : (<>
           <div className="flex items-start justify-between gap-3">
             <div>
               <h2 className="flex items-center gap-2 text-base font-bold"><Flag className="h-4 w-4 text-primary" /> Create a Report</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">This report goes to the <strong>Administrator and the Auditor</strong>.</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">This report goes to the <strong>Administrator and the Project Manager</strong>.</p>
             </div>
             <button onClick={close} className="rounded-full p-1.5 hover:bg-muted"><X className="h-4 w-4" /></button>
           </div>
@@ -65,13 +65,13 @@ export function CreateReportModal({ open, onClose, presetClientId = "", presetCa
               <div><Label>Client (optional)</Label><Select value={clientId} onChange={(e) => setClientId(e.target.value)}><option value="">No client / general</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
             </div>
             <div><Label>Title *</Label><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short summary — e.g. Client hasn't replied in 3 days" /></div>
-            <div><Label>Details *</Label><Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} placeholder="What happened, what you need, and anything the Administrator / Auditor should check…" /></div>
+            <div><Label>Details *</Label><Textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} placeholder="What happened, what you need, and anything the Administrator or Project Manager should check…" /></div>
           </div>
           {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
           <div className="mt-5 flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={close}>Cancel</Button>
             <Button variant="gold" size="sm" disabled={title.trim().length < 3 || body.trim().length < 3 || create.isPending} onClick={() => create.mutate()}>
-              {create.isPending ? "Sending…" : "Send to Admin & Auditor"}
+              {create.isPending ? "Sending…" : "Send to Admin & Project Manager"}
             </Button>
           </div>
         </>)}

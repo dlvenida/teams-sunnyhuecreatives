@@ -67,6 +67,7 @@ class WorkLogStatus(str, enum.Enum):
 class TimesheetStatus(str, enum.Enum):
     submitted = "submitted"
     reviewed = "reviewed"
+    rejected = "rejected"
 
 
 class InvoiceStatus(str, enum.Enum):
@@ -143,6 +144,8 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Payroll "Paid to" — full legal name, separate from a nickname in display_name / VA.name.
+    legal_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     profile_photo_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -226,6 +229,10 @@ class VA(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), unique=True)
     name: Mapped[str] = mapped_column(String(255))
     currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency"))
+    # hourly | per_client_package | va_package — not chosen on the time log form.
+    compensation_mode: Mapped[str] = mapped_column(String(32), default="hourly", server_default="hourly")
+    va_package_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    va_package_currency: Mapped[str | None] = mapped_column(String(10), nullable=True, default="USD", server_default="USD")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -267,6 +274,7 @@ class Task(Base):
     sub_client_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("sub_clients.id", ondelete="SET NULL"), nullable=True)
     project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
     assignee_va_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="SET NULL"), nullable=True)
+    assignee_role: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     status: Mapped[TaskStatus] = mapped_column(Enum(TaskStatus, name="task_status"), default=TaskStatus.todo)
     priority: Mapped[TaskPriority] = mapped_column(Enum(TaskPriority, name="task_priority"), default=TaskPriority.medium)

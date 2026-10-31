@@ -212,19 +212,19 @@ export function UsersPage() {
           <h1 className="font-display text-xl font-bold">Users</h1>
           <p className="text-xs text-muted-foreground">
             {isAuditor
-              ? "View all team profiles — money, rates, and pay are hidden for auditors."
-              : "Administrator runs the app · Auditor monitors activity (no money) · Virtual Assistants do the work."}
+              ? "View all team profiles — money, rates, and pay are hidden for project managers."
+              : "Administrator runs the app · Project Manager monitors activity (no money) · Virtual Assistants do the work."}
           </p>
         </div>
         {isAdmin && (
           <Button variant="gold" size="sm" onClick={openCreate}>
-            <Plus className="h-3.5 w-3.5" /> New {roleTab === "va" ? "Virtual Assistant" : roleTab === "auditor" ? "Auditor" : "Administrator"}
+            <Plus className="h-3.5 w-3.5" /> New {roleTab === "va" ? "Virtual Assistant" : roleTab === "auditor" ? "Project Manager" : "Administrator"}
           </Button>
         )}
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {([["admin", "Administrator", appUsers.filter(u => u.role === "admin").length], ["auditor", "Auditor", appUsers.filter(u => u.role === "auditor").length], ["va", "Virtual Assistant", users.length]] as const).map(([id, label, count]) => (
+        {([["admin", "Administrator", appUsers.filter(u => u.role === "admin").length], ["auditor", "Project Manager", appUsers.filter(u => u.role === "auditor").length], ["va", "Virtual Assistant", users.length]] as const).map(([id, label, count]) => (
           <button key={id} onClick={() => setRoleTab(id)} className={cn("rounded-full border px-3.5 py-1.5 text-xs font-bold transition", roleTab === id ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-muted/60")}>
             {label} <span className={cn("ml-1 rounded-full px-1.5 text-[10px]", roleTab === id ? "bg-white/25" : "bg-muted")}>{count}</span>
           </button>
@@ -260,20 +260,20 @@ export function UsersPage() {
               <th className="p-3 font-medium">Name</th>
               <th className="p-3 font-medium">Email</th>
               <th className="p-3 font-medium">Role</th>
-              <th className="p-3 font-medium">{roleTab === "auditor" ? "Auditing" : "Access"}</th>
+              <th className="p-3 font-medium">{roleTab === "auditor" ? "Watching" : "Access"}</th>
               <th className="p-3 font-medium">Status</th>
               <th className="p-3 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {roleUsers.length === 0 ? (
-              <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No {roleTab === "auditor" ? "auditors" : "administrators"} found. Create one with the button above.</td></tr>
+              <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No {roleTab === "auditor" ? "project managers" : "administrators"} found. Create one with the button above.</td></tr>
             ) : roleUsers.map((u) => (
               <tr key={u.id} className="border-b last:border-0 hover:bg-muted/30">
                 <td className="p-3 font-semibold">{u.name}</td>
                 <td className="p-3 text-primary">{u.email}</td>
                 <td className="p-3"><span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold", u.role === "admin" ? "bg-primary/10 text-primary" : "bg-sky-100 text-sky-700")}>{roleLabel(u.role)}</span></td>
-                <td className="p-3 text-muted-foreground">{u.role === "auditor" ? `${u.auditing_count} VA(s) assigned in Analytics` : "Full access"}</td>
+                <td className="p-3 text-muted-foreground">{u.role === "auditor" ? `${u.auditing_count} VA(s) assigned` : "Full access"}</td>
                 <td className="p-3"><Badge variant={u.is_active ? "success" : "default"}>{u.is_active ? "Active" : "Archived"}</Badge></td>
                 <td className="p-3"><div className="flex justify-end gap-1">
                   <Button variant="ghost" size="sm" title="View profile, clients, tasks, projects, timeline, logs & history" onClick={() => setViewingUserId(u.id)}><Eye className="h-3.5 w-3.5" /></Button>
@@ -288,7 +288,7 @@ export function UsersPage() {
             ))}
           </tbody>
         </table>
-        <p className="border-t bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">{roleTab === "auditor" ? "Auditors see everything admins see except money: profiles, tasks, projects, logs, payroll hours, reports (hours only), analytics, and client VA roles — never rates, pay, invoices, or billing amounts." : "Administrators have full access to every page, including payroll money, invoices, rates, and settings."}</p>
+        <p className="border-t bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">{roleTab === "auditor" ? "Project Managers see team profiles, tasks, projects, time logs, and client roles. Rates, pay, invoices, payroll, and analytics stay hidden." : "Administrators have full access to every page, including payroll money, invoices, rates, and settings."}</p>
       </div>
       ) : (
       <div className="overflow-x-auto rounded-xl border bg-card">
@@ -415,7 +415,7 @@ export function UsersPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-lg animate-fade-in">
             <h2 className="text-sm font-semibold">
-              {modal === "create" ? `Create ${roleTab === "va" ? "Virtual Assistant" : roleTab === "auditor" ? "Auditor" : "Administrator"}` : "Edit Profile"}
+              {modal === "create" ? `Create ${roleTab === "va" ? "Virtual Assistant" : roleTab === "auditor" ? "Project Manager" : "Administrator"}` : "Edit Profile"}
             </h2>
 
             <div className="mt-4 space-y-3">

@@ -50,6 +50,14 @@ def _is_avif(data: bytes) -> bool:
     return data[4:8] == b"ftyp" and (b"avif" in data[8:16] or b"avis" in data[8:16])
 
 
+def _va_for(db: Session, user: User, va_id: UUID | None) -> VA | None:
+    if va_id:
+        found = db.query(VA).filter(VA.id == va_id).first()
+        if found:
+            return found
+    return db.query(VA).filter(VA.user_id == user.id).first()
+
+
 def _display_name(user: User, va: VA | None) -> str:
     if va:
         return va.name
@@ -87,6 +95,10 @@ def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
         date_of_birth=user.date_of_birth, linkedin_url=user.linkedin_url, portfolio_url=user.portfolio_url,
         status_message=user.status_message, created_at=user.created_at,
         notification_preferences=_prefs(user),
+        legal_name=user.legal_name,
+        compensation_mode=va.compensation_mode if va else None,
+        va_package_amount=va.va_package_amount if va else None,
+        va_package_currency=(va.va_package_currency or "USD") if va else None,
     )
 
 
@@ -105,6 +117,17 @@ def _prefs(user: User) -> NotificationPreferences:
             for k in merged["popup_types"]:
                 if k in raw["popup_types"]:
                     merged["popup_types"][k] = bool(raw["popup_types"][k])
+        if isinstance(raw.get("delivery"), dict):
+            merged["delivery"] = {
+                str(k): v for k, v in raw["delivery"].items()
+                if v in ("both", "popup", "sound", "bell")
+            }
+        if "email_enabled" in raw:
+            merged["email_enabled"] = bool(raw["email_enabled"])
+        if isinstance(raw.get("email_types"), dict):
+            for k in merged["email_types"]:
+                if k in raw["email_types"]:
+                    merged["email_types"][k] = bool(raw["email_types"][k])
     return NotificationPreferences(**merged)
 
 
@@ -113,9 +136,7 @@ def get_my_profile(
     current: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    va = None
-    if current.va_id:
-        va = db.query(VA).filter(VA.id == current.va_id).first()
+    va = _va_for(db, current.user, current.va_id)
     return _serialize_profile(current.user, va)
 
 
@@ -126,9 +147,7 @@ def update_my_profile(
     db: Annotated[Session, Depends(get_db)],
 ):
     user = current.user
-    va = None
-    if current.va_id:
-        va = db.query(VA).filter(VA.id == current.va_id).first()
+    va = _va_for(db, user, current.va_id)
 
     data = body.model_dump(exclude_unset=True)
     new_username = data.pop("username", None)
@@ -152,7 +171,39 @@ def update_my_profile(
 
     prefs = data.pop("notification_preferences", None)
     if prefs is not None:
-        user.notification_preferences = prefs if isinstance(prefs, dict) else dict(prefs)
+        incoming = prefs if isinstance(prefs, dict) else dict(prefs)
+        existing = user.notification_preferences if isinstance(user.notification_preferences, dict) else {}
+        merged_prefs = {**existing, **incoming}
+        for nested in ("popup_types", "delivery", "email_types"):
+            if isinstance(existing.get(nested), dict) or isinstance(incoming.get(nested), dict):
+                merged_prefs[nested] = {**(existing.get(nested) or {}), **(incoming.get(nested) or {})}
+        user.notification_preferences = merged_prefs
+
+    pkg_amount = data.pop("va_package_amount", None)
+    pkg_currency = data.pop("va_package_currency", None)
+    if "legal_name" in data and isinstance(data["legal_name"], str):
+        data["legal_name"] = data["legal_name"].strip() or None
+    if pkg_amount is not None or pkg_currency is not None:
+        if user.role != UserRole.auditor:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the Project Manager can set her monthly package on Profile",
+            )
+        if va is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No worker profile found for this account")
+        if pkg_amount is not None:
+            if pkg_amount <= 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Monthly package amount must be greater than zero")
+            va.va_package_amount = pkg_amount
+            va.compensation_mode = "va_package"
+        if pkg_currency is not None:
+            cur = pkg_currency.strip().upper()
+            if cur not in ("PHP", "USD"):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Currency must be PHP or USD")
+            if pkg_amount is None and va.va_package_amount is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Set a monthly amount with the currency")
+            va.va_package_currency = cur
+            va.compensation_mode = "va_package"
 
     for key, value in data.items():
         setattr(user, key, value)
@@ -298,5 +349,5 @@ def confirm_email_change(
     db.commit()
     db.refresh(user)
 
-    va = db.query(VA).filter(VA.user_id == user.id).first() if user.role == UserRole.va else None
+    va = _va_for(db, user, None)
     return _serialize_profile(user, va)

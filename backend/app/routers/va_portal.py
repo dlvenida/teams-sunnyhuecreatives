@@ -25,7 +25,7 @@ from app.services.billing import get_week_period
 from app.services.calculations import calculate_hours
 from app.services.email import send_timesheet_submitted_notification, send_va_submission_notification
 from app.services.notifications import admin_and_auditor_user_ids, push
-from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
+from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay, whole_va_package_amount
 from app.services.work_log_overlap import assert_no_time_overlap
 
 router = APIRouter(prefix="/va", tags=["va"])
@@ -145,27 +145,9 @@ def set_my_client_role(
     current: Annotated[CurrentUser, Depends(require_va)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """VA sets or updates their own role for a specific client."""
-    from app.models import Client, ClientVARole
-
-    if not db.query(Client).filter(Client.id == client_id).first():
-        raise HTTPException(status_code=404, detail="Client not found")
-    role = str(body.get("role") or "").strip() or "General VA"
-    if len(role) > 255:
-        raise HTTPException(status_code=400, detail="Role is too long")
-    row = (
-        db.query(ClientVARole)
-        .filter(ClientVARole.client_id == client_id, ClientVARole.va_id == current.va_id)
-        .first()
-    )
-    if row:
-        row.role = role
-    else:
-        row = ClientVARole(client_id=client_id, va_id=current.va_id, role=role)
-        db.add(row)
-    db.commit()
-    db.refresh(row)
-    return {"client_id": str(client_id), "role": row.role, "has_explicit_role": True}
+    """VAs can view their role per client. Only admin and Project Manager can change it."""
+    _ = (client_id, body, current, db)
+    raise HTTPException(status_code=403, detail="Only an admin or Project Manager can set a role for a client")
 
 
 @router.get("/sub-clients", response_model=list[SubClientResponse])
@@ -271,6 +253,21 @@ def delete_my_work_log(log_id: UUID, current: Annotated[CurrentUser, Depends(req
     db.commit()
 
 
+def _latest_usd_php_rate(db: Session, va_id) -> str | None:
+    """Latest PayrollRun rate for this VA, otherwise any recent positive rate."""
+
+    def _pick(only_va: bool):
+        q = db.query(PayrollRun).filter(PayrollRun.usd_php_rate.isnot(None), PayrollRun.usd_php_rate > 0)
+        if only_va:
+            q = q.filter(PayrollRun.va_id == va_id)
+        return q.order_by(PayrollRun.paid_at.desc()).first()
+
+    run = _pick(True) or _pick(False)
+    if not run or not run.usd_php_rate:
+        return None
+    return str(run.usd_php_rate)
+
+
 @router.get("/earnings")
 def my_earnings(
     current: Annotated[CurrentUser, Depends(require_va)],
@@ -302,16 +299,37 @@ def my_earnings(
         .filter(VA.id == current.va_id)
         .first()
     )
-    currency = va.currency.value if va else "USD"
+    raw_currency = getattr(va, "currency", None) if va else None
+    currency = getattr(raw_currency, "value", None) or (str(raw_currency) if raw_currency else "USD")
+    user = va.user if va else None
+    legal = (user.legal_name or "").strip() if user and user.legal_name else ""
     full_name = (
-        (va.user.display_name.strip() if va and va.user and va.user.display_name else "")
+        (user.display_name.strip() if user and user.display_name else "")
         or (va.name if va else None)
     )
+    whole = whole_va_package_amount(va) if va else None
+    if whole:
+        currency = whole[1]
 
-    def period_stats(start: date | None, end: date | None):
+    def period_stats(start: date | None, end: date | None, *, package: bool = False):
         subset = [l for l in logs if (start is None or l.work_date >= start) and (end is None or l.work_date <= end)]
         hours = sum((l.hours for l in subset), Decimal("0"))
-        # Hourly pay from logs + package flats once per client in range
+        if whole and package:
+            # The flat amount is owed once for the selected pay period or the current month,
+            # not again for this week and not stacked across all time.
+            return {
+                "hours": str(hours),
+                "earned": str(whole[0]),
+                "entries": len(subset),
+                "currency": whole[1],
+            }
+        if whole:
+            return {
+                "hours": str(hours),
+                "earned": "0",
+                "entries": len(subset),
+                "currency": whole[1],
+            }
         hourly_pay = sum((l.va_pay for l in subset), Decimal("0"))
         client_ids = {l.client_id for l in subset}
         flats = package_flats_for_period(db, current.va_id, client_ids)
@@ -335,14 +353,21 @@ def my_earnings(
         )
         row["hours"] += l.hours
         row["earned"] += l.va_pay
-    for cid, flat in package_flats_for_period(db, current.va_id, {UUID(k) for k in by_client_map}).items():
-        key = str(cid)
-        if key in by_client_map:
-            by_client_map[key]["earned"] = flat
-            by_client_map[key]["pay_type"] = "package"
-            rate = get_approved_rate(db, current.va_id, cid)
-            if rate:
-                by_client_map[key]["currency"] = rate.currency.value
+    if whole:
+        # The package is one amount on the selected range / current month, not per client.
+        for row in by_client_map.values():
+            row["earned"] = Decimal("0")
+            row["pay_type"] = "va_package"
+            row["currency"] = whole[1]
+    else:
+        for cid, flat in package_flats_for_period(db, current.va_id, {UUID(k) for k in by_client_map}).items():
+            key = str(cid)
+            if key in by_client_map:
+                by_client_map[key]["earned"] = flat
+                by_client_map[key]["pay_type"] = "package"
+                rate = get_approved_rate(db, current.va_id, cid)
+                if rate:
+                    by_client_map[key]["currency"] = rate.currency.value
 
     by_client = [
         {**r, "hours": str(r["hours"]), "earned": str(r["earned"])}
@@ -371,11 +396,16 @@ def my_earnings(
     return {
         "currency": currency,
         "va_name": full_name,
+        "legal_name": legal or None,
+        "compensation_mode": (va.compensation_mode if va else None) or "hourly",
+        "va_package_amount": str(whole[0]) if whole else None,
+        "va_package_currency": whole[1] if whole else None,
+        "usd_php_rate": _latest_usd_php_rate(db, current.va_id),
         "company_name": company_name,
         "this_week": period_stats(week_start, week_end),
-        "this_month": period_stats(month_start, month_end),
+        "this_month": period_stats(month_start, month_end, package=True),
         "all_time": period_stats(None, None),
-        "range": period_stats(range_start, range_end) if (date_from or date_to) else None,
+        "range": period_stats(range_start, range_end, package=True) if (date_from or date_to) else None,
         "by_client": by_client,
         "entries": entries,
         "date_from": str(date_from) if date_from else None,

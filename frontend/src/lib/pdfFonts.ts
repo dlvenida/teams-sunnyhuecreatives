@@ -9,7 +9,14 @@ export function ensurePdfFonts() {
     typeof window !== "undefined"
       ? `${window.location.origin}/fonts/NotoSans-Regular.ttf`
       : "/fonts/NotoSans-Regular.ttf"
-  Font.register({ family: "NotoSans", src })
+  // Same file for bold so react-pdf does not fall back to Helvetica (which draws ₱ as ±).
+  Font.register({
+    family: "NotoSans",
+    fonts: [
+      { src, fontWeight: 400 },
+      { src, fontWeight: 700 },
+    ],
+  })
   registered = true
 }
 

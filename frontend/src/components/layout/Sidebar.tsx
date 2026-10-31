@@ -57,7 +57,7 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
         </div>
         <div className="min-w-0 flex-1">
           <p className="gradient-text truncate text-[15px] font-extrabold tracking-tight">Teams.SHC</p>
-          <p className="text-[10px] capitalize text-muted-foreground">{user?.role === "admin" ? "Admin workspace" : user?.role === "auditor" ? "Auditor workspace" : "VA workspace"}</p>
+          <p className="text-[10px] capitalize text-muted-foreground">{user?.role === "admin" ? "Admin workspace" : user?.role === "auditor" ? "Project Manager workspace" : "VA workspace"}</p>
         </div>
         {mobileOpen && <button className="lg:hidden" onClick={onClose} aria-label="Close menu"><X className="h-5 w-5" /></button>}
       </div>

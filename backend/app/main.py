@@ -31,13 +31,94 @@ from app.routers import (
 from app.services.seed import seed_database
 
 
+_reminder_thread_started = False
+
+
+def _session_permanently_closed(db) -> bool:
+    state = getattr(db, "_close_state", None)
+    return getattr(state, "name", None) == "CLOSED"
+
+
+def _safe_rollback(db) -> None:
+    if db is None or _session_permanently_closed(db):
+        return
+    try:
+        db.rollback()
+    except Exception:
+        pass
+
+
+def _safe_close(db) -> None:
+    if db is None:
+        return
+    try:
+        db.close()
+    except Exception:
+        pass
+
+
+def _safe_commit(db) -> None:
+    """Commit only while the session can still take a transaction. Never commit after a permanent close."""
+    if db is None or _session_permanently_closed(db):
+        return
+    try:
+        db.commit()
+    except Exception:
+        _safe_rollback(db)
+
+
+def _run_in_session(fn) -> None:
+    db = None
+    try:
+        db = SessionLocal()
+        fn(db)
+        _safe_commit(db)
+    except Exception:
+        _safe_rollback(db)
+    finally:
+        _safe_close(db)
+
+
+def _scheduled_reminders() -> None:
+    """Hourly timesheet emails, without waiting for someone to open the dashboard.
+
+    Imports stay inside the loop so a bad import cannot kill the process at startup.
+    Each job gets its own session. Mail is sent only after that job commits; a later
+    failure rolls back its own session and does not replay the previous email.
+    """
+    import time
+
+    time.sleep(15)
+    while True:
+        try:
+            from app.services.timesheet_reminders import run_timesheet_reminders
+
+            _run_in_session(run_timesheet_reminders)
+        except Exception:
+            pass
+        try:
+            from app.services.task_recurrence import process_due_repeating
+
+            _run_in_session(process_due_repeating)
+        except Exception:
+            pass
+        time.sleep(60 * 60)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    import threading
+
+    global _reminder_thread_started
     db = SessionLocal()
     try:
         seed_database(db)
     finally:
         db.close()
+    # Start only when the app is actually running — not when this module is imported.
+    if not _reminder_thread_started:
+        _reminder_thread_started = True
+        threading.Thread(target=_scheduled_reminders, name="shc-reminders", daemon=True).start()
     yield
 
 

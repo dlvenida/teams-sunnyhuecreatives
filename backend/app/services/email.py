@@ -70,7 +70,12 @@ def detail_rows(rows: list[tuple[str, str]]) -> str:
 
 
 def _resend_config() -> tuple[str, str, str]:
-    """Resend config from Settings (DB) first, env second. Returns (api_key, from_email, admin_email)."""
+    """Resend config from Settings (DB) first, env second. Returns (api_key, from_email, admin_email).
+
+    The from address stays the configured resend_from_email. The code default is
+    onboarding@resend.dev — Resend's sandbox sender. Do not replace that fallback
+    with a Sunny Hue address; an unverified domain is rejected and the send fails.
+    """
     api_key, from_email, admin_email = settings.resend_api_key, settings.resend_from_email, settings.admin_notify_email
     try:
         from app.database import SessionLocal
@@ -118,8 +123,51 @@ def send_email(to_email: str, subject: str, html_body: str, template_key: str | 
         return False
 
 
-def render_template(db, key: str, variables: dict) -> tuple[str, str] | None:
-    """Render an active DB email template with {{variables}}. Returns (subject, full_html) or None."""
+def email_cta_url(role, link: str | None) -> str | None:
+    """Absolute button URL for a board deep link.
+
+    VAs go to /va/tasks or /va/projects. Admin and auditor go to /admin/....
+    A bare /tasks or /projects path is never returned.
+    """
+    if not link:
+        return None
+    raw = str(link).strip()
+    base = (settings.app_url or "").rstrip("/")
+    if raw.startswith("http://") or raw.startswith("https://"):
+        if base and raw.startswith(base):
+            raw = raw[len(base):] or "/"
+        else:
+            return raw
+    role_val = role.value if hasattr(role, "value") else str(role or "")
+    prefix = "/va" if role_val == "va" else "/admin"
+    path = raw if raw.startswith("/") else f"/{raw}"
+
+    def _matches(candidate: str) -> bool:
+        return path == candidate or path.startswith(candidate + "?") or path.startswith(candidate + "/") or path.startswith(candidate + "#")
+
+    for board in ("/tasks", "/projects"):
+        if _matches(board):
+            path = f"{prefix}{path}"
+            break
+        rewritten = False
+        for old in ("/va", "/admin"):
+            candidate = f"{old}{board}"
+            if _matches(candidate):
+                path = f"{prefix}{path[len(old):]}"
+                rewritten = True
+                break
+        if rewritten:
+            break
+    return f"{base}{path}"
+
+
+def render_template(db, key: str, variables: dict, cta_url: str | None = None) -> tuple[str, str] | None:
+    """Render an active DB email template with {{variables}}. Returns (subject, full_html) or None.
+
+    Pass cta_url to put a role-specific deep link on the button (task id, and comment id
+    when the event is a comment or mention). Stored template URLs are used only when
+    the caller does not supply one.
+    """
     try:
         from app.models import EmailTemplate
         t = db.query(EmailTemplate).filter(EmailTemplate.key == key, EmailTemplate.is_active.is_(True)).first()
@@ -133,8 +181,9 @@ def render_template(db, key: str, variables: dict) -> tuple[str, str] | None:
             return out
 
         subject = fill(t.subject, escape=False)
-        cta_url = fill(t.cta_url) if t.cta_url else None
-        return subject, branded_email(subject, subject, fill(t.body_html), t.cta_label, cta_url)
+        stored = fill(t.cta_url) if t.cta_url else None
+        button = cta_url or stored
+        return subject, branded_email(subject, subject, fill(t.body_html), t.cta_label, button)
     except Exception:
         return None
 
@@ -174,7 +223,11 @@ def send_timesheet_submitted_notification(
     hours: str,
     entry_count: int,
 ) -> bool:
-    """Email admins when a VA officially submits a timesheet for payroll review."""
+    """Email admins and Project Managers when a VA submits a timesheet for review.
+
+    Recipient addresses are copied out and the read session is closed before any send,
+    so mail is not sent inside a transaction that can still roll back.
+    """
     from app.models import User, UserRole
     from app.database import SessionLocal
 
@@ -182,7 +235,7 @@ def send_timesheet_submitted_notification(
         f"Timesheet waiting for review — {va_name}",
         f"{va_name} submitted {hours} hrs for {period_start} – {period_end}",
         (
-            f"<p><strong>{va_name}</strong> submitted their timesheet and it’s waiting for your approval.</p>"
+            f"<p><strong>{_esc(va_name)}</strong> submitted their timesheet and it’s waiting for your approval.</p>"
             + detail_rows([
                 ("VA", va_name),
                 ("Period", f"{period_start} – {period_end}"),
@@ -195,19 +248,29 @@ def send_timesheet_submitted_notification(
         f"{settings.app_url}/admin/payroll",
     )
     subject = f"📋 Timesheet submitted by {va_name} — awaiting approval"
-    # Prefer notifying every active admin; fall back to Resend “from/to” inbox.
-    sent_any = False
+    recipients: list[str] = []
+    db = None
     try:
         db = SessionLocal()
-        try:
-            admins = db.query(User).filter(User.role == UserRole.admin, User.is_active.is_(True)).all()
-            for admin in admins:
-                if admin.email and send_email(admin.email, subject, html_body, template_key="timesheet_submitted"):
-                    sent_any = True
-        finally:
-            db.close()
+        rows = db.query(User).filter(
+            User.role.in_([UserRole.admin, UserRole.auditor]),
+            User.is_active.is_(True),
+        ).all()
+        recipients = [row.email for row in rows if row.email]
     except Exception:
-        pass
+        recipients = []
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+    sent_any = False
+    for email in recipients:
+        if send_email(email, subject, html_body, template_key="timesheet_submitted"):
+            sent_any = True
     if not sent_any:
-        return send_email(_resend_config()[2], subject, html_body, template_key="timesheet_submitted")
-    return True
+        fallback = _resend_config()[2]
+        if fallback:
+            return send_email(fallback, subject, html_body, template_key="timesheet_submitted")
+    return sent_any

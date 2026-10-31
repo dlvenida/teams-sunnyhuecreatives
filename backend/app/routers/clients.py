@@ -11,9 +11,12 @@ from app.models import (
     Client,
     ClientApprovalStatus,
     ClientPackage,
+    ClientVARole,
     Currency,
     SubClient,
+    User,
     UserRole,
+    VA,
     WorkLog,
     Invoice,
 )
@@ -107,6 +110,22 @@ def list_clients(
     return [_client_response(c, redact) for c in q.order_by(Client.name).all()]
 
 
+def _assign_client_to_all_vas(db: Session, client: Client) -> None:
+    """Give every active VA a role row on this client so the whole team is assigned."""
+    vas = (
+        db.query(VA)
+        .join(User, VA.user_id == User.id)
+        .filter(VA.is_active.is_(True), User.is_active.is_(True), User.role == UserRole.va)
+        .all()
+    )
+    for va in vas:
+        exists = db.query(ClientVARole).filter(
+            ClientVARole.client_id == client.id, ClientVARole.va_id == va.id
+        ).first()
+        if not exists:
+            db.add(ClientVARole(client_id=client.id, va_id=va.id, role="General VA"))
+
+
 @router.post("", response_model=ClientResponse, status_code=status.HTTP_201_CREATED)
 def create_client(
     body: ClientCreate,
@@ -116,6 +135,7 @@ def create_client(
     if db.query(Client).filter(Client.name == body.name).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Client already exists")
     data = body.model_dump()
+    assign_all = bool(data.pop("assign_all_vas", False))
     included = data.pop("included_hours", None)
     overage = data.pop("overage_rate", None)
     is_auditor = current.role == UserRole.auditor
@@ -131,6 +151,8 @@ def create_client(
         )
         db.add(client)
         db.flush()
+        if assign_all:
+            _assign_client_to_all_vas(db, client)
         db.commit()
         db.refresh(client)
         push(
@@ -138,8 +160,8 @@ def create_client(
             admin_user_ids(db),
             "system",
             f"New client proposal: {client.name}",
-            f"{current.user.display_name or current.user.email} requested a new client. Review, set the rate, and approve.",
-            "/admin/clients",
+            f"{current.user.display_name or current.user.email} requested a new client. Review, assign VAs, set each VA’s rate, and approve.",
+            f"/admin/clients?proposal={client.id}",
             exclude_user_id=current.user.id,
         )
         client = (
@@ -153,6 +175,8 @@ def create_client(
     client = Client(**data, approval_status=ClientApprovalStatus.approved, is_active=True)
     db.add(client)
     db.flush()
+    if assign_all:
+        _assign_client_to_all_vas(db, client)
     _ensure_default_package(db, client, included=included, overage=overage)
     db.commit()
     db.refresh(client)
@@ -191,7 +215,7 @@ def approve_client(
             [client.proposed_by],
             "system",
             f"Client approved: {client.name}",
-            "The admin reviewed your client proposal, set the rate, and approved it. It’s now live.",
+            "The admin approved your client proposal. It’s now live.",
             "/admin/clients",
         )
     client = (
@@ -329,10 +353,29 @@ def client_detail(
         db.query(VA).filter(VA.id.in_([UUID(x) for x in team_va_ids])).all()
         if team_va_ids else []
     )
+    rate_by_va: dict = {}
+    if not redact and team_va_ids:
+        from app.models import RateStatus, VARate
+
+        approved_rates = (
+            db.query(VARate)
+            .filter(
+                VARate.client_id == client_id,
+                VARate.status == RateStatus.approved,
+                VARate.va_id.in_([UUID(x) for x in team_va_ids]),
+            )
+            .order_by(VARate.reviewed_at.desc().nullslast(), VARate.created_at.desc())
+            .all()
+        )
+        for rate in approved_rates:
+            key = str(rate.va_id)
+            if key not in rate_by_va:
+                rate_by_va[key] = rate
+
     team = []
     for va in sorted(team_vas, key=lambda v: v.name.lower()):
         r = role_by_va.get(str(va.id))
-        team.append({
+        entry = {
             "va_id": str(va.id),
             "va_name": va.name,
             "role": r.role if r else "",
@@ -340,7 +383,21 @@ def client_detail(
             "open_tasks": len([t for t in open_tasks if t.assignee_va_id == va.id]),
             "hours": str(hours([l for l in billable if l.va_id == va.id])),
             "is_active": bool(va.is_active),
-        })
+        }
+        # Money stays off the Project Manager payload. Admin rates come from VARate.
+        if not redact:
+            cur = va.currency.value if hasattr(va.currency, "value") else str(va.currency or "")
+            rate = rate_by_va.get(str(va.id))
+            entry["va_currency"] = cur or None
+            if rate is not None:
+                entry["rate_amount"] = str(rate.amount)
+                entry["rate_pay_type"] = rate.pay_type.value if hasattr(rate.pay_type, "value") else str(rate.pay_type)
+                entry["rate_currency"] = rate.currency.value if hasattr(rate.currency, "value") else str(rate.currency)
+            else:
+                entry["rate_amount"] = None
+                entry["rate_pay_type"] = None
+                entry["rate_currency"] = None
+        team.append(entry)
 
     sub_rows = []
     for s in client.sub_clients:
@@ -449,17 +506,13 @@ def upsert_client_va_role(
     current: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    """Set or update a VA's role for this client (per-client, not global).
-
-    Admin and auditor can set any VA's role. A VA may only set their own role.
-    """
+    """Set or update a VA's role for this client. Admin and Project Manager only."""
     from app.models import ClientVARole, VA
 
     if current.role == UserRole.va:
-        if not current.va_id or current.va_id != va_id:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="VAs can only set their own client role")
-    elif current.role not in (UserRole.admin, UserRole.auditor):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Auditor access required")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only an admin or Project Manager can set a role for a client")
+    if current.role not in (UserRole.admin, UserRole.auditor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Project Manager access required")
 
     if not db.query(Client).filter(Client.id == client_id).first():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")

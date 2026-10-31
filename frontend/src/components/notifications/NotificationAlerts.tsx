@@ -4,7 +4,7 @@ import { Link } from "react-router-dom"
 import { X } from "lucide-react"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import type { NotificationList } from "@/lib/types"
-import { DEFAULT_NOTIFICATION_PREFS, type NotificationPreferences, type UserProfile } from "@/lib/profile"
+import { DEFAULT_NOTIFICATION_PREFS, type NotificationDelivery, type NotificationPreferences, type UserProfile } from "@/lib/profile"
 import { playNotificationSound } from "@/lib/notificationSound"
 import { resolveNotificationLink } from "@/lib/notificationLink"
 import { TYPE_META } from "@/components/layout/NotificationsPanel"
@@ -26,7 +26,21 @@ function mergePrefs(raw?: NotificationPreferences | null): NotificationPreferenc
       ...DEFAULT_NOTIFICATION_PREFS.popup_types,
       ...(raw?.popup_types || {}),
     },
+    delivery: {
+      ...(DEFAULT_NOTIFICATION_PREFS.delivery || {}),
+      ...(raw?.delivery || {}),
+    },
   }
+}
+
+function deliveryFor(type: string, prefs: NotificationPreferences): NotificationDelivery {
+  const chosen = prefs.delivery?.[type]
+  if (chosen === "both" || chosen === "popup" || chosen === "sound" || chosen === "bell") return chosen
+  if (prefs.popup_types[type] === false) return "bell"
+  if (prefs.popup_enabled && prefs.sound_enabled) return "both"
+  if (prefs.popup_enabled) return "popup"
+  if (prefs.sound_enabled) return "sound"
+  return "bell"
 }
 
 /**
@@ -68,16 +82,16 @@ export function NotificationAlerts() {
     fresh.forEach((n) => seenIds.current.add(n.id))
 
     let playedSound = false
-    for (const n of fresh.slice(0, 4).reverse()) {
-      const typeOk = prefs.popup_types[n.type] !== false
-      if (prefs.popup_enabled && typeOk) {
+    for (const n of fresh.slice(0, 3).reverse()) {
+      const mode = deliveryFor(n.type, prefs)
+      if (mode === "both" || mode === "popup") {
         setToasts((prev) => {
           if (prev.some((t) => t.id === n.id)) return prev
-          return [...prev, { id: n.id, type: n.type, title: n.title, body: n.body, link: n.link }].slice(-5)
+          return [...prev, { id: n.id, type: n.type, title: n.title, body: n.body, link: n.link }].slice(-3)
         })
       }
-      if (prefs.sound_enabled && typeOk && !playedSound) {
-        playNotificationSound(prefs.sound_id)
+      if ((mode === "both" || mode === "sound") && prefs.sound_enabled && !playedSound) {
+        playNotificationSound(prefs.sound_id || "loud")
         playedSound = true
       }
     }
@@ -87,14 +101,15 @@ export function NotificationAlerts() {
     if (!toasts.length) return
     const id = window.setTimeout(() => {
       setToasts((prev) => prev.slice(1))
-    }, 7000)
+    }, 12000)
     return () => clearTimeout(id)
   }, [toasts])
 
   if (!user || !toasts.length) return null
 
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[80] flex w-[min(92vw,360px)] flex-col gap-2">
+    <div className="pointer-events-none fixed inset-x-0 top-6 z-[80] flex justify-center px-4">
+      <div className="flex w-full max-w-xl flex-col gap-3">
       {toasts.map((t) => {
         const meta = TYPE_META[t.type] || TYPE_META.system
         const Icon = meta.icon
@@ -103,40 +118,45 @@ export function NotificationAlerts() {
           <div
             key={t.id}
             className={cn(
-              "pointer-events-auto animate-fade-in rounded-2xl border bg-card/95 p-3 shadow-xl backdrop-blur",
-              "ring-1 ring-black/5",
+              "pointer-events-auto animate-fade-in rounded-3xl border bg-card p-5 shadow-2xl",
+              "ring-1 ring-primary/20",
             )}
           >
-            <div className="flex items-start gap-2.5">
-              <span className={cn("mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl", meta.bg)}>
-                <Icon className="h-4 w-4" />
+            <div className="flex items-start gap-4">
+              <span className={cn("mt-0.5 flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl", meta.bg)}>
+                <Icon className="h-6 w-6" />
               </span>
               <div className="min-w-0 flex-1">
                 {href ? (
                   <Link
                     to={href}
-                    className="block text-sm font-semibold leading-snug hover:underline"
+                    className="block text-lg font-semibold leading-snug hover:underline"
                     onClick={() => setToasts((p) => p.filter((x) => x.id !== t.id))}
                   >
                     {t.title}
                   </Link>
                 ) : (
-                  <p className="text-sm font-semibold leading-snug">{t.title}</p>
+                  <p className="text-lg font-semibold leading-snug">{t.title}</p>
                 )}
-                {t.body && <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{t.body}</p>}
+                {t.body && (
+                  <p className="mt-2 max-h-[50vh] overflow-y-auto whitespace-pre-wrap text-base leading-relaxed text-foreground/90">
+                    {t.body}
+                  </p>
+                )}
               </div>
               <button
                 type="button"
-                className="rounded-full p-1 text-muted-foreground hover:bg-muted"
+                className="rounded-full p-2 text-muted-foreground hover:bg-muted"
                 aria-label="Dismiss"
                 onClick={() => setToasts((p) => p.filter((x) => x.id !== t.id))}
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-5 w-5" />
               </button>
             </div>
           </div>
         )
       })}
+      </div>
     </div>
   )
 }

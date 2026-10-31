@@ -40,6 +40,30 @@ def _task_mini(db, t: Task) -> dict:
     return s.model_dump(mode="json")
 
 
+_AUDITOR_MONEY_LINKS = {
+    "/admin/payroll": "/admin/logs",
+    "/admin/invoices": "/admin/logs",
+    "/admin/reports": "/admin/dashboard",
+    "/admin/analytics": "/admin/dashboard",
+    "/admin/va-rates": "/admin/users",
+}
+
+
+def _auditor_attention(item: dict) -> dict:
+    """Project Manager dashboard stays operational — no pay pages or currency figures."""
+    out = dict(item)
+    link = out.get("link") or ""
+    if link in _AUDITOR_MONEY_LINKS:
+        out["link"] = _AUDITOR_MONEY_LINKS[link]
+    detail = str(out.get("detail") or "")
+    if any(tok in detail for tok in ("$", "₱")) or "paid on" in detail.lower():
+        out["detail"] = "Review hours and submissions in All Logs"
+    title = str(out.get("title") or "")
+    if any(tok in title for tok in ("$", "₱")):
+        out["title"] = "Timesheets still need review"
+    return out
+
+
 @router.get("/overview")
 def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
     """Monday-style morning overview for admin (team) or VA (personal)."""
@@ -131,6 +155,13 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
     if not is_admin: prepare.append("Clock in when you start — your hours log automatically")
     prepare.append("Check comments on your tasks for updates from the team")
     if overdue: prepare.insert(0, f"Clear {len(overdue)} overdue item(s) first")
+
+    if current.role == UserRole.auditor:
+        attention = [_auditor_attention(item) for item in attention]
+        prepare = [
+            p for p in prepare
+            if p and "$" not in p and "₱" not in p and "paid on" not in p.lower()
+        ]
 
     # Live clock
     cq = db.query(TimeClockEntry).options(joinedload(TimeClockEntry.va), joinedload(TimeClockEntry.task), joinedload(TimeClockEntry.client)).filter(TimeClockEntry.status.in_([ClockStatus.running, ClockStatus.paused]))

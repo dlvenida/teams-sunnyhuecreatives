@@ -27,6 +27,16 @@ from app.schemas import (
 )
 from app.services.billing import get_billing_period, next_invoice_number
 
+
+class InvoiceGenerateBody(InvoiceGenerateRequest):
+    """Same generate payload, plus an optional admin-computed total.
+
+    Used when the form has extracted hours and a rate (amount = hours × rate)
+    or the admin edited that total. Omitted or ignored when the description is blank.
+    """
+
+    amount: Decimal | None = None
+
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
 
@@ -158,6 +168,50 @@ def _format_date_span(dates: list[date]) -> str:
     return f"{a.strftime('%B')} {a.day}, {a.year} to {b.strftime('%B')} {b.day}, {b.year}"
 
 
+@router.get("/extract")
+def extract_time_logs(
+    client_id: UUID,
+    year: int,
+    month: int,
+    cutoff: int,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Exact work-log wording for the same period preview uses.
+
+    Includes submitted, approved, and already-invoiced logs. Timesheet approval
+    is not required. Descriptions are concatenated unchanged — not summarized.
+    """
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+
+    period_start, period_end, period_label = get_billing_period(year, month, cutoff)
+    logs = (
+        db.query(WorkLog)
+        .filter(
+            WorkLog.client_id == client_id,
+            WorkLog.work_date >= period_start,
+            WorkLog.work_date <= period_end,
+            WorkLog.status.in_([
+                WorkLogStatus.submitted,
+                WorkLogStatus.approved,
+                WorkLogStatus.invoiced,
+            ]),
+        )
+        .order_by(WorkLog.work_date, WorkLog.start_time, WorkLog.created_at)
+        .all()
+    )
+    parts = [log.description_plain for log in logs if log.description_plain]
+    total_hours = sum((log.hours for log in logs), Decimal("0")).quantize(Decimal("0.01"))
+    return {
+        "description": "\n\n".join(parts),
+        "total_hours": str(total_hours),
+        "period_label": period_label,
+        "entry_count": len(logs),
+    }
+
+
 @router.get("/preview", response_model=InvoicePreviewResponse)
 def preview_invoice(
     client_id: UUID,
@@ -244,7 +298,7 @@ def preview_invoice(
 
 @router.post("/generate", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 def generate_invoice(
-    body: InvoiceGenerateRequest,
+    body: InvoiceGenerateBody,
     _: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ):
@@ -281,7 +335,16 @@ def generate_invoice(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nothing to invoice for this period")
 
     total_hours = sum((log.hours for log in logs), Decimal("0"))
-    amount, overage_hrs, overage_amt = _invoice_amount(billing_type, rate, total_hours, included_hours, overage_rate)
+    computed_amount, overage_hrs, overage_amt = _invoice_amount(
+        billing_type, rate, total_hours, included_hours, overage_rate
+    )
+    custom = (body.service_description or "").strip()
+    # Blank description keeps the service-title + period total. A saved description
+    # can carry the admin's hours × rate figure (or their edit of that figure).
+    if custom and body.amount is not None:
+        amount = body.amount.quantize(Decimal("0.01"))
+    else:
+        amount = computed_amount
 
     numbers = [inv.invoice_number for inv in db.query(Invoice.invoice_number).all()]
     invoice_number = body.invoice_number or next_invoice_number(numbers, body.year)
@@ -316,7 +379,6 @@ def generate_invoice(
         log.status = WorkLogStatus.invoiced
         log.invoice_id = invoice.id
 
-    custom = (body.service_description or "").strip()
     # Never invent package marketing copy. Blank → service title + period only.
     default_service = f"Social Media VA Services — {period_label}"
 

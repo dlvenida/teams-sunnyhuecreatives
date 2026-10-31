@@ -10,7 +10,7 @@ export function roleLabel(role: string | null | undefined): string {
   const r = (role || "").toLowerCase()
   if (r === "va") return "VA"
   if (r === "admin") return "Admin"
-  if (r === "auditor") return "Auditor"
+  if (r === "auditor") return "Project Manager"
   return role || "—"
 }
 

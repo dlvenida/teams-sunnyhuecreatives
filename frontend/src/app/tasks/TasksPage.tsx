@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, getAuthUser } from "@/lib/api"
-import type { Cadence, Client, Project, TaskItem, TaskPriority, TaskRecurrence, TaskStatus, VA } from "@/lib/types"
+import type { Cadence, Client, ClientDetail, Project, TaskItem, TaskPriority, TaskRecurrence, TaskStatus, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
@@ -16,7 +16,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom"
 type ViewMode = "board" | "list" | "timeline"
 
 const emptyForm = {
-  title: "", description: "", client_id: "", sub_client_id: "", project_id: "", assignee_va_id: "",
+  title: "", description: "", client_id: "", sub_client_id: "", project_id: "", assignee_va_id: "", assignee_role: "",
   status: "todo" as TaskStatus, priority: "medium" as TaskPriority, start_date: "", due_date: "",
   estimated_hours: "", tags: "",
   recurrence: "none" as TaskRecurrence, recurrence_interval: "1", recurrence_unit: "week",
@@ -42,6 +42,8 @@ export function TasksPage() {
   const [statusFilter, setStatusFilter] = useState("")
   const [priorityFilter, setPriorityFilter] = useState("")
   const [showOverdueOnly, setShowOverdueOnly] = useState(false)
+  const [dueFrom, setDueFrom] = useState("")
+  const [dueTo, setDueTo] = useState("")
   const [modal, setModal] = useState<null | { mode: "create" | "edit"; task?: TaskItem }>(null)
   const [form, setForm] = useState(emptyForm)
   const [commentTask, setCommentTask] = useState<TaskItem | null>(null)
@@ -58,8 +60,10 @@ export function TasksPage() {
     if (priorityFilter) p.set("priority", priorityFilter)
     if (search) p.set("search", search)
     if (showOverdueOnly) p.set("overdue", "true")
+    if (dueFrom) p.set("due_from", dueFrom)
+    if (dueTo) p.set("due_to", dueTo)
     const s = p.toString(); return s ? `?${s}` : ""
-  }, [clientId, projectId, assigneeId, statusFilter, priorityFilter, search, showOverdueOnly])
+  }, [clientId, projectId, assigneeId, statusFilter, priorityFilter, search, showOverdueOnly, dueFrom, dueTo])
 
   const { data: tasks = [], isLoading } = useQuery({ queryKey: ["tasks", query, isStaff], queryFn: () => apiFetch<TaskItem[]>(`/tasks${query}`) })
   const { data: stats } = useQuery({ queryKey: ["task-stats"], queryFn: () => apiFetch<{ total: number; by_status: Record<string, number>; overdue: number; due_today: number; unassigned: number }>("/tasks/stats") })
@@ -69,6 +73,20 @@ export function TasksPage() {
   })
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false") })
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas"), enabled: isStaff })
+  const { data: flagTasks = [], isSuccess: flagsReady } = useQuery({
+    queryKey: ["tasks", "idle-flags"],
+    queryFn: () => apiFetch<TaskItem[]>("/tasks"),
+    enabled: isStaff,
+  })
+  const idleVas = isStaff && flagsReady
+    ? vas.filter((v) => !flagTasks.some((t) => t.assignee_va_id === v.id && t.status !== "done"))
+    : []
+  const { data: taskClient } = useQuery({
+    queryKey: ["client-detail", form.client_id],
+    queryFn: () => apiFetch<ClientDetail>(`/clients/${form.client_id}/detail`),
+    enabled: isStaff && !!form.client_id,
+  })
+  const assigneeClientRole = taskClient?.team?.find((m) => m.va_id === form.assignee_va_id)?.role || ""
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks"] }); qc.invalidateQueries({ queryKey: ["task-stats"] }); qc.invalidateQueries({ queryKey: ["projects"] }) }
 
   // Deep-link from mention / comment notifications: ?task=&comment=
@@ -103,6 +121,7 @@ export function TasksPage() {
         sub_client_id: form.sub_client_id || null,
         project_id: form.project_id || null,
         assignee_va_id: form.assignee_va_id || null,
+        assignee_role: form.assignee_role.trim() || null,
         status: form.status,
         priority: form.priority,
         start_date: form.start_date || null,
@@ -133,6 +152,7 @@ export function TasksPage() {
       sub_client_id: t.sub_client_id || "",
       project_id: t.project_id || "",
       assignee_va_id: t.assignee_va_id || "",
+      assignee_role: t.assignee_role || "",
       status: t.status,
       priority: t.priority,
       start_date: t.start_date || "",
@@ -170,6 +190,14 @@ export function TasksPage() {
         </div>
       </div>
 
+      {isStaff && idleVas.length > 0 && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+          <span className="font-bold">No tasks: </span>
+          {idleVas.map((v) => v.name).join(", ")}
+          <span className="text-amber-800"> — assign work so they are not sitting empty.</span>
+        </div>
+      )}
+
       {stats && (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
           {[{ label: "Total", v: stats.total }, { label: "In Progress", v: stats.by_status.in_progress || 0 }, { label: "Due Today", v: stats.due_today }, { label: "Overdue", v: stats.overdue }, { label: "Done", v: stats.by_status.done || 0 }].map(s => (
@@ -189,6 +217,8 @@ export function TasksPage() {
           <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="w-auto"><option value="">Any Status</option>{TASK_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select>
           <Select value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)} className="w-auto"><option value="">Any Priority</option>{Object.entries(PRIORITY_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select>
           <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={showOverdueOnly} onChange={e => setShowOverdueOnly(e.target.checked)} /> Overdue only</label>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">Deadline from <Input type="date" value={dueFrom} onChange={e => setDueFrom(e.target.value)} className="h-8 w-auto" /></label>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">to <Input type="date" value={dueTo} onChange={e => setDueTo(e.target.value)} className="h-8 w-auto" /></label>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border p-0.5">
@@ -258,6 +288,7 @@ export function TasksPage() {
                 <div><Label>Client *</Label><Select value={form.client_id} onChange={e => setForm({ ...form, client_id: e.target.value, project_id: "" })}><option value="">Select client</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
                 <div><Label>Project</Label><Select value={form.project_id} onChange={e => setForm({ ...form, project_id: e.target.value })}><option value="">No project</option>{filteredProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></div>
                 {isStaff && <div><Label>Assignee</Label><Select value={form.assignee_va_id} onChange={e => setForm({ ...form, assignee_va_id: e.target.value })}><option value="">Unassigned</option>{vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</Select></div>}
+                {isStaff && <div><Label>Role on this task</Label><Input value={form.assignee_role} onChange={e => setForm({ ...form, assignee_role: e.target.value })} placeholder={assigneeClientRole || "e.g. Social Media Manager"} />{assigneeClientRole && !form.assignee_role && <p className="mt-1 text-[11px] text-muted-foreground">Client role on file: {assigneeClientRole}. Type it here to save it on this task.</p>}</div>}
                 <div><Label>Status</Label><Select value={form.status} onChange={e => setForm({ ...form, status: e.target.value as TaskStatus })}>{TASK_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select></div>
                 <div><Label>Priority</Label><Select value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value as TaskPriority })}>{Object.entries(PRIORITY_META).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</Select></div>
                 <div><Label>Est. hours</Label><Input type="number" step="0.5" value={form.estimated_hours} onChange={e => setForm({ ...form, estimated_hours: e.target.value })} /></div>
@@ -358,7 +389,7 @@ export function TasksPage() {
             </div>
             <div className="mb-4"><DetailAttachments scope="task" scopeId={commentTask.id} /></div>
             <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> Comments & Updates</h3>
-            <p className="mb-2 text-[11px] text-muted-foreground">Admin, Auditors and Users can comment here — tag teammates with @, react with emoji, attach images (auto-AVIF into the bucket) and draw on them.</p>
+            <p className="mb-2 text-[11px] text-muted-foreground">Admin, Project Managers, and VAs can comment here — tag teammates with @, react with emoji, attach images, and draw on them.</p>
             <CommentThread scope="task" scopeId={commentTask.id} scopeTitle={commentTask.title} highlightCommentId={highlightCommentId} />
           </div>
         </div>

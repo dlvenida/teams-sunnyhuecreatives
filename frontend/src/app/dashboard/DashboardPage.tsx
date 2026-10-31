@@ -554,7 +554,7 @@ export function DashboardPage() {
           <CardContent className="space-y-2">
             {overview.needs_attention.map((a, i) => <Link key={i} to={a.link} className={cn("block rounded-xl border p-3 monday-card", a.severity === "high" ? "border-red-200 bg-red-50/70" : "border-amber-200 bg-amber-50/70")}><p className="text-xs font-semibold">{a.title}</p><p className="text-[11px] text-muted-foreground">{a.detail}</p></Link>)}
             {overview.needs_attention.length === 0 && <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-xs"><CheckCircle2 className="mr-1 inline h-4 w-4 text-green-600" /> All clear — nothing overdue, blocked, or waiting.</div>}
-            {overview.live_clock.length > 0 && <div className="pt-1"><p className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"><Timer className="h-3.5 w-3.5" /> Live clock</p>{overview.live_clock.map(e => <div key={e.id} className="mb-1.5 flex items-center justify-between rounded-lg border px-2.5 py-2 text-[11px]"><span><span className="live-dot mr-1.5 inline-block h-2 w-2 rounded-full bg-green-500" />{isAdmin ? `${e.va_name} · ` : ""}{e.task_title || e.client_name || "Working"}</span><span className="font-mono font-bold">{formatDuration(e.elapsed_seconds)}</span></div>)}</div>}
+            {overview.live_clock.length > 0 && <div className="pt-1"><p className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"><Timer className="h-3.5 w-3.5" /> Live clock</p>{overview.live_clock.map(e => <div key={e.id} className="mb-1.5 flex items-center justify-between rounded-lg border px-2.5 py-2 text-[11px]"><span><span className="live-dot mr-1.5 inline-block h-2 w-2 rounded-full bg-green-500" />{isStaff ? `${e.va_name} · ` : ""}{e.task_title || e.client_name || "Working"}</span><span className="font-mono font-bold">{formatDuration(e.elapsed_seconds)}</span></div>)}</div>}
           </CardContent></Card>
       </div>
 
@@ -597,15 +597,35 @@ export function DashboardPage() {
       )}
 
       {isStaff && data && !isAdmin && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { label: "Pending Entries", value: data.pending_entries },
-            { label: "Approved Hours", value: data.approved_hours },
-            { label: "Active Clients", value: data.active_clients },
-            { label: "Active VAs", value: data.active_vas },
-          ].map((s) => (
-            <Card key={s.label} className="min-w-0"><CardContent className="p-4"><p className="text-[11px] font-medium text-muted-foreground">{s.label}</p><p className="mt-1 text-2xl font-extrabold">{s.value}</p></CardContent></Card>
-          ))}
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { label: "Pending Entries", value: data.pending_entries },
+              { label: "Approved Hours", value: data.approved_hours },
+              { label: "Active Clients", value: data.active_clients },
+              { label: "Active VAs", value: data.active_vas },
+            ].map((s) => (
+              <Card key={s.label} className="min-w-0"><CardContent className="p-4"><p className="text-[11px] font-medium text-muted-foreground">{s.label}</p><p className="mt-1 text-2xl font-extrabold">{s.value}</p></CardContent></Card>
+            ))}
+          </div>
+          <Card className="min-w-0">
+            <CardHeader className="pb-2"><CardTitle>Hours by Client</CardTitle></CardHeader>
+            <CardContent className="space-y-2">
+              {data.hours_by_client.length === 0 && <p className="text-xs text-muted-foreground">No approved hours yet.</p>}
+              {data.hours_by_client.slice(0, 8).map((row) => {
+                const max = Math.max(...data.hours_by_client.map((r) => r.hours), 1)
+                return (
+                  <div key={row.client} className="flex items-center gap-3 text-xs">
+                    <span className="w-28 truncate font-semibold sm:w-36">{row.client}</span>
+                    <span className="h-2.5 flex-1 rounded-full bg-slate-100">
+                      <span className="block h-2.5 rounded-full bg-primary" style={{ width: `${Math.max(4, (row.hours / max) * 100)}%` }} />
+                    </span>
+                    <span className="w-12 text-right font-mono text-muted-foreground">{row.hours}h</span>
+                  </div>
+                )
+              })}
+            </CardContent>
+          </Card>
         </div>
       )}
     </div>

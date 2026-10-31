@@ -5,6 +5,7 @@ import {
   DEFAULT_NOTIFICATION_PREFS,
   profileToForm,
   TIMEZONES,
+  type NotificationDelivery,
   type NotificationPreferences,
   type NotificationSoundId,
   type ProfileFormData,
@@ -45,6 +46,10 @@ export function ProfilePage() {
   const [pinMessage, setPinMessage] = useState("")
   const [pinOk, setPinOk] = useState(true)
   const [tab, setTab] = useState("contact")
+  const [pkgAmount, setPkgAmount] = useState("")
+  const [pkgCurrency, setPkgCurrency] = useState<"PHP" | "USD">("USD")
+  const [pkgMessage, setPkgMessage] = useState("")
+  const [pkgOk, setPkgOk] = useState(true)
 
   const { data: profile, isLoading, isError, error } = useQuery({
     queryKey: ["profile"],
@@ -55,6 +60,8 @@ export function ProfilePage() {
     if (profile) {
       setForm(profileToForm(profile))
       setUsernameValue(profile.username || "")
+      setPkgAmount(profile.va_package_amount != null ? String(profile.va_package_amount) : "")
+      setPkgCurrency(profile.va_package_currency === "PHP" ? "PHP" : "USD")
       if (profile.must_change_password) setTab("security")
     }
   }, [profile])
@@ -65,6 +72,7 @@ export function ProfilePage() {
         method: "PATCH",
         body: JSON.stringify({
           display_name: body.display_name,
+          legal_name: body.legal_name.trim() || null,
           phone: body.phone || null,
           address: body.address || null,
           wise_email: body.wise_email || null,
@@ -95,6 +103,23 @@ export function ProfilePage() {
       setTimeout(() => setSaveMessage(""), 3000)
     },
     onError: (err: Error) => { setSaveOk(false); setSaveMessage(err.message) },
+  })
+
+  const savePackage = useMutation({
+    mutationFn: () =>
+      apiFetch<UserProfile>("/profile/me", {
+        method: "PATCH",
+        body: JSON.stringify({
+          va_package_amount: parseFloat(pkgAmount),
+          va_package_currency: pkgCurrency,
+        }),
+      }),
+    onSuccess: (data) => {
+      qc.setQueryData(["profile"], data)
+      setPkgOk(true)
+      setPkgMessage("Monthly rate saved. Payroll uses this flat amount, not hours × rate.")
+    },
+    onError: (err: Error) => { setPkgOk(false); setPkgMessage(err.message) },
   })
 
   const requestEmailChange = useMutation({
@@ -295,6 +320,11 @@ export function ProfilePage() {
             <div>
               <Label htmlFor="display-name">Display name</Label>
               <Input id="display-name" value={form.display_name} onChange={(e) => update("display_name", e.target.value)} />
+              <p className="mt-1 text-[10px] text-muted-foreground">Nickname shown in the app. Payroll uses your full legal name.</p>
+            </div>
+            <div>
+              <Label htmlFor="legal-name">Full legal name</Label>
+              <Input id="legal-name" value={form.legal_name} onChange={(e) => update("legal_name", e.target.value)} placeholder="Name on payroll" />
             </div>
             <div>
               <Label htmlFor="phone">Phone</Label>
@@ -469,6 +499,36 @@ export function ProfilePage() {
             </div>
           </div>
           <SaveRow label="Save payment info" />
+          {profile.role === "auditor" && (
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
+              <p className="text-sm font-semibold">Project Manager monthly rate</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                You still clock in and out. Pay for the period is this flat amount, not hours × rate. Only you and admin can see or edit it.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_140px_auto] sm:items-end">
+                <div>
+                  <Label htmlFor="pkg-amount">Amount</Label>
+                  <Input id="pkg-amount" type="number" step="0.01" min="0" value={pkgAmount} onChange={(e) => setPkgAmount(e.target.value)} placeholder="e.g. 3000" />
+                </div>
+                <div>
+                  <Label htmlFor="pkg-currency">Currency</Label>
+                  <Select id="pkg-currency" value={pkgCurrency} onChange={(e) => setPkgCurrency(e.target.value as "PHP" | "USD")}>
+                    <option value="USD">USD</option>
+                    <option value="PHP">PHP</option>
+                  </Select>
+                </div>
+                <Button
+                  variant="gold"
+                  size="sm"
+                  disabled={!pkgAmount || Number(pkgAmount) <= 0 || savePackage.isPending}
+                  onClick={() => savePackage.mutate()}
+                >
+                  {savePackage.isPending ? "Saving…" : "Save monthly rate"}
+                </Button>
+              </div>
+              {pkgMessage && <p className={`mt-2 text-[11px] font-semibold ${pkgOk ? "text-green-600" : "text-red-600"}`}>{pkgMessage}</p>}
+            </div>
+          )}
         </CardContent>
       </Card>
       )}
@@ -482,6 +542,11 @@ export function ProfilePage() {
               ...DEFAULT_NOTIFICATION_PREFS.popup_types,
               ...(profile.notification_preferences?.popup_types || {}),
             },
+            email_types: {
+              ...DEFAULT_NOTIFICATION_PREFS.email_types,
+              ...(profile.notification_preferences?.email_types || {}),
+            },
+            email_enabled: profile.notification_preferences?.email_enabled !== false,
           }}
           onSave={(next) =>
             apiFetch<UserProfile>("/profile/me", {
@@ -615,7 +680,7 @@ const SOUND_OPTIONS: { id: NotificationSoundId; label: string; hint: string }[] 
   { id: "chime", label: "Chime", hint: "Soft three-note" },
   { id: "bell", label: "Bell", hint: "Two-tone ring" },
   { id: "ping", label: "Ping", hint: "Short single tone" },
-  { id: "loud", label: "Loud", hint: "Strong triple alert" },
+  { id: "loud", label: "Loud", hint: "Strong triple alert — default" },
 ]
 
 function NotificationSettingsCard({
@@ -651,14 +716,14 @@ function NotificationSettingsCard({
           <BellRing className="h-4 w-4 text-primary" /> Notification settings
         </CardTitle>
         <p className="text-[11px] text-muted-foreground">
-          Control pop-ups and sounds when new notifications arrive — even while you are on another page.
+          A large alert appears at the top of the screen. Pick a sound, then choose pop-up, sound, or bell-only for each type.
         </p>
       </CardHeader>
       <CardContent className="space-y-5">
         <label className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm">
           <span>
             <span className="font-semibold">Pop-up notifications</span>
-            <span className="mt-0.5 block text-[11px] text-muted-foreground">Show a brief toast in the corner for new alerts</span>
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">Master switch for the large top-of-screen alert</span>
           </span>
           <input
             type="checkbox"
@@ -703,25 +768,72 @@ function NotificationSettingsCard({
           </div>
         </div>
 
+        <div className="space-y-2 rounded-xl border p-3">
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>
+              <span className="flex items-center gap-1.5 font-semibold"><Mail className="h-3.5 w-3.5" /> Email notifications</span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">Master switch for email. Timesheet decisions are skipped when this or Timesheet is off.</span>
+            </span>
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-primary"
+              checked={local.email_enabled !== false}
+              onChange={(e) => setLocal({ ...local, email_enabled: e.target.checked })}
+            />
+          </label>
+          <div className="grid gap-1.5">
+            {(
+              [
+                ["comment", "Comment"],
+                ["mention", "Mention"],
+                ["task_assigned", "Task assigned"],
+                ["task_updated", "Task updated"],
+                ["timesheet", "Timesheet"],
+              ] as const
+            ).map(([key, label]) => (
+              <label key={key} className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-xs">
+                <span className="font-semibold">{label}</span>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-primary"
+                  checked={local.email_types?.[key] !== false}
+                  onChange={(e) => setLocal({
+                    ...local,
+                    email_types: { ...DEFAULT_NOTIFICATION_PREFS.email_types, ...local.email_types, [key]: e.target.checked },
+                  })}
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+
         <div>
-          <Label className="mb-1.5">Show pop-up for</Label>
-          <div className="grid gap-1.5 sm:grid-cols-2">
+          <Label className="mb-1.5">How each type alerts you</Label>
+          <div className="grid gap-1.5">
             {Object.keys(DEFAULT_NOTIFICATION_PREFS.popup_types).map((type) => {
               const meta = TYPE_META[type]
+              const mode: NotificationDelivery = local.delivery?.[type]
+                || (local.popup_types[type] === false ? "bell" : "both")
               return (
                 <label key={type} className="flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-xs">
                   <span className="font-semibold">{meta?.label || type}</span>
-                  <input
-                    type="checkbox"
-                    className="h-3.5 w-3.5 accent-primary"
-                    checked={local.popup_types[type] !== false}
-                    onChange={(e) =>
+                  <select
+                    className="rounded-lg border bg-background px-2 py-1 text-xs"
+                    value={mode}
+                    onChange={(e) => {
+                      const next = e.target.value as NotificationDelivery
                       setLocal({
                         ...local,
-                        popup_types: { ...local.popup_types, [type]: e.target.checked },
+                        delivery: { ...(local.delivery || {}), [type]: next },
+                        popup_types: { ...local.popup_types, [type]: next === "both" || next === "popup" },
                       })
-                    }
-                  />
+                    }}
+                  >
+                    <option value="both">Pop-up and sound</option>
+                    <option value="popup">Pop-up only</option>
+                    <option value="sound">Sound only</option>
+                    <option value="bell">Bell only</option>
+                  </select>
                 </label>
               )
             })}

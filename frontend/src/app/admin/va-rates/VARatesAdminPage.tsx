@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
 import type { Client, VA } from "@/lib/types"
@@ -6,8 +6,23 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/ui/badge"
-import { formatCurrency } from "@/lib/utils"
+import { formatCurrency, roleLabel } from "@/lib/utils"
 import { Check, X } from "lucide-react"
+
+interface Compensation {
+  va_id: string
+  va_name?: string | null
+  user_role?: string | null
+  compensation_mode: string
+  va_package_amount?: string | number | null
+  va_package_currency?: string | null
+}
+
+interface Draft {
+  mode: string
+  amount: string
+  currency: "PHP" | "USD"
+}
 
 interface VARate {
   id: string
@@ -27,6 +42,8 @@ interface VARate {
 export function VARatesAdminPage() {
   const qc = useQueryClient()
   const [filter, setFilter] = useState("pending")
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({})
+  const [compError, setCompError] = useState("")
   const [form, setForm] = useState({
     va_id: "", client_id: "", pay_type: "hourly" as "hourly" | "package", currency: "PHP" as "PHP" | "USD", amount: "",
   })
@@ -35,6 +52,11 @@ export function VARatesAdminPage() {
     queryKey: ["va-rates-admin", filter],
     queryFn: () => apiFetch<VARate[]>(`/va-rates${filter === "all" ? "" : `?status_filter=${filter}`}`),
   })
+  const { data: arrangements } = useQuery({
+    queryKey: ["va-compensation"],
+    queryFn: () => apiFetch<Compensation[]>("/va-rates/compensation"),
+  })
+  const arrangementRows = arrangements ?? []
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
   const { data: clients = [] } = useQuery({ queryKey: ["clients"], queryFn: () => apiFetch<Client[]>("/clients") })
 
@@ -46,6 +68,36 @@ export function VARatesAdminPage() {
     mutationFn: (id: string) => apiFetch(`/va-rates/${id}/reject`, { method: "POST" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["va-rates-admin"] }),
   })
+  useEffect(() => {
+    if (!arrangements) return
+    const next: Record<string, Draft> = {}
+    for (const row of arrangements) {
+      next[row.va_id] = {
+        mode: row.compensation_mode || "hourly",
+        amount: row.va_package_amount != null ? String(row.va_package_amount) : "",
+        currency: row.va_package_currency === "PHP" ? "PHP" : "USD",
+      }
+    }
+    setDrafts(next)
+  }, [arrangements])
+
+  const saveComp = useMutation({
+    mutationFn: ({ vaId, draft }: { vaId: string; draft: Draft }) =>
+      apiFetch(`/va-rates/compensation/${vaId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          compensation_mode: draft.mode,
+          va_package_amount: draft.amount === "" ? null : parseFloat(draft.amount),
+          va_package_currency: draft.currency,
+        }),
+      }),
+    onSuccess: () => {
+      setCompError("")
+      qc.invalidateQueries({ queryKey: ["va-compensation"] })
+    },
+    onError: (e) => setCompError(e instanceof Error ? e.message : "Could not save pay arrangement"),
+  })
+
   const override = useMutation({
     mutationFn: () =>
       apiFetch("/va-rates", {
@@ -64,6 +116,71 @@ export function VARatesAdminPage() {
         <h1 className="text-2xl font-extrabold tracking-tight">VA Rates</h1>
         <p className="text-sm text-muted-foreground">One approved rate per VA per client. Approving or overriding replaces any previous approved rate for that pair.</p>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2"><CardTitle>Pay arrangement</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Hourly is hours × rate. Per-client package is a flat amount for that client in the period. Whole-VA package is one monthly amount for every client. VAs see this as read-only. The Project Manager sets her own amount on Profile; you can still edit it here. One approved rate per VA and client still applies below.
+          </p>
+          {compError && <p className="text-sm text-red-600">{compError}</p>}
+          <div className="space-y-2">
+            {arrangementRows.map((row) => {
+              const draft = drafts[row.va_id] ?? { mode: row.compensation_mode, amount: "", currency: "USD" as const }
+              const needsAmount = draft.mode === "va_package" && (draft.amount === "" || Number.isNaN(parseFloat(draft.amount)))
+              return (
+                <div key={row.va_id} className="grid items-end gap-2 rounded-xl border p-3 sm:grid-cols-[1.2fr_1fr_120px_110px_auto]">
+                  <div>
+                    <p className="text-sm font-semibold">{row.va_name || "VA"}</p>
+                    <p className="text-[11px] text-muted-foreground">{roleLabel(row.user_role)}</p>
+                  </div>
+                  <div>
+                    <Label>Pay type</Label>
+                    <Select
+                      value={draft.mode}
+                      onChange={(e) => setDrafts({ ...drafts, [row.va_id]: { ...draft, mode: e.target.value } })}
+                    >
+                      <option value="hourly">Hourly</option>
+                      <option value="per_client_package">Fixed package per client</option>
+                      <option value="va_package">Fixed package for all clients</option>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label>Package amount</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={draft.amount}
+                      disabled={draft.mode !== "va_package"}
+                      onChange={(e) => setDrafts({ ...drafts, [row.va_id]: { ...draft, amount: e.target.value } })}
+                    />
+                  </div>
+                  <div>
+                    <Label>Currency</Label>
+                    <Select
+                      value={draft.currency}
+                      disabled={draft.mode !== "va_package"}
+                      onChange={(e) => setDrafts({ ...drafts, [row.va_id]: { ...draft, currency: e.target.value as "PHP" | "USD" } })}
+                    >
+                      <option value="USD">USD</option>
+                      <option value="PHP">PHP</option>
+                    </Select>
+                  </div>
+                  <Button
+                    variant="gold"
+                    size="sm"
+                    disabled={needsAmount || saveComp.isPending}
+                    onClick={() => saveComp.mutate({ vaId: row.va_id, draft })}
+                  >
+                    Save
+                  </Button>
+                </div>
+              )
+            })}
+            {arrangementRows.length === 0 && <p className="text-xs text-muted-foreground">No VA profiles yet.</p>}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="pb-2"><CardTitle>Admin override (auto-approved)</CardTitle></CardHeader>

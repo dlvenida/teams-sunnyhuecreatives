@@ -1,4 +1,5 @@
 """Shared serialization + bucket storage for task & project comments."""
+import html as _html
 import uuid
 from collections import Counter, defaultdict
 
@@ -170,9 +171,8 @@ def notify_reaction(db: Session, *, scope: str, comment, emoji: str, reactor_nam
     the comment author, the parent-comment author (for replies), everyone who
     commented on the task/project, the task assignee and creator — i.e. all
     users involved in the project, its comments and the task."""
-    from app.config import settings as app_settings
     from app.models import ProjectComment, Task, TaskComment, User
-    from app.services.email import branded_email, send_email
+    from app.services.email import branded_email, email_cta_url, send_email
     from app.services.notifications import push, va_user_id
 
     recipient_ids: list = [comment.author_user_id]
@@ -228,7 +228,7 @@ def notify_reaction(db: Session, *, scope: str, comment, emoji: str, reactor_nam
                     f"<p>Keep the love going — open the task to reply!</p>"
                 ),
                 "Open the task ✨",
-                f"{app_settings.app_url.rstrip('/')}{link}",
+                email_cta_url(user.role, link),
             )
             send_email(user.email, f"{emoji} {reactor_name} reacted on your comment", html, template_key="reaction")
 
@@ -249,10 +249,10 @@ def sort_comments(items: list[dict], sort: str) -> list[dict]:
 
 
 def notify_mentions(db: Session, mentions, *, scope_label: str, title: str, body: str, link: str, exclude_user_id) -> None:
-    from app.config import settings as app_settings
+    """Email each @mention. Task links must already include task id and comment id."""
     from app.models import User
-    from app.services.email import branded_email, send_email
-    from app.services.notifications import push
+    from app.services.email import branded_email, email_cta_url, render_template, send_email
+    from app.services.notifications import push, wants_email
 
     ids = []
     for m in mentions or []:
@@ -270,26 +270,34 @@ def notify_mentions(db: Session, mentions, *, scope_label: str, title: str, body
         exclude_user_id=exclude_user_id,
     )
 
+    excerpt = (body or "")[:280]
+    safe_excerpt = _html.escape(excerpt)
+    safe_title = _html.escape(title)
     for uid in ids:
         if exclude_user_id and uid == exclude_user_id:
             continue
         user = db.query(User).filter(User.id == uid, User.is_active.is_(True)).first()
-        if not user or not user.email:
+        if not user or not wants_email(user, "mention"):
             continue
+        # Role-specific absolute URL. Callers pass /tasks?task={id}&comment={id} for task mentions.
+        url = email_cta_url(user.role, link)
         first = (user.display_name or user.email.split("@")[0]).split(" ")[0]
+        rendered = render_template(db, "mention", {"name": first, "task_title": title, "comment": excerpt}, url)
+        if rendered:
+            send_email(user.email, rendered[0], rendered[1], template_key="mention")
+            continue
+        safe_first = _html.escape(first)
         html = branded_email(
             f"Hey {first}, someone tagged you! 💕",
             f"You were mentioned in {title}",
             (
-                f"<p>Hey <strong>{first}</strong>! 🌸</p>"
-                f"<p>Someone tagged/mentioned you in a task — how sweet!</p>"
-                f"<p style='font-size:13px;color:#9d174d;'><strong>{title}</strong> · {scope_label}</p>"
+                f"<p>Hey <strong>{safe_first}</strong>! 🌸</p>"
+                f"<p>Someone tagged you in <strong>{safe_title}</strong>.</p>"
                 f"<p style='background:#fff7fa;border-radius:12px;padding:12px 14px;border-left:3px solid #ec4899;'>"
-                f"{(body or '')[:280]}</p>"
-                f"<p>Hop in when you can — your team would love to hear from you!</p>"
+                f"{safe_excerpt}</p>"
             ),
             "Open the task ✨",
-            f"{app_settings.app_url.rstrip('/')}{link}",
+            url,
         )
         send_email(
             user.email,

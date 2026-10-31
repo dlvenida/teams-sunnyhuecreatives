@@ -193,6 +193,7 @@ def spawn_next_occurrence(db: Session, done_task: Task) -> Task | None:
         sub_client_id=done_task.sub_client_id,
         project_id=done_task.project_id,
         assignee_va_id=done_task.assignee_va_id,
+        assignee_role=done_task.assignee_role,
         created_by=done_task.created_by,
         status=TaskStatus.todo,
         priority=done_task.priority,
@@ -262,6 +263,83 @@ def overdue_recurring_tasks(db: Session, limit: int = 20) -> list[Task]:
         .limit(limit)
         .all()
     )
+
+
+def due_unfinished_repeating(db: Session, limit: int = 30) -> list[Task]:
+    """Open repeating tasks whose repeat date has arrived. Do not spawn a duplicate."""
+    today = date.today()
+    return (
+        db.query(Task)
+        .options()
+        .filter(
+            Task.status != TaskStatus.done,
+            Task.recurrence != TaskRecurrence.none,
+            Task.recurrence.isnot(None),
+            Task.due_date.isnot(None),
+            Task.due_date <= today,
+        )
+        .order_by(Task.due_date.asc())
+        .limit(limit)
+        .all()
+    )
+
+
+def process_due_repeating(db: Session) -> dict:
+    """On the repeat date: create the next copy only if the current one is already Done.
+
+    If it is still open, warn admin and Project Manager and do not make a duplicate.
+    """
+    spawned = recover_missing_occurrences(db)
+    due = due_unfinished_repeating(db)
+    warned = 0
+    if due:
+        from app.models import User, UserRole
+        from app.services.email import branded_email, send_email
+        from app.services.notifications import admin_and_auditor_user_ids, push
+        from app.config import settings
+
+        for task in due:
+            title = f"Repeating task not completed on time: {task.title}"
+            detail = (
+                f"Due {task.due_date}. The next copy waits until this one is marked Done "
+                "so it is not duplicated."
+            )
+            link = f"/tasks?task={task.id}"
+            recipients = admin_and_auditor_user_ids(db)
+            fresh = []
+            from app.models import Notification
+            from datetime import datetime, timedelta, timezone
+            since = datetime.now(timezone.utc) - timedelta(hours=20)
+            for uid in recipients:
+                already = (
+                    db.query(Notification)
+                    .filter(
+                        Notification.user_id == uid,
+                        Notification.title == title,
+                        Notification.created_at >= since,
+                    )
+                    .first()
+                )
+                if not already:
+                    fresh.append(uid)
+            if not fresh:
+                continue
+            push(db, fresh, "task", title, detail, link)
+            warned += 1
+            users = db.query(User).filter(User.id.in_(fresh), User.is_active.is_(True)).all()
+            html = branded_email(
+                title,
+                detail,
+                f"<p><strong>{task.title}</strong> was due {task.due_date} and is still open.</p>"
+                "<p>The next repeating copy is not created until this one is marked Done.</p>",
+                "Open the task",
+                f"{(settings.app_url or '').rstrip('/')}/admin/tasks?task={task.id}",
+            )
+            for user in users:
+                if user.role not in (UserRole.admin, UserRole.auditor) or not user.email:
+                    continue
+                send_email(user.email, title, html, template_key="task_updated")
+    return {"spawned": spawned, "warned": warned}
 
 
 def recurrence_label(

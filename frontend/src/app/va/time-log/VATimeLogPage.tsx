@@ -246,15 +246,30 @@ export function VATimeLogPage() {
                 }}
               >
                 <option value="">No task</option>
-                {myTasks
-                  .filter((t) => t.status !== "done")
-                  .slice()
-                  .sort((a, b) => (a.client_name || "").localeCompare(b.client_name || "") || a.title.localeCompare(b.title))
-                  .map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.client_name ? `${t.client_name} — ${t.title}` : t.title}
-                    </option>
-                  ))}
+                {Array.from(
+                  myTasks
+                    .filter((t) => t.status !== "done")
+                    .slice()
+                    .sort((a, b) => (a.client_name || "").localeCompare(b.client_name || "") || (a.project_name || "").localeCompare(b.project_name || "") || a.title.localeCompare(b.title))
+                    .reduce((map, t) => {
+                      const client = t.client_name || "No client"
+                      const list = map.get(client) || []
+                      list.push(t)
+                      map.set(client, list)
+                      return map
+                    }, new Map<string, TaskItem[]>()),
+                ).map(([client, items]) => (
+                  <optgroup key={client} label={client}>
+                    {items.map((t) => {
+                      const projectName = t.project_name || projects.find((p) => p.id === t.project_id)?.name || "No project"
+                      return (
+                        <option key={t.id} value={t.id}>
+                          {projectName} — {t.title}
+                        </option>
+                      )
+                    })}
+                  </optgroup>
+                ))}
               </Select>
             </div>
             <div><Label>Start Time</Label><Input type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} /></div>
@@ -282,7 +297,11 @@ export function VATimeLogPage() {
           <div><Label>Notes (optional)</Label><Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></div>
           <div>
             <Label>Attachments (any file type, up to 25 MB each)</Label>
-            <label className="mt-1 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed p-4 text-xs text-muted-foreground hover:bg-muted/40">
+            <label
+              className="mt-1 flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed p-4 text-xs text-muted-foreground hover:bg-muted/40"
+              onDragOver={(e) => { e.preventDefault() }}
+              onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files) }}
+            >
               <Paperclip className="mb-1 h-5 w-5" />
               {pendingFiles.length ? `${pendingFiles.length} file(s) selected — click to add more` : "Drag & drop or click to browse"}
               <input

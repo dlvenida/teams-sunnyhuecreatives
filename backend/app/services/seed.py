@@ -51,8 +51,8 @@ def seed_database(db: Session) -> None:
             username=unique_username(db, "auditor@sunnyhue.local"),
             password_hash=hash_password("auditor2024"),
             role=UserRole.auditor,
-            display_name="Audrey Auditor",
-            job_title="Auditor",
+            display_name="Audrey Reyes",
+            job_title="Project Manager",
         ))
         db.commit()
 

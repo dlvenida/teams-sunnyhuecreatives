@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import * as pdfjsLib from "pdfjs-dist"
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url"
 import { Button } from "@/components/ui/button"
@@ -113,8 +114,8 @@ export function ReactPdfViewer({ blob, filename, onClose }: PdfPreviewModalProps
     setScale(Math.max(0.4, Math.min(3, (container.clientWidth - 32) / base.width)))
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4" onClick={onClose}>
+  return createPortal(
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-3 sm:p-4" onClick={(e) => { e.stopPropagation(); onClose() }}>
       <div className="flex h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-card text-card-foreground shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2.5 sm:px-4">
           <h2 className="min-w-0 flex-1 truncate font-display text-sm font-semibold sm:text-base">{filename}</h2>
@@ -158,7 +159,8 @@ export function ReactPdfViewer({ blob, filename, onClose }: PdfPreviewModalProps
         </div>
         <p className="border-t px-4 py-1.5 text-center text-[10px] text-muted-foreground">Use ← → to change pages · Scroll to zoom through the document · Download saves the original PDF</p>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

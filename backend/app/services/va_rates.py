@@ -39,6 +39,23 @@ def resolve_log_pay(db: Session, va_id: UUID, client_id: UUID, hours: Decimal) -
     return rate.amount, calculate_pay(hours, rate.amount), PayType.hourly
 
 
+def whole_va_package_amount(va) -> tuple[Decimal, str] | None:
+    """Flat monthly amount covering every client, or None when this VA is not on that plan.
+
+    Pay is this amount once per payroll period — not hours × rate and not once per client.
+    """
+    mode = str(getattr(va, "compensation_mode", None) or "hourly")
+    if mode != "va_package":
+        return None
+    amount = getattr(va, "va_package_amount", None)
+    if amount is None:
+        return None
+    currency = str(getattr(va, "va_package_currency", None) or "USD").strip().upper() or "USD"
+    if currency not in ("PHP", "USD"):
+        currency = "USD"
+    return Decimal(str(amount)), currency
+
+
 def package_flats_for_period(db: Session, va_id: UUID, client_ids: set[UUID]) -> dict[UUID, Decimal]:
     """Flat package amounts by client_id for clients that have approved package rates."""
     out: dict[UUID, Decimal] = {}

@@ -14,6 +14,17 @@ export const REACTION_EMOJI = ["👍", "❤️", "🎉", "👀", "✅", "🔥", 
 type Scope = "task" | "project"
 type SortMode = "newest" | "oldest" | "most_reacted"
 
+function AuthFileLink({ path, name }: { path: string; name: string }) {
+  const { url, error } = useAuthImageUrl(path)
+  if (error) return <span className="flex h-24 w-36 items-center justify-center rounded-lg border bg-muted/40 px-2 text-center text-[10px] text-muted-foreground">File unavailable</span>
+  if (!url) return <span className="flex h-24 w-36 items-center justify-center rounded-lg border bg-muted/40 px-2 text-center text-[10px] text-muted-foreground">Loading file…</span>
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="flex h-24 w-36 items-center justify-center rounded-lg border bg-muted/40 px-2 text-center text-[10px] font-medium text-primary underline">
+      {name || "Open file"}
+    </a>
+  )
+}
+
 function initials(n: string) { return n.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase() }
 function highlightMentions(body: string) {
   return body.split(/(@[\w][\w .'-]*)/g).map((part, i) =>
@@ -214,9 +225,7 @@ export function CommentThread({
                       {isImg ? (
                         <AuthImage path={a.url} alt={a.original_name} className="h-24 w-36 cursor-zoom-in rounded-lg border object-cover" onClick={() => setAnnotate({ att: a, commentId: c.id })} />
                       ) : (
-                        <a href={a.url} target="_blank" rel="noreferrer" className="flex h-24 w-36 items-center justify-center rounded-lg border bg-muted/40 px-2 text-center text-[10px] font-medium text-primary underline">
-                          {a.original_name || "Open file"}
-                        </a>
+                        <AuthFileLink path={a.url} name={a.original_name || "Open file"} />
                       )}
                       <figcaption className="mt-1 text-[9px] leading-tight text-muted-foreground">
                         {a.is_annotation ? "✏️ Annotated · " : ""}
@@ -277,7 +286,7 @@ export function CommentThread({
       </div>
 
       {isLoading ? <p className="text-xs text-muted-foreground">Loading comments…</p>
-        : roots.length === 0 ? <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">No comments match. Start the discussion below — Admin, Auditors and Users can all join in.</p>
+        : roots.length === 0 ? <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">No comments match. Start the discussion below — Admin, Project Managers, and VAs can all join in.</p>
         : <div className="space-y-2">{roots.map(c => renderComment(c))}</div>}
 
       {/* Composer */}

@@ -14,7 +14,6 @@ from app.schemas import LinkAttachmentCreate, ReactionToggle, TaskCommentCreate,
 from app.services import comments as comment_svc
 from app.services.notifications import notify_task_assigned, notify_task_comment, notify_task_updated, push
 from app.services.task_recurrence import (
-    recover_missing_occurrences,
     recurrence_label,
     spawn_next_occurrence,
 )
@@ -69,6 +68,7 @@ def _serialize(db: Session, t: Task) -> TaskResponse:
         sub_client_name=t.sub_client.name if t.sub_client else None, project_id=t.project_id,
         project_name=t.project.name if t.project else None, project_color=t.project.color if t.project else None,
         assignee_va_id=t.assignee_va_id, assignee_name=t.assignee.name if t.assignee else None,
+        assignee_role=t.assignee_role,
         status=t.status, priority=t.priority, start_date=t.start_date, due_date=t.due_date,
         estimated_hours=t.estimated_hours, logged_hours=Decimal(str(logged)), position=t.position or 0,
         tags=t.tags or [], checklist=t.checklist or [],
@@ -150,8 +150,10 @@ def list_tasks(
 ):
     # Recover Done repeating tasks that never got a next copy
     try:
-        spawned = recover_missing_occurrences(db)
-        if spawned:
+        from app.services.task_recurrence import process_due_repeating
+        result = process_due_repeating(db)
+        spawned = result.get("spawned") or []
+        if spawned or result.get("warned"):
             db.commit()
             for child in spawned:
                 if child.assignee_va_id:
@@ -195,6 +197,7 @@ def task_stats(current: Annotated[CurrentUser, Depends(get_current_user)], db: A
 
 @router.post("", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
 def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    """Admin and auditor (Project Manager) can create and assign any VA. VAs can only assign themselves."""
     _validate_links(db, body.client_id, body.sub_client_id, body.project_id, body.assignee_va_id)
     if body.due_date and body.start_date and body.due_date < body.start_date:
         raise HTTPException(400, "Deadline cannot be before start date")
@@ -237,6 +240,7 @@ def get_task(task_id: UUID, current: Annotated[CurrentUser, Depends(get_current_
 
 @router.patch("/{task_id}", response_model=TaskResponse)
 def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    """Admin and auditor (Project Manager) can edit any task, including drag-and-drop moves. VAs are limited to their own."""
     t = db.query(Task).filter(Task.id == task_id).first()
     if not t: raise HTTPException(404, "Task not found")
     if current.role == UserRole.va and t.assignee_va_id != current.va_id and t.created_by != current.user.id:

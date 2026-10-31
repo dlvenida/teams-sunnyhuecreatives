@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatDuration } from "@/components/tasks/task-utils"
+import { roleLabel } from "@/lib/utils"
 import { History, Pause, Pencil, Play, Square, Timer, X } from "lucide-react"
 
 function toLocalInput(iso?: string | null) {
@@ -197,7 +198,7 @@ export function TimeClockPage() {
           </div>
           <button onClick={() => setRequesting(null)} className="rounded-full p-1.5 hover:bg-muted"><X className="h-4 w-4" /></button>
         </div>
-        <p className="mt-3 text-[11px] text-muted-foreground">An admin or auditor will review and edit the entry for you. Your current times stay recorded until they approve the change.</p>
+        <p className="mt-3 text-[11px] text-muted-foreground">An admin or project manager will review and edit the entry for you. Your current times stay recorded until they approve the change.</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div><Label>Correct clock in</Label><Input type="datetime-local" value={reqForm.clock_in} onChange={e => setReqForm({ ...reqForm, clock_in: e.target.value })} /></div>
           <div><Label>Correct clock out</Label><Input type="datetime-local" value={reqForm.clock_out} onChange={e => setReqForm({ ...reqForm, clock_out: e.target.value })} /></div>
@@ -303,7 +304,7 @@ export function TimeClockPage() {
           <p className="text-xs text-muted-foreground">
             {isStaff
               ? "Clock in and out for your own work. Switch to Team to manage VA sessions and revision requests."
-              : "Clock in when you start, clock out when you finish. If a time is wrong, request a revision — admin or auditor will edit it for you."}
+              : "Clock in when you start, clock out when you finish. If a time is wrong, request a revision — an admin or project manager will edit it for you."}
           </p>
         </div>
         {staffTabs}
@@ -332,14 +333,29 @@ export function TimeClockPage() {
                           }}
                         >
                           <option value="">General / choose below</option>
-                          {tasks
-                            .slice()
-                            .sort((a, b) => (a.client_name || "").localeCompare(b.client_name || "") || a.title.localeCompare(b.title))
-                            .map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.client_name ? `${t.client_name} — ${t.title}` : t.title}
-                              </option>
-                            ))}
+                          {Array.from(
+                            tasks
+                              .slice()
+                              .sort((a, b) => (a.client_name || "").localeCompare(b.client_name || "") || (a.project_name || "").localeCompare(b.project_name || "") || a.title.localeCompare(b.title))
+                              .reduce((map, t) => {
+                                const client = t.client_name || "No client"
+                                const list = map.get(client) || []
+                                list.push(t)
+                                map.set(client, list)
+                                return map
+                              }, new Map<string, TaskItem[]>()),
+                          ).map(([client, items]) => (
+                            <optgroup key={client} label={client}>
+                              {items.map((t) => {
+                                const projectName = t.project_name || projects.find((p) => p.id === t.project_id)?.name || "No project"
+                                return (
+                                  <option key={t.id} value={t.id}>
+                                    {projectName} — {t.title}
+                                  </option>
+                                )
+                              })}
+                            </optgroup>
+                          ))}
                         </Select>
                       </div>
                       <div className="grid gap-3 sm:grid-cols-2">
@@ -446,7 +462,7 @@ function HistoryTable({
                   {e.is_adjusted && (
                     <p className="mt-1 text-[10px] text-amber-800">
                       Edited by {e.last_adjusted_by_name || "staff"}
-                      {e.last_adjusted_by_role ? ` (${e.last_adjusted_by_role})` : ""}
+                      {e.last_adjusted_by_role ? ` (${roleLabel(e.last_adjusted_by_role)})` : ""}
                       {e.last_adjusted_at ? ` · ${fmtDT(e.last_adjusted_at)}` : ""}
                       {e.last_adjustment_reason ? ` · ${e.last_adjustment_reason}` : ""}
                     </p>

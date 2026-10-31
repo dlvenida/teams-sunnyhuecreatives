@@ -1,3 +1,4 @@
+import html
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -7,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
+from app.config import settings
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_admin_or_auditor
 from app.models import (
@@ -16,6 +18,7 @@ from app.models import (
     TaskStatus,
     TimesheetStatus,
     TimesheetSubmission,
+    User,
     UserRole,
     VA,
     WorkLog,
@@ -34,13 +37,59 @@ from app.schemas import (
     WorkLogAttachmentResponse,
 )
 from app.services.billing import get_week_period
+from app.services.email import branded_email, detail_rows, send_email
 from app.services.notifications import push, va_user_id
 from app.services.payroll_calendar import filter_logs_in_pay_period
-from app.services.va_rates import package_flats_for_period
+from app.services.va_rates import package_flats_for_period, whole_va_package_amount
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
 PAYABLE = [WorkLogStatus.approved, WorkLogStatus.invoiced]
+# Work-log statuses payroll must not rewrite when a timesheet is approved.
+_LEAVE_WORK_LOG = (WorkLogStatus.rejected.value, WorkLogStatus.invoiced.value, WorkLogStatus.approved.value)
+
+
+def _status_value(value) -> str:
+    if isinstance(value, WorkLogStatus):
+        return value.value
+    raw = getattr(value, "value", value)
+    return str(raw or "")
+
+
+def _commit_or_rollback(db: Session) -> None:
+    """Commit the open transaction. On failure, roll back and do not continue."""
+    state = getattr(db, "_close_state", None)
+    if getattr(state, "name", None) == "CLOSED":
+        raise RuntimeError("session is closed")
+    try:
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+
+
+def _approve_submitted_logs(db: Session, va_id, period_start, period_end) -> None:
+    """Mark this period's SUBMITTED logs approved. Leave rejected and invoiced logs alone.
+
+    Uses WorkLogStatus (submitted → approved), not the timesheet status enum.
+    Payroll PDFs only include approved and invoiced logs.
+    """
+    logs = filter_logs_in_pay_period(
+        db.query(WorkLog).filter(
+            WorkLog.va_id == va_id,
+            WorkLog.status == WorkLogStatus.submitted,
+        ),
+        period_start,
+        period_end,
+    ).all()
+    for log in logs:
+        current = _status_value(log.status)
+        if current in _LEAVE_WORK_LOG or current != WorkLogStatus.submitted.value:
+            continue
+        log.status = WorkLogStatus.approved
 
 
 def _period(body: PayrollRequest) -> tuple[date, date]:
@@ -53,6 +102,73 @@ def _period(body: PayrollRequest) -> tuple[date, date]:
         y, m = (t.year, t.month) if body.period == "this_month" else ((t.year - 1, 12) if t.month == 1 else (t.year, t.month - 1))
         return date(y, m, 1), date(y, m, monthrange(y, m)[1])
     return get_week_period("this_week")
+
+
+def _va_names(va: VA | None) -> tuple[str, str | None]:
+    """Display name (nickname) and full legal name for payroll Paid-to."""
+    if not va:
+        return "", None
+    user = va.user
+    legal = (user.legal_name or "").strip() if user and user.legal_name else ""
+    display = (user.display_name or "").strip() if user and user.display_name else ""
+    return display or va.name, (legal or None)
+
+
+def _as_currency(code: str, fallback: Currency) -> Currency:
+    if code == "PHP":
+        return Currency.PHP
+    if code == "USD":
+        return Currency.USD
+    return fallback
+
+
+def _wants_timesheet_email(user: User | None) -> bool:
+    if not user or not user.email:
+        return False
+    raw = user.notification_preferences if isinstance(user.notification_preferences, dict) else {}
+    if raw.get("email_enabled") is False:
+        return False
+    types = raw.get("email_types")
+    if isinstance(types, dict) and types.get("timesheet") is False:
+        return False
+    return True
+
+
+def _notify_timesheet_decision(row: TimesheetSubmission, actor: User, decision: str) -> None:
+    """Email the VA. Skipped when email notifications or the timesheet type are off. Never fails the request."""
+    try:
+        va_user = row.va.user if row.va else None
+        if not _wants_timesheet_email(va_user):
+            return
+        assert va_user is not None
+        who = (actor.display_name or "").strip() or actor.email
+        va_label = (va_user.display_name or "").strip() or (row.va.name if row.va else "") or "there"
+        period = f"{row.period_start.isoformat()} – {row.period_end.isoformat()}"
+        verb = "approved" if decision == "approved" else "rejected"
+        link = f"{settings.app_url.rstrip('/')}/va/payroll"
+        html_body = branded_email(
+            f"Timesheet {verb}",
+            f"{who} {verb} your timesheet for {period}",
+            (
+                f"<p>Hi {html.escape(va_label)},</p>"
+                f"<p>Your timesheet was <strong>{html.escape(verb)}</strong>.</p>"
+                + detail_rows([
+                    ("Decision", verb.capitalize()),
+                    ("By", who),
+                    ("Period", period),
+                ])
+            ),
+            "Open payroll",
+            link,
+        )
+        send_email(
+            va_user.email,
+            f"Your timesheet was {verb} — {period}",
+            html_body,
+            template_key="timesheet_reviewed" if decision == "approved" else "timesheet_rejected",
+        )
+    except Exception:
+        return
 
 
 def _payment_label(va: VA) -> str | None:
@@ -133,32 +249,64 @@ def calculate_payroll(
     for t in sheets.values():
         if t.va_id not in va_map and t.va:
             va_map[t.va_id] = {"va": t.va, "entries": [], "total_hours": Decimal("0"), "total_pay": Decimal("0")}
+    # Whole-VA package is owed once per period even when there are no payable logs yet.
+    pkg_q = (
+        db.query(VA)
+        .options(joinedload(VA.user))
+        .filter(
+            VA.is_active.is_(True),
+            VA.compensation_mode == "va_package",
+            VA.va_package_amount.isnot(None),
+        )
+    )
+    if body.va_id:
+        pkg_q = pkg_q.filter(VA.id == body.va_id)
+    for pva in pkg_q.all():
+        va_map.setdefault(pva.id, {"va": pva, "entries": [], "total_hours": Decimal("0"), "total_pay": Decimal("0")})
 
     results = []
     total_php = Decimal("0")
     total_usd = Decimal("0")
     for va_id, data in va_map.items():
         va = data["va"]
-        # Add package flat amounts once per client that has approved package rate + hours in period
+        # Per-client package: flat once for that client. Whole-VA package replaces hours × rate entirely.
         client_ids = {e.client_id for e in data["entries"]}
-        flats = package_flats_for_period(db, va_id, client_ids)
-        package_total = sum(flats.values(), Decimal("0"))
-        data["total_pay"] = data["total_pay"] + package_total
+        whole = whole_va_package_amount(va)
+        if whole is not None:
+            data["total_pay"] = whole[0]
+            pay_currency = _as_currency(whole[1], va.currency)
+            flats = {}
+        else:
+            flats = package_flats_for_period(db, va_id, client_ids)
+            data["total_pay"] = data["total_pay"] + sum(flats.values(), Decimal("0"))
+            pay_currency = va.currency
+        is_va_pkg = whole is not None
 
         redact = current.role == UserRole.auditor
-        entries = [
-            PayrollEntry(
+        entries = []
+        for e in data["entries"]:
+            is_flat = (not is_va_pkg) and e.client_id in flats
+            if redact or is_va_pkg:
+                rate = Decimal("0")
+                pay = Decimal("0")
+            elif is_flat:
+                rate = flats[e.client_id]
+                pay = Decimal("0")
+            else:
+                rate = e.va_rate
+                pay = e.va_pay
+            entries.append(PayrollEntry(
                 id=e.id, work_date=e.work_date, client_name=e.client.name, description=e.description_plain,
                 hours=e.hours,
-                rate=Decimal("0") if redact else e.va_rate,
-                pay=Decimal("0") if redact else e.va_pay,
+                rate=rate,
+                pay=pay,
                 project_name=e.project.name if e.project else None,
                 task_title=e.task.title if e.task else None,
                 source=e.source or "manual", status=str(e.status.value if hasattr(e.status, "value") else e.status),
                 start_time=e.start_time.strftime("%H:%M") if e.start_time else None,
                 end_time=e.end_time.strftime("%H:%M") if e.end_time else None,
-            ) for e in data["entries"]
-        ]
+                is_flat=is_flat,
+            ))
         va_pending = [l for l in pending if l.va_id == va_id]
         va_prev = [l for l in prev_logs if l.va_id == va_id]
         prev_hours = sum((l.hours for l in va_prev), Decimal("0"))
@@ -166,14 +314,21 @@ def calculate_payroll(
         by_client: dict[str, dict] = {}
         daily_map: dict[date, Decimal] = {}
         for l in data["entries"]:
-            b = by_client.setdefault(l.client.name, {"hours": Decimal("0"), "pay": Decimal("0"), "client_id": l.client_id})
+            b = by_client.setdefault(l.client.name, {"hours": Decimal("0"), "pay": Decimal("0"), "client_id": l.client_id, "kind": "hourly"})
             b["hours"] += l.hours
-            b["pay"] += l.va_pay
+            if not is_va_pkg:
+                b["pay"] += l.va_pay
             daily_map[l.work_date] = daily_map.get(l.work_date, Decimal("0")) + l.hours
-        for cid, flat in flats.items():
+        if is_va_pkg:
             for b in by_client.values():
-                if b.get("client_id") == cid:
-                    b["pay"] = flat
+                b["pay"] = Decimal("0")
+                b["kind"] = "va_package"
+        else:
+            for cid, flat in flats.items():
+                for b in by_client.values():
+                    if b.get("client_id") == cid:
+                        b["pay"] = flat
+                        b["kind"] = "package"
         daily = []
         d = period_start
         while d <= period_end:
@@ -188,19 +343,20 @@ def calculate_payroll(
         run = runs.get(va_id)
         sheet = sheets.get(va_id)
         change = float((data["total_hours"] - prev_hours) / prev_hours * 100) if prev_hours > 0 else None
-        prev_client_ids = {l.client_id for l in va_prev}
-        prev_flats = package_flats_for_period(db, va_id, prev_client_ids)
-        prev_pay = sum((l.va_pay for l in va_prev), Decimal("0")) + sum(prev_flats.values(), Decimal("0"))
-        full_name = (
-            (va.user.display_name.strip() if va.user and va.user.display_name else "")
-            or va.name
-        )
+        if is_va_pkg and whole is not None:
+            prev_pay = whole[0]
+        else:
+            prev_client_ids = {l.client_id for l in va_prev}
+            prev_flats = package_flats_for_period(db, va_id, prev_client_ids)
+            prev_pay = sum((l.va_pay for l in va_prev), Decimal("0")) + sum(prev_flats.values(), Decimal("0"))
+        full_name, legal_name = _va_names(va)
         client_rows = sorted(
             (
                 PayrollBreakdown(
                     label=k,
                     hours=v["hours"],
                     pay=Decimal("0") if redact else v["pay"],
+                    kind=v.get("kind") or "hourly",
                 )
                 for k, v in by_client.items()
             ),
@@ -208,7 +364,7 @@ def calculate_payroll(
             reverse=True,
         )
         results.append(PayrollVAResult(
-            va_id=va.id, va_name=full_name, currency=va.currency,
+            va_id=va.id, va_name=full_name, currency=pay_currency,
             total_hours=data["total_hours"],
             total_pay=Decimal("0") if redact else data["total_pay"],
             entry_count=len(entries), entries=entries,
@@ -227,9 +383,11 @@ def calculate_payroll(
             timesheet_submitted=sheet is not None,
             timesheet_status=(sheet.status.value if sheet and hasattr(sheet.status, "value") else (str(sheet.status) if sheet else None)),
             timesheet_id=sheet.id if sheet else None,
+            legal_name=legal_name,
+            compensation_mode=(va.compensation_mode or "hourly"),
         ))
         if not redact:
-            if va.currency == Currency.PHP:
+            if pay_currency == Currency.PHP:
                 total_php += data["total_pay"]
             else:
                 total_usd += data["total_pay"]
@@ -248,20 +406,27 @@ def list_timesheets(
     current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
     status_filter: str | None = None,
+    va_id: UUID | None = None,
     limit: int = 50,
 ):
-    """Pending (and recent) timesheet submissions for the VA Payroll inbox."""
+    """Pending (and recent) timesheet submissions for the VA Payroll inbox.
+
+    Pass va_id to load one VA's full history, newest first.
+    """
     q = (
         db.query(TimesheetSubmission)
         .options(joinedload(TimesheetSubmission.va).joinedload(VA.user))
         .order_by(TimesheetSubmission.submitted_at.desc())
     )
+    if va_id:
+        q = q.filter(TimesheetSubmission.va_id == va_id)
     if status_filter:
         try:
             q = q.filter(TimesheetSubmission.status == TimesheetStatus(status_filter))
         except ValueError:
             raise HTTPException(400, "Invalid timesheet status")
-    rows = q.limit(min(limit, 100)).all()
+    cap = 1000 if va_id else 100
+    rows = q.limit(min(max(limit, 1), cap)).all()
     out: list[TimesheetSubmissionResponse] = []
     for row in rows:
         logs = filter_logs_in_pay_period(
@@ -272,10 +437,7 @@ def list_timesheets(
             row.period_start,
             row.period_end,
         ).all()
-        full_name = (
-            (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
-            or (row.va.name if row.va else None)
-        )
+        full_name, _legal = _va_names(row.va)
         out.append(
             TimesheetSubmissionResponse(
                 id=row.id,
@@ -400,11 +562,24 @@ def review_timesheet(
     )
     if not row:
         raise HTTPException(404, "Timesheet not found")
+    actor_id = current.user.id
     row.status = TimesheetStatus.reviewed
     row.reviewed_at = datetime.now(timezone.utc)
-    row.reviewed_by = current.user.id
-    db.commit()
-    db.refresh(row)
+    row.reviewed_by = actor_id
+    # Same transaction as the timesheet status. Commit before any email or response.
+    _approve_submitted_logs(db, row.va_id, row.period_start, row.period_end)
+    _commit_or_rollback(db)
+    row = (
+        db.query(TimesheetSubmission)
+        .options(joinedload(TimesheetSubmission.va).joinedload(VA.user))
+        .filter(TimesheetSubmission.id == timesheet_id)
+        .first()
+    )
+    actor = db.query(User).filter(User.id == actor_id).first()
+    if row and actor:
+        _notify_timesheet_decision(row, actor, "approved")
+    if not row:
+        raise HTTPException(404, "Timesheet not found")
     logs = filter_logs_in_pay_period(
         db.query(WorkLog).filter(
             WorkLog.va_id == row.va_id,
@@ -413,17 +588,63 @@ def review_timesheet(
         row.period_start,
         row.period_end,
     ).all()
-    full_name = (
-        (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
-        or (row.va.name if row.va else None)
-    )
+    full_name, _legal = _va_names(row.va)
     return TimesheetSubmissionResponse(
         id=row.id,
         va_id=row.va_id,
         va_name=full_name,
         period_start=row.period_start,
         period_end=row.period_end,
-        status=row.status.value,
+        status=_status_value(row.status),
+        notes=row.notes,
+        submitted_at=row.submitted_at,
+        reviewed_at=row.reviewed_at,
+        entry_count=len(logs),
+        total_hours=sum((l.hours for l in logs), Decimal("0")),
+    )
+
+
+@router.post("/timesheets/{timesheet_id}/reject", response_model=TimesheetSubmissionResponse)
+def reject_timesheet(
+    timesheet_id: UUID,
+    current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Mark a submitted timesheet rejected. Does not lock the period the way approval does."""
+    row = (
+        db.query(TimesheetSubmission)
+        .options(joinedload(TimesheetSubmission.va).joinedload(VA.user))
+        .filter(TimesheetSubmission.id == timesheet_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "Timesheet not found")
+    if row.status == TimesheetStatus.reviewed:
+        raise HTTPException(400, "Approved timesheets are locked and cannot be rejected")
+    if row.status == TimesheetStatus.rejected:
+        raise HTTPException(400, "Timesheet is already rejected")
+    row.status = TimesheetStatus.rejected
+    row.reviewed_at = datetime.now(timezone.utc)
+    row.reviewed_by = current.user.id
+    db.commit()
+    db.refresh(row)
+    _notify_timesheet_decision(row, current.user, "rejected")
+    logs = filter_logs_in_pay_period(
+        db.query(WorkLog).filter(
+            WorkLog.va_id == row.va_id,
+            WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
+        ),
+        row.period_start,
+        row.period_end,
+    ).all()
+    full_name, _legal = _va_names(row.va)
+    return TimesheetSubmissionResponse(
+        id=row.id,
+        va_id=row.va_id,
+        va_name=full_name,
+        period_start=row.period_start,
+        period_end=row.period_end,
+        status=row.status.value if hasattr(row.status, "value") else str(row.status),
         notes=row.notes,
         submitted_at=row.submitted_at,
         reviewed_at=row.reviewed_at,

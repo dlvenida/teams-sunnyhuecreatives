@@ -149,7 +149,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                     <Link to="/admin/logs"><Button size="sm" variant="outline"><Clock className="h-3.5 w-3.5" /> All Logs</Button></Link>
                     <Link to="/admin/projects"><Button size="sm" variant="outline"><FolderKanban className="h-3.5 w-3.5" /> Projects</Button></Link>
                   </div>
-                  <p className="mt-3 text-[11px] text-muted-foreground">Use “Switch to their view” above to see the app exactly as {p.name.split(" ")[0]} sees it — their dashboard, Task Board, clock and logs.</p>
+                  {isAdmin && <p className="mt-3 text-[11px] text-muted-foreground">Use “Switch to their view” above to see the app exactly as {p.name.split(" ")[0]} sees it — their dashboard, Task Board, clock and logs.</p>}
                 </div>
               </div>
             </>)}
@@ -160,7 +160,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                   <p className="text-xs font-bold">Role per client</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     Job function titles only (not pay). Example: Social Media Manager for Client A, Email Marketing Specialist for Client B.
-                    {canEditRoles ? " Admin and Auditor can add or update anytime; the VA can also set their own." : ""}
+                    {canEditRoles ? " Admin and Project Manager can add or update anytime. The VA can view only." : " The VA can view only."}
                   </p>
                 </div>
                 {roleError && <p className="text-[11px] text-red-600">{roleError}</p>}
@@ -306,7 +306,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                   <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-2.5">Date</th><th className="p-2.5">Client / Project</th><th className="p-2.5">Description</th><th className="p-2.5">Hours</th>{showPricing && <th className="p-2.5">Earned</th>}<th className="p-2.5">Status</th></tr></thead>
                   <tbody>{detail.time_logs.map((l) => (
                     <tr key={l.id} className="border-b last:border-0"><td className="whitespace-nowrap p-2.5">{formatDate(l.work_date)}</td><td className="whitespace-nowrap p-2.5 font-medium">{l.client_name}{l.project_name ? <span className="block text-[10px] font-normal text-muted-foreground">{l.project_name}</span> : null}</td><td className="max-w-[220px] p-2.5"><span className="line-clamp-2">{l.description_plain}</span></td><td className="p-2.5 font-bold">{Number(l.hours).toFixed(2)}</td>{showPricing && <td className="p-2.5">{formatCurrency(l.va_pay, (p.currency as "PHP" | "USD") || "USD")}</td>}<td className="p-2.5 capitalize">{l.status}</td></tr>
-                  ))}{detail.time_logs.length === 0 && <tr><td colSpan={6} className="p-5 text-center text-muted-foreground">No time logs yet.</td></tr>}</tbody>
+                  ))}{detail.time_logs.length === 0 && <tr><td colSpan={showPricing ? 6 : 5} className="p-5 text-center text-muted-foreground">No time logs yet.</td></tr>}</tbody>
                 </table>
               </div>
               <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"><Clock className="h-3.5 w-3.5" /> Clock history ({detail.clock_history.length})</p>

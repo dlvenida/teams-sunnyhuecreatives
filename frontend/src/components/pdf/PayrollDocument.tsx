@@ -59,14 +59,14 @@ const styles = StyleSheet.create({
   partyValue: { fontSize: 11, color: COLORS.ink, marginBottom: 8 },
   tableHeader: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: COLORS.rowBorder, paddingBottom: 6, marginBottom: 4 },
   th: { fontSize: 8, color: COLORS.muted, letterSpacing: 0.6, textTransform: "uppercase" },
-  colDesc: { width: "55%" },
-  colRate: { width: "22%", textAlign: "right" },
-  colAmt: { width: "23%", textAlign: "right" },
+  colDesc: { width: "56%" },
+  colDate: { width: "24%" },
+  colHours: { width: "20%", textAlign: "right", fontFamily: PDF_FONT },
   tableRow: { flexDirection: "row", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.rowBorder, alignItems: "flex-start" },
   rowTitle: { fontSize: 11, color: COLORS.ink, marginBottom: 3 },
   rowSub: { fontSize: 8, color: COLORS.muted, lineHeight: 1.35 },
-  rowRate: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
-  rowAmt: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
+  rowDate: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink },
+  rowHours: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
   totalBlock: { alignItems: "flex-end", marginTop: 18, marginBottom: 20 },
   totalLabel: { fontSize: 8, color: COLORS.muted, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 4 },
   totalValue: { fontFamily: PDF_FONT, fontWeight: 700, fontSize: 22, color: COLORS.ink },
@@ -97,6 +97,9 @@ export function PayrollDocument({
   /** Admin-entered rate for this payroll period (1 USD = N PHP). */
   usdPhpRate?: number | null
 }) {
+  const billedName = settings.principal_name?.trim() || "Jane Laurine Venida"
+  const billedBusiness = settings.company_name?.trim() || "Sunny Hue Creatives"
+  const billedLocation = settings.location?.trim() || "Dumaguete City, Philippines"
   const period = `${formatInvoiceDate(payroll.period_start)} – ${formatInvoiceDate(payroll.period_end)}`
   const monthLabel = new Date(payroll.period_start + "T00:00:00").toLocaleDateString("en-US", {
     month: "long",
@@ -110,6 +113,8 @@ export function PayrollDocument({
   return (
     <Document>
       {payroll.vas.map((va) => {
+        const paidTo = (va as { legal_name?: string | null }).legal_name?.trim() || va.va_name
+        const packagePay = (va as { compensation_mode?: string | null }).compensation_mode === "va_package"
         const payNum = parseFloat(String(va.total_pay))
         const isUsd = va.currency === "USD"
         const phpFromRate = isUsd ? usdToPhp(payNum, usdPhpRate) : null
@@ -126,42 +131,14 @@ export function PayrollDocument({
             : null
         const hoursFallback = `${va.total_hours} hrs`
         const first = va.va_name.split(" ")[0]
-        const lines =
-          (va.by_client ?? []).length > 0
-            ? (va.by_client ?? []).map((c) => {
-                const cPay = parseFloat(String(c.pay))
-                const cPhp = isUsd && usdPhpRate ? usdToPhp(cPay, usdPhpRate) : null
+        const lines = va.entries.map((e) => {
+                const title = e.description || e.task_title || "Services"
+                const taskBit = e.task_title && e.description && e.task_title !== e.description ? e.task_title : ""
                 return {
-                  title: `${c.label} · VA services`,
-                  sub: period,
-                  rate: showPricing
-                    ? cPhp != null
-                      ? formatPdfCurrency(cPhp, "PHP")
-                      : formatCurrency(c.pay, va.currency)
-                    : "—",
-                  amount: showPricing
-                    ? cPhp != null
-                      ? formatPdfCurrency(cPhp, "PHP")
-                      : formatCurrency(c.pay, va.currency)
-                    : `${c.hours} hrs`,
-                }
-              })
-            : va.entries.map((e) => {
-                const ePay = parseFloat(String(e.pay))
-                const ePhp = isUsd && usdPhpRate ? usdToPhp(ePay, usdPhpRate) : null
-                return {
-                  title: e.client_name || "Services",
-                  sub: period,
-                  rate: showPricing
-                    ? ePhp != null
-                      ? formatPdfCurrency(ePhp, "PHP")
-                      : formatCurrency(e.rate, va.currency)
-                    : "—",
-                  amount: showPricing
-                    ? ePhp != null
-                      ? formatPdfCurrency(ePhp, "PHP")
-                      : formatCurrency(e.pay, va.currency)
-                    : `${e.hours} hrs`,
+                  title,
+                  sub: taskBit,
+                  date: e.work_date ? formatInvoiceDate(e.work_date) : period,
+                  hours: `${e.hours} hrs`,
                 }
               })
 
@@ -224,36 +201,39 @@ export function PayrollDocument({
               <View style={styles.partyCol}>
                 <Text style={styles.partyTitle}>Billed to</Text>
                 <Text style={styles.partyLabel}>Name</Text>
-                <Text style={styles.partyValue}>{settings.principal_name || "Jane Laurine Venida"}</Text>
+                <Text style={styles.partyValue}>{billedName}</Text>
                 <Text style={styles.partyLabel}>Business</Text>
-                <Text style={styles.partyValue}>
-                  {settings.company_name}
-                  {settings.location ? `\n${settings.location}` : "\nDumaguete City, Philippines"}
-                </Text>
+                <Text style={styles.partyValue}>{`${billedBusiness}\n${billedLocation}`}</Text>
               </View>
               <View style={styles.partyCol}>
                 <Text style={styles.partyTitle}>Paid to</Text>
-                <Text style={styles.partyLabel}>Team member</Text>
-                <Text style={styles.partyValue}>{va.va_name}</Text>
+                <Text style={styles.partyLabel}>Full legal name</Text>
+                <Text style={styles.partyValue}>{paidTo}</Text>
               </View>
             </View>
 
             <View style={styles.tableHeader}>
-              <Text style={[styles.th, styles.colDesc]}>Description</Text>
-              <Text style={[styles.th, styles.colRate]}>Rate</Text>
-              <Text style={[styles.th, styles.colAmt]}>Amount</Text>
+              <Text style={[styles.th, styles.colDesc]}>Task / description</Text>
+              <Text style={[styles.th, styles.colDate]}>Date</Text>
+              <Text style={[styles.th, styles.colHours]}>Hours</Text>
             </View>
 
             {lines.map((line, i) => (
               <View key={i} style={styles.tableRow} wrap={false}>
                 <View style={styles.colDesc}>
                   <Text style={styles.rowTitle}>{line.title}</Text>
-                  <Text style={styles.rowSub}>{line.sub}</Text>
+                  {line.sub ? <Text style={styles.rowSub}>{line.sub}</Text> : null}
                 </View>
-                <Text style={[styles.rowRate, styles.colRate]}>{line.rate}</Text>
-                <Text style={[styles.rowAmt, styles.colAmt]}>{line.amount}</Text>
+                <Text style={[styles.rowDate, styles.colDate]}>{line.date}</Text>
+                <Text style={[styles.rowHours, styles.colHours]}>{line.hours}</Text>
               </View>
             ))}
+
+            {packagePay && showPricing ? (
+              <Text style={[styles.payBody, { marginTop: 10 }]}>
+                Pay for this period is a fixed package covering all clients. The hours above are a record of work, not hours × rate.
+              </Text>
+            ) : null}
 
             <View style={styles.totalBlock}>
               <Text style={styles.totalLabel}>Total you receive</Text>

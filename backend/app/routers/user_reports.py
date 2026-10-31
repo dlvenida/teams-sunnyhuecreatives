@@ -88,6 +88,6 @@ def update_report(report_id: UUID, body: UserReportUpdate, current: Annotated[Cu
     # Tell the reporter what happened
     if report.reporter_user_id != current.user.id:
         push(db, [report.reporter_user_id], "system", f"📣 Your report was {report.status}: {report.title}",
-             (body.admin_note or f"An administrator/auditor marked your report as {report.status}.")[:200],
+             (body.admin_note or f"An administrator or project manager marked your report as {report.status}.")[:200],
              "/va/reports" if report.reporter_role == "va" else "/admin/user-reports")
     return _serialize(loaded)

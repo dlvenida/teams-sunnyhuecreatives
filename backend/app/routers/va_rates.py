@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session, joinedload
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_va
 from app.models import Client, RateStatus, VA, VARate
-from app.schemas import VARateAdminCreate, VARateCreate, VARateResponse
+from app.schemas import (
+    VACompensationResponse,
+    VACompensationUpdate,
+    VARateAdminCreate,
+    VARateCreate,
+    VARateResponse,
+)
 from app.services.notifications import admin_user_ids, push, va_user_id
 from app.services.va_rates import get_approved_rate
 
@@ -34,6 +40,40 @@ def _serialize(rate: VARate, active_id: UUID | None = None) -> VARateResponse:
         reviewed_at=rate.reviewed_at,
         is_active_approved=bool(active_id and rate.id == active_id),
     )
+
+
+def _compensation(va: VA) -> VACompensationResponse:
+    role = None
+    if va.user and va.user.role is not None:
+        role = va.user.role.value if hasattr(va.user.role, "value") else str(va.user.role)
+    return VACompensationResponse(
+        va_id=va.id,
+        va_name=va.name,
+        user_role=role,
+        compensation_mode=va.compensation_mode or "hourly",
+        va_package_amount=va.va_package_amount,
+        va_package_currency=va.va_package_currency or "USD",
+    )
+
+
+def _apply_compensation(va: VA, body: VACompensationUpdate) -> None:
+    mode = (body.compensation_mode or "").strip()
+    if mode not in ("hourly", "per_client_package", "va_package"):
+        raise HTTPException(400, "compensation_mode must be hourly, per_client_package, or va_package")
+    if mode == "va_package" and body.va_package_amount is None and va.va_package_amount is None:
+        raise HTTPException(400, "Whole-VA package needs an amount")
+    if body.va_package_currency:
+        cur = body.va_package_currency.strip().upper()
+        if cur not in ("PHP", "USD"):
+            raise HTTPException(400, "Currency must be PHP or USD")
+        va.va_package_currency = cur
+    elif va.va_package_currency is None:
+        va.va_package_currency = "USD"
+    if body.va_package_amount is not None:
+        if body.va_package_amount < 0:
+            raise HTTPException(400, "Package amount cannot be negative")
+        va.va_package_amount = body.va_package_amount
+    va.compensation_mode = mode
 
 
 def _load(db: Session, rate_id: UUID) -> VARate:
@@ -134,6 +174,37 @@ def submit_rate(
         "/admin/va-rates",
     )
     return _serialize(rate)
+
+
+@router.get("/mine/compensation", response_model=VACompensationResponse)
+def my_compensation(current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
+    """This VA's pay arrangement. Read-only here — admin edits it, and the Project Manager sets hers on Profile."""
+    va = db.query(VA).options(joinedload(VA.user)).filter(VA.id == current.va_id).first()
+    if not va:
+        raise HTTPException(404, "VA profile not found")
+    return _compensation(va)
+
+
+@router.get("/compensation", response_model=list[VACompensationResponse])
+def list_compensation(_: Annotated[CurrentUser, Depends(require_admin)], db: Annotated[Session, Depends(get_db)]):
+    rows = db.query(VA).options(joinedload(VA.user)).order_by(VA.name).all()
+    return [_compensation(va) for va in rows]
+
+
+@router.patch("/compensation/{va_id}", response_model=VACompensationResponse)
+def update_compensation(
+    va_id: UUID,
+    body: VACompensationUpdate,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    va = db.query(VA).options(joinedload(VA.user)).filter(VA.id == va_id).first()
+    if not va:
+        raise HTTPException(404, "VA not found")
+    _apply_compensation(va, body)
+    db.commit()
+    db.refresh(va)
+    return _compensation(va)
 
 
 @router.get("", response_model=list[VARateResponse])

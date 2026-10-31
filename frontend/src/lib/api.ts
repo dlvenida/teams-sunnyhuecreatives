@@ -1,6 +1,6 @@
 import { formatApiError } from "@/lib/errors"
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8090"
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8090"
 
 export { API_URL }
 
@@ -190,12 +190,21 @@ export async function apiFetchBlob(path: string): Promise<Blob | null> {
   const headers: Record<string, string> = {}
   if (access) headers["Authorization"] = `Bearer ${access}`
 
-  let res = await fetch(`${API_URL}${path}`, { headers })
+  let res: Response
+  try {
+    res = await fetch(`${API_URL}${path}`, { headers })
+  } catch {
+    throw new Error("Could not reach the API. Check your connection and try again.")
+  }
   if (res.status === 401 && getTokens().refresh) {
     access = await refreshAccessToken()
     if (access) {
       headers["Authorization"] = `Bearer ${access}`
-      res = await fetch(`${API_URL}${path}`, { headers })
+      try {
+        res = await fetch(`${API_URL}${path}`, { headers })
+      } catch {
+        throw new Error("Could not reach the API. Check your connection and try again.")
+      }
     }
   }
   if (res.status === 404) return null

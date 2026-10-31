@@ -133,7 +133,7 @@ export function LogsPage() {
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
           <h1 className="font-display text-xl font-bold">All Logs</h1>
-          <p className="text-xs text-muted-foreground">Every VA time log — approve what's submitted, spot the clock-ins, and keep payroll & reports clean.</p>
+          <p className="text-xs text-muted-foreground">{showPricing ? "Every VA time log — approve what's submitted, spot the clock-ins, and keep payroll & reports clean." : "Every VA time log — approve what's submitted and spot the clock-ins. Hours only."}</p>
         </div>
         <Button variant="outline" onClick={handleExport}><Download className="h-4 w-4" /> Export CSV</Button>
       </div>
@@ -142,7 +142,7 @@ export function LogsPage() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Hours Shown" value={`${counts.total.toFixed(2)} hrs`} subtitle={`${logs.length} entries in view`} />
         <StatCard title="Pending Approval" value={`${counts.sum(counts.submitted).toFixed(2)} hrs`} subtitle={`${counts.submitted.length} logs waiting on you`} />
-        <StatCard title="Approved" value={`${counts.sum(counts.approved).toFixed(2)} hrs`} subtitle="Ready for reports & payroll" />
+        <StatCard title="Approved" value={`${counts.sum(counts.approved).toFixed(2)} hrs`} subtitle={showPricing ? "Ready for reports & payroll" : "Approved hours"} />
         <StatCard title="Invoiced" value={`${counts.sum(counts.invoiced).toFixed(2)} hrs`} subtitle={`${counts.rejected.length} rejected in view`} />
       </div>
 
@@ -263,9 +263,9 @@ export function LogsPage() {
                 <div><Label>Start</Label><Input type="time" value={editForm.start_time} onChange={(e) => setEditForm({ ...editForm, start_time: e.target.value })} /></div>
                 <div><Label>End</Label><Input type="time" value={editForm.end_time} onChange={(e) => setEditForm({ ...editForm, end_time: e.target.value })} /></div>
                 {showPricing && <div><Label>VA Rate</Label><Input type="number" step="0.01" value={editForm.va_rate} onChange={(e) => setEditForm({ ...editForm, va_rate: e.target.value })} /></div>}
-                <div><Label>Status</Label><Select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}><option value="submitted">Submitted</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="invoiced">Invoiced</option></Select></div>
+                <div><Label>Status</Label><Select value={editForm.status} disabled={isAuditor && editForm.status === "invoiced"} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}><option value="submitted">Submitted</option><option value="approved">Approved</option><option value="rejected">Rejected</option>{(!isAuditor || editForm.status === "invoiced") && <option value="invoiced">Invoiced</option>}</Select></div>
               </div>
-              <p className="text-[11px] text-muted-foreground">Hours and pay recalculate from start/end and rate.</p>
+              <p className="text-[11px] text-muted-foreground">{showPricing ? "Hours and pay recalculate from start/end and rate." : "Hours recalculate from start and end."}</p>
               <Button variant="outline" size="sm" onClick={() => setViewingAtts(editing.id)}>
                 View attachments ({editing.attachment_count ?? 0})
               </Button>

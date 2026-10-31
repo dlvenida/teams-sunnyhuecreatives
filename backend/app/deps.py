@@ -62,7 +62,7 @@ def require_admin(current: Annotated[CurrentUser, Depends(get_current_user)]) ->
 def require_admin_or_auditor(current: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
     """Read-only monitoring access: admins and auditors (auditors watch, admins act)."""
     if current.role not in (UserRole.admin, UserRole.auditor):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Auditor access required")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Project Manager access required")
     return current
 
 
@@ -80,5 +80,5 @@ def require_va(current: Annotated[CurrentUser, Depends(get_current_user)]) -> Cu
 def require_ops(current: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
     """Admin or auditor managing tasks/projects (full ops, no money implied)."""
     if current.role not in (UserRole.admin, UserRole.auditor):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Auditor access required")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin or Project Manager access required")
     return current

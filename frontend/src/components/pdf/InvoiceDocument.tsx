@@ -1,11 +1,7 @@
 import { Document, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer"
 import type { Invoice, InvoiceLineItem, Settings } from "@/lib/types"
-import {
-  formatCurrency,
-  formatInvoiceDate,
-  formatInvoiceRate,
-  formatInvoiceTotal,
-} from "@/lib/utils"
+import { formatInvoiceDate, formatPdfCurrency } from "@/lib/utils"
+import { PDF_FONT } from "@/lib/pdfFonts"
 
 const COLORS = {
   page: "#fbf4f6",
@@ -25,7 +21,7 @@ const styles = StyleSheet.create({
     paddingTop: 28,
     paddingBottom: 36,
     paddingHorizontal: 40,
-    fontFamily: "Helvetica",
+    fontFamily: PDF_FONT,
     fontSize: 10,
     color: COLORS.ink,
     backgroundColor: COLORS.page,
@@ -74,7 +70,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 22,
   },
-  bannerAmount: { fontSize: 22, fontFamily: "Times-Bold", color: COLORS.white },
+  bannerAmount: { fontSize: 22, fontFamily: PDF_FONT, fontWeight: 700, color: COLORS.white },
   bannerDue: { fontSize: 11, color: COLORS.white, marginTop: 2 },
   bannerPeriodLabel: { fontSize: 9, color: "rgba(255,255,255,0.85)", textAlign: "right" },
   bannerPeriod: { fontSize: 12, color: COLORS.white, marginTop: 3, textAlign: "right" },
@@ -107,9 +103,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: "uppercase",
   },
-  colDesc: { width: "55%" },
-  colRate: { width: "22%", textAlign: "right" },
-  colAmt: { width: "23%", textAlign: "right" },
+  colDesc: { width: "55%", fontFamily: PDF_FONT },
+  colRate: { width: "22%", textAlign: "right", fontFamily: PDF_FONT },
+  colAmt: { width: "23%", textAlign: "right", fontFamily: PDF_FONT },
   tableRow: {
     flexDirection: "row",
     paddingVertical: 10,
@@ -117,10 +113,9 @@ const styles = StyleSheet.create({
     borderBottomColor: COLORS.rowBorder,
     alignItems: "flex-start",
   },
-  rowTitle: { fontSize: 11, color: COLORS.ink, marginBottom: 3 },
-  rowSub: { fontSize: 8, color: COLORS.muted, lineHeight: 1.35 },
-  rowRate: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
-  rowAmt: { fontSize: 10, color: COLORS.ink, textAlign: "right" },
+  rowTitle: { fontSize: 11, fontFamily: PDF_FONT, color: COLORS.ink, lineHeight: 1.4 },
+  rowRate: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
+  rowAmt: { fontSize: 10, fontFamily: PDF_FONT, color: COLORS.ink, textAlign: "right" },
   totalBlock: { alignItems: "flex-end", marginTop: 18, marginBottom: 20 },
   totalLabel: {
     fontSize: 8,
@@ -129,7 +124,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginBottom: 4,
   },
-  totalValue: { fontFamily: "Times-Bold", fontSize: 22, color: COLORS.ink },
+  totalValue: { fontFamily: PDF_FONT, fontWeight: 700, fontSize: 22, color: COLORS.ink },
   payBox: {
     backgroundColor: COLORS.payBg,
     borderLeftWidth: 3,
@@ -140,7 +135,7 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   payTitle: { fontSize: 10, color: COLORS.ink, marginBottom: 4 },
-  payBody: { fontSize: 9, color: COLORS.muted, lineHeight: 1.45 },
+  payBody: { fontSize: 9, fontFamily: PDF_FONT, color: COLORS.muted, lineHeight: 1.45 },
   footer: { fontSize: 8, color: COLORS.muted, textAlign: "center", marginTop: 8 },
 })
 
@@ -154,17 +149,29 @@ function paymentCopy(method: string, settings: Settings, bankDetails?: string | 
   return `Please send payment via bank transfer:\n${bankDetails || "Details on request."}`
 }
 
-function lineParts(item: InvoiceLineItem) {
-  const parts = (item.description || "").split("\n")
-  return { title: parts[0] || "Services", sub: parts.slice(1).join(" ").trim() }
+function descriptionLines(description: string): string[] {
+  if (!description) return ["Services"]
+  const lines = description.split(/\r?\n/)
+  return lines.length ? lines : ["Services"]
 }
 
-function rateLabel(item: InvoiceLineItem, billingType: string) {
+function invoiceCurrency(invoice: Invoice): "PHP" | "USD" {
+  const code = (invoice as Invoice & { currency?: string | null }).currency
+  return code === "PHP" ? "PHP" : "USD"
+}
+
+function rateLabel(item: InvoiceLineItem, billingType: string, currency: "PHP" | "USD") {
   const desc = (item.description || "").toLowerCase()
-  if (billingType === "hourly" || desc.includes("va services") || desc.includes("overage")) {
-    return formatInvoiceRate(item.rate)
+  const money = formatPdfCurrency(item.rate ?? 0, currency)
+  if (
+    billingType === "hourly" ||
+    desc.includes("va services") ||
+    desc.includes("overage") ||
+    desc.includes("total hours")
+  ) {
+    return `${money}/hr`
   }
-  return formatCurrency(item.rate)
+  return money
 }
 
 function dueLabel(invoice: Invoice) {
@@ -187,6 +194,8 @@ export function InvoiceDocument({
 
   const priced = (invoice.line_items || []).filter((li) => Number(li.amount) > 0)
   const lines = priced.length > 0 ? priced : invoice.line_items || []
+  const currency = invoiceCurrency(invoice)
+  const clientName = invoice.client_name?.trim() || "Client"
 
   return (
     <Document>
@@ -207,18 +216,18 @@ export function InvoiceDocument({
         <View style={styles.titleBlock}>
           <Text style={styles.title}>Invoice</Text>
           <Text style={styles.subtitle}>
-            Social media VA services · Prepared for {invoice.client_name}
+            Social media VA services · Prepared for {clientName}
           </Text>
         </View>
 
         <View style={styles.banner}>
           <View>
-            <Text style={styles.bannerAmount}>{formatCurrency(invoice.amount)}</Text>
+            <Text style={styles.bannerAmount}>{formatPdfCurrency(invoice.amount ?? 0, currency)}</Text>
             <Text style={styles.bannerDue}>due this period</Text>
           </View>
           <View>
             <Text style={styles.bannerPeriodLabel}>Service period</Text>
-            <Text style={styles.bannerPeriod}>{invoice.period_label}</Text>
+            <Text style={styles.bannerPeriod}>{invoice.period_label || "—"}</Text>
           </View>
         </View>
 
@@ -226,16 +235,15 @@ export function InvoiceDocument({
           <View style={styles.partyCol}>
             <Text style={styles.partyTitle}>Billed to</Text>
             <Text style={styles.partyLabel}>Client</Text>
-            <Text style={styles.partyValue}>{invoice.client_name}</Text>
+            <Text style={styles.partyValue}>{clientName}</Text>
           </View>
           <View style={styles.partyCol}>
             <Text style={styles.partyTitle}>Paid to</Text>
             <Text style={styles.partyLabel}>Name</Text>
-            <Text style={styles.partyValue}>{settings.principal_name}</Text>
+            <Text style={styles.partyValue}>{settings.principal_name || "—"}</Text>
             <Text style={styles.partyLabel}>Business</Text>
             <Text style={styles.partyValue}>
-              {settings.company_name}
-              {settings.location ? `\n${settings.location}` : ""}
+              {`${settings.company_name || "Sunny Hue Creatives"}${settings.location ? `\n${settings.location}` : ""}`}
             </Text>
           </View>
         </View>
@@ -247,26 +255,26 @@ export function InvoiceDocument({
         </View>
 
         {lines.map((item) => {
-          const { title, sub } = lineParts(item)
-          // Never show timesheet / hour-log details on the client invoice — only service copy.
-          const serviceSub = sub && !/hrs|mins|logged/i.test(sub) ? sub : ""
           return (
-            <View key={item.id} style={styles.tableRow} wrap={false}>
+            <View key={item.id} style={styles.tableRow}>
               <View style={styles.colDesc}>
-                <Text style={styles.rowTitle}>{title}</Text>
-                {!!serviceSub && <Text style={styles.rowSub}>{serviceSub}</Text>}
+                {descriptionLines(item.description).map((line, index) => (
+                  <Text key={`${item.id}-${index}`} style={styles.rowTitle}>
+                    {line.length ? line : " "}
+                  </Text>
+                ))}
               </View>
               <Text style={[styles.rowRate, styles.colRate]}>
-                {rateLabel(item, invoice.billing_type)}
+                {rateLabel(item, invoice.billing_type, currency)}
               </Text>
-              <Text style={[styles.rowAmt, styles.colAmt]}>{formatCurrency(item.amount)}</Text>
+              <Text style={[styles.rowAmt, styles.colAmt]}>{formatPdfCurrency(item.amount ?? 0, currency)}</Text>
             </View>
           )
         })}
 
         <View style={styles.totalBlock}>
           <Text style={styles.totalLabel}>Total due</Text>
-          <Text style={styles.totalValue}>{formatInvoiceTotal(invoice.amount)}</Text>
+          <Text style={styles.totalValue}>{formatPdfCurrency(invoice.amount ?? 0, currency)} {currency}</Text>
         </View>
 
         <View style={styles.payBox}>
@@ -283,7 +291,7 @@ export function InvoiceDocument({
         </View>
 
         <Text style={styles.footer}>
-          {settings.company_name} · Invoice {invoice.invoice_number} · {invoice.period_label}
+          {settings.company_name || "Sunny Hue Creatives"} · Invoice {invoice.invoice_number || "—"} · {invoice.period_label || "—"}
         </Text>
       </Page>
     </Document>

@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import type { Client, ClientDetail, ClientFinancialRow, ClientTeamMember, SubClient, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -26,13 +26,11 @@ import { CLIENT_VA_ROLE_SUGGESTIONS } from "@/lib/clientVaRoles"
 
 type Tab = "clients" | "sub-clients"
 type StatusFilter = "all" | "active" | "archived" | "pending"
+type PayChoice = "hourly" | "package"
 
 interface ClientForm {
   name: string
   billing_type: "hourly" | "fixed" | "package_hours"
-  default_rate: string
-  included_hours?: string
-  overage_rate?: string
 }
 
 interface SubClientForm {
@@ -40,8 +38,44 @@ interface SubClientForm {
   name: string
 }
 
-const emptyClient: ClientForm = { name: "", billing_type: "hourly", default_rate: "" }
+interface ProposalVaRow {
+  key: string
+  va_id: string
+  role: string
+  pay_type: PayChoice
+  amount: string
+}
+
+interface AssignDraft {
+  va_id: string
+  role: string
+  task_title: string
+  pay_type: PayChoice
+  amount: string
+}
+
+type TeamRow = ClientTeamMember & {
+  rate_amount?: string | null
+  rate_pay_type?: string | null
+  rate_currency?: string | null
+  va_currency?: string | null
+}
+
+const emptyClient: ClientForm = { name: "", billing_type: "hourly" }
 const emptySub: SubClientForm = { client_id: "", name: "" }
+const emptyAssign: AssignDraft = { va_id: "", role: "", task_title: "", pay_type: "hourly", amount: "" }
+
+let proposalRowSeq = 0
+function newProposalRow(): ProposalVaRow {
+  proposalRowSeq += 1
+  return { key: `proposal-va-${proposalRowSeq}`, va_id: "", role: "", pay_type: "hourly", amount: "" }
+}
+
+function payTypeLabel(pay: string | null | undefined) {
+  if (pay === "package" || pay === "fixed") return "Fixed"
+  if (pay === "hourly") return "Hourly"
+  return "—"
+}
 
 export function ClientsPage() {
   const authUser = getAuthUser()
@@ -63,9 +97,16 @@ export function ClientsPage() {
   const [clientForm, setClientForm] = useState<ClientForm>(emptyClient)
   const [subForm, setSubForm] = useState<SubClientForm>(emptySub)
   const [error, setError] = useState("")
-  const [teamAddVaId, setTeamAddVaId] = useState("")
-  const [teamAddRole, setTeamAddRole] = useState("")
+  const [detailError, setDetailError] = useState("")
+  const [rateError, setRateError] = useState("")
+  const [assignAllVas, setAssignAllVas] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
   const [editingTeamRole, setEditingTeamRole] = useState<{ va_id: string; role: string } | null>(null)
+  const [proposalVas, setProposalVas] = useState<ProposalVaRow[]>(() => [newProposalRow()])
+  const [assignDraft, setAssignDraft] = useState<AssignDraft>(emptyAssign)
+  const [assignSaving, setAssignSaving] = useState(false)
+  const [rateDrafts, setRateDrafts] = useState<Record<string, { amount: string; pay_type: PayChoice }>>({})
+  const [savingRateId, setSavingRateId] = useState<string | null>(null)
 
   const { data: clients = [] } = useQuery({
     queryKey: ["clients"],
@@ -75,10 +116,10 @@ export function ClientsPage() {
     queryKey: ["sub-clients"],
     queryFn: () => apiFetch<SubClient[]>("/clients/sub-clients"),
   })
-  const { data: allVas = [] } = useQuery({
+  const { data: allVas = [], isLoading: vasLoading } = useQuery({
     queryKey: ["vas"],
     queryFn: () => apiFetch<VA[]>("/vas"),
-    enabled: canEditTeamRoles && !!viewingId,
+    enabled: (canEditTeamRoles && !!viewingId) || (isAdmin && modal === "approve"),
   })
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ["client-detail", viewingId],
@@ -108,8 +149,6 @@ export function ClientsPage() {
     onSuccess: () => {
       invalidateDetail()
       setEditingTeamRole(null)
-      setTeamAddVaId("")
-      setTeamAddRole("")
     },
   })
   const removeTeamRole = useMutation({
@@ -155,9 +194,7 @@ export function ClientsPage() {
         body: JSON.stringify({
           name: clientForm.name,
           billing_type: clientForm.billing_type,
-          default_rate: isAuditor ? null : (clientForm.default_rate ? parseFloat(clientForm.default_rate) : null),
-          included_hours: isAuditor ? null : (clientForm.included_hours ? parseFloat(clientForm.included_hours) : null),
-          overage_rate: isAuditor ? null : (clientForm.overage_rate ? parseFloat(clientForm.overage_rate) : null),
+          assign_all_vas: assignAllVas,
         }),
       }),
     onSuccess: () => {
@@ -168,19 +205,47 @@ export function ClientsPage() {
   })
 
   const approveClient = useMutation({
-    mutationFn: () =>
-      apiFetch(`/clients/${approvingClient!.id}/approve`, {
+    mutationFn: async () => {
+      if (!approvingClient) throw new Error("No client selected")
+      const rows = proposalVas.filter((r) => r.va_id)
+      const seen = new Set<string>()
+      for (const row of rows) {
+        if (seen.has(row.va_id)) throw new Error("Each VA can only be assigned once.")
+        seen.add(row.va_id)
+        if (row.amount.trim()) {
+          const n = parseFloat(row.amount)
+          if (!Number.isFinite(n) || n <= 0) throw new Error("Enter a rate greater than zero, or leave the amount blank.")
+        }
+      }
+      const billing = clientForm.billing_type === "fixed" ? "fixed" : "hourly"
+      for (const row of rows) {
+        await apiFetch(`/clients/${approvingClient.id}/team/${row.va_id}`, {
+          method: "PUT",
+          body: JSON.stringify({ role: row.role.trim() || "General VA" }),
+        })
+        if (row.amount.trim()) {
+          const va = allVas.find((v) => v.id === row.va_id)
+          await apiFetch("/va-rates", {
+            method: "POST",
+            body: JSON.stringify({
+              va_id: row.va_id,
+              client_id: approvingClient.id,
+              pay_type: row.pay_type,
+              currency: va?.currency || "PHP",
+              amount: parseFloat(row.amount),
+            }),
+          })
+        }
+      }
+      await apiFetch(`/clients/${approvingClient.id}/approve`, {
         method: "POST",
-        body: JSON.stringify({
-          billing_type: clientForm.billing_type,
-          default_rate: clientForm.default_rate ? parseFloat(clientForm.default_rate) : null,
-          included_hours: clientForm.included_hours ? parseFloat(clientForm.included_hours) : null,
-          overage_rate: clientForm.overage_rate ? parseFloat(clientForm.overage_rate) : null,
-        }),
-      }),
+        body: JSON.stringify({ billing_type: billing }),
+      })
+    },
     onSuccess: () => {
       invalidate()
       qc.invalidateQueries({ queryKey: ["client-financials"] })
+      qc.invalidateQueries({ queryKey: ["client-detail"] })
       closeModal()
     },
     onError: (err: Error) => setError(err.message),
@@ -241,6 +306,8 @@ export function ClientsPage() {
     setEditingSub(null)
     setClientForm(emptyClient)
     setSubForm(emptySub)
+    setAssignAllVas(false)
+    setProposalVas([newProposalRow()])
     setError("")
   }
 
@@ -256,11 +323,33 @@ export function ClientsPage() {
     setApprovingClient(client)
     setClientForm({
       name: client.name,
-      billing_type: client.billing_type,
-      default_rate: client.default_rate || "",
+      billing_type: client.billing_type === "hourly" ? "hourly" : "fixed",
     })
+    setProposalVas([newProposalRow()])
     setModal("approve")
   }
+
+  useEffect(() => {
+    const id = searchParams.get("proposal")
+    if (!id || clients.length === 0) return
+    const client = clients.find((c) => c.id === id)
+    if (!client) return
+    setTab("clients")
+    setStatusFilter("pending")
+    if (isAdmin && client.approval_status === "pending") openApprove(client)
+    else setViewingId(client.id)
+    const next = new URLSearchParams(searchParams)
+    next.delete("proposal")
+    setSearchParams(next, { replace: true })
+  }, [clients, searchParams, isAdmin, setSearchParams])
+
+  useEffect(() => {
+    setRateDrafts({})
+    setAssignDraft(emptyAssign)
+    setDetailError("")
+    setRateError("")
+    setSavingRateId(null)
+  }, [viewingId])
 
   const openEditClient = (client: Client) => {
     setError("")
@@ -268,7 +357,6 @@ export function ClientsPage() {
     setClientForm({
       name: client.name,
       billing_type: client.billing_type,
-      default_rate: client.default_rate || "",
     })
     setModal("edit")
   }
@@ -284,9 +372,6 @@ export function ClientsPage() {
     const body = {
       name: clientForm.name,
       billing_type: clientForm.billing_type,
-      default_rate: clientForm.default_rate ? parseFloat(clientForm.default_rate) : null,
-      included_hours: clientForm.included_hours ? parseFloat(clientForm.included_hours) : null,
-      overage_rate: clientForm.overage_rate ? parseFloat(clientForm.overage_rate) : null,
     }
     if (modal === "edit" && editingClient) {
       updateClient.mutate({ id: editingClient.id, body })
@@ -315,8 +400,94 @@ export function ClientsPage() {
   const restoreSub = (sub: SubClient) =>
     updateSub.mutate({ id: sub.id, body: { is_active: true } })
 
+  const updateProposalRow = (key: string, patch: Partial<ProposalVaRow>) => {
+    setProposalVas((rows) => rows.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+  }
+
+  const saveVaRate = async (vaId: string, draft: { amount: string; pay_type: PayChoice }, currency: string) => {
+    const amount = parseFloat(draft.amount)
+    if (!viewingId || !Number.isFinite(amount) || amount <= 0) {
+      setRateError("Enter a rate amount greater than zero.")
+      return
+    }
+    setSavingRateId(vaId)
+    setRateError("")
+    try {
+      await apiFetch("/va-rates", {
+        method: "POST",
+        body: JSON.stringify({
+          va_id: vaId,
+          client_id: viewingId,
+          pay_type: draft.pay_type,
+          currency: currency === "USD" ? "USD" : "PHP",
+          amount,
+        }),
+      })
+      invalidateDetail()
+    } catch (err) {
+      setRateError(err instanceof Error ? err.message : "Could not save rate")
+    } finally {
+      setSavingRateId(null)
+    }
+  }
+
+  const saveAssignment = async () => {
+    if (!assignDraft.va_id || !viewingId) return
+    if (isAdmin && assignDraft.amount.trim()) {
+      const n = parseFloat(assignDraft.amount)
+      if (!Number.isFinite(n) || n <= 0) {
+        setDetailError("Enter a rate amount greater than zero, or leave it blank.")
+        return
+      }
+    }
+    const existing = (detail?.team ?? []).find((m) => m.va_id === assignDraft.va_id)
+    const roleToSave = assignDraft.role.trim() || existing?.role || "General VA"
+    setAssignSaving(true)
+    setDetailError("")
+    try {
+      await apiFetch(`/clients/${viewingId}/team/${assignDraft.va_id}`, {
+        method: "PUT",
+        body: JSON.stringify({ role: roleToSave }),
+      })
+      const title = assignDraft.task_title.trim()
+      if (title) {
+        await apiFetch("/tasks", {
+          method: "POST",
+          body: JSON.stringify({
+            title,
+            client_id: viewingId,
+            assignee_va_id: assignDraft.va_id,
+          }),
+        })
+      }
+      if (isAdmin && assignDraft.amount.trim()) {
+        const va = allVas.find((v) => v.id === assignDraft.va_id)
+        await apiFetch("/va-rates", {
+          method: "POST",
+          body: JSON.stringify({
+            va_id: assignDraft.va_id,
+            client_id: viewingId,
+            pay_type: assignDraft.pay_type,
+            currency: va?.currency || "PHP",
+            amount: parseFloat(assignDraft.amount),
+          }),
+        })
+      }
+      invalidateDetail()
+      setAssignDraft(emptyAssign)
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : "Could not save")
+    } finally {
+      setAssignSaving(false)
+    }
+  }
+
   const activeClients = clients.filter((c) => c.is_active && (c.approval_status || "approved") === "approved")
-  const pendingCount = clients.filter((c) => c.approval_status === "pending").length
+  const pendingClients = useMemo(
+    () => clients.filter((c) => c.approval_status === "pending"),
+    [clients],
+  )
+  const pendingCount = pendingClients.length
   const canCreate = tab === "clients" ? (isAdmin || isAuditor) : isAdmin
 
   return (
@@ -326,7 +497,7 @@ export function ClientsPage() {
           <h1 className="font-display text-base font-semibold">Clients</h1>
           {isAuditor && (
             <p className="text-[11px] text-muted-foreground">
-              Propose a new client for admin review. It won’t go live until the admin sets the rate and approves it.
+              Propose a new client for admin review. It stays pending until an admin approves it and sets each VA’s rate.
             </p>
           )}
         </div>
@@ -383,6 +554,40 @@ export function ClientsPage() {
         </Select>
       </div>
 
+      {pendingClients.length > 0 && (
+        <section className="rounded-xl border border-amber-300 bg-amber-50 p-3">
+          <p className="text-xs font-bold text-amber-950">
+            Waiting for approval ({pendingClients.length})
+          </p>
+          <ul className="mt-2 divide-y divide-amber-200/80">
+            {pendingClients.map((c) => (
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                <div>
+                  <p className="text-xs font-semibold text-amber-950">{c.name}</p>
+                  <p className="text-[11px] text-amber-900/80">
+                    {c.proposed_by_name ? `Proposed by ${c.proposed_by_name}` : "Pending admin review"}
+                  </p>
+                </div>
+                {isAdmin && (
+                  <div className="flex gap-1">
+                    <Button size="sm" variant="success" onClick={() => openApprove(c)}>Approve</Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        if (confirm(`Decline proposal for "${c.name}"?`)) rejectClient.mutate(c.id)
+                      }}
+                    >
+                      Decline
+                    </Button>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {tab === "clients" ? (
         <div className="overflow-x-auto rounded-xl border bg-card">
           <table className="w-full text-xs">
@@ -390,7 +595,6 @@ export function ClientsPage() {
               <tr className="border-b bg-muted/40 text-left text-muted-foreground">
                 <th className="p-3 font-medium">Name</th>
                 <th className="p-3 font-medium">Billing</th>
-                {showPricing && <th className="p-3 font-medium">Default Rate</th>}
                 {isAdmin && <><th className="p-3 font-medium">Total Hours</th><th className="p-3 font-medium">Total Earned</th><th className="p-3 font-medium">VA Earned</th><th className="p-3 font-medium">Net</th></>}
                 <th className="p-3 font-medium">Status</th>
                 <th className="p-3 font-medium text-right">Actions</th>
@@ -399,7 +603,7 @@ export function ClientsPage() {
             <tbody>
               {filteredClients.length === 0 ? (
                 <tr>
-                  <td colSpan={(showPricing ? 5 : 4) + (isAdmin ? 4 : 0)} className="p-6 text-center text-muted-foreground">
+                  <td colSpan={4 + (isAdmin ? 4 : 0)} className="p-6 text-center text-muted-foreground">
                     No clients found
                   </td>
                 </tr>
@@ -407,8 +611,7 @@ export function ClientsPage() {
                 filteredClients.map((c) => (
                   <tr key={c.id} className="cursor-pointer border-b last:border-0 hover:bg-primary/[0.04]" onClick={() => { setViewingId(c.id); setDetailTab("overview") }}>
                     <td className="p-3 font-semibold text-primary">{c.name}</td>
-                    <td className="p-3 capitalize">{c.billing_type}</td>
-                    {showPricing && <td className="p-3">{c.default_rate || "—"}</td>}
+                    <td className="p-3 capitalize">{c.billing_type === "package_hours" ? "package hours" : c.billing_type}</td>
                     {isAdmin && (() => { const f = financialMap[c.id]; return (<>
                       <td className="p-3 font-semibold">{f ? `${Number(f.total_hours).toFixed(1)} hrs` : "—"}</td>
                       <td className="p-3">{f ? formatCurrency(f.total_earned) : "—"}</td>
@@ -627,8 +830,10 @@ export function ClientsPage() {
                           <Users className="h-3.5 w-3.5" /> VA roles for {detail.client.name}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          Job titles only (not pay). Same VA can be “Social Media Manager” here and “Email Marketing Specialist” on another client.
-                          {canEditTeamRoles ? " Admin and Auditor can add or edit." : ""}
+                          {isAdmin
+                            ? "Each VA keeps her own role. Set her hourly or fixed rate below — Save approves that rate."
+                            : "Job titles for this client. The same VA can be “Social Media Manager” here and “Email Marketing Specialist” on another client."}
+                          {canEditTeamRoles ? " Admin and Project Manager can add or edit roles." : ""}
                         </p>
                       </div>
                     </div>
@@ -723,43 +928,144 @@ export function ClientsPage() {
                       </div>
                       </div>
                     )}
+                    {isAdmin && (detail.team ?? []).length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">VA rates</p>
+                        <ul className="space-y-2">
+                          {(detail.team ?? []).map((raw) => {
+                            const m = raw as TeamRow
+                            const draft = rateDrafts[m.va_id] ?? {
+                              amount: m.rate_amount ?? "",
+                              pay_type: (m.rate_pay_type === "package" ? "package" : "hourly") as PayChoice,
+                            }
+                            const currency = (m.rate_currency || m.va_currency) === "USD" ? "USD" : "PHP"
+                            return (
+                              <li key={`rate-${m.va_id}`} className="flex flex-wrap items-end gap-2 rounded-xl border bg-white/80 p-2.5">
+                                <div className="min-w-[140px] flex-1">
+                                  <p className="text-[10px] font-semibold text-muted-foreground">VA</p>
+                                  <p className="text-xs font-bold">{m.va_name}</p>
+                                  <p className="text-[10px] text-muted-foreground">
+                                    {m.rate_amount
+                                      ? `${formatCurrency(m.rate_amount, currency)} · ${payTypeLabel(m.rate_pay_type)}`
+                                      : "No rate yet"}
+                                  </p>
+                                </div>
+                                <div>
+                                  <Label className="text-[10px]">Rate ({currency})</Label>
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    className="h-8 w-[120px] text-xs"
+                                    value={draft.amount}
+                                    onChange={(e) => setRateDrafts((prev) => ({
+                                      ...prev,
+                                      [m.va_id]: { ...draft, amount: e.target.value },
+                                    }))}
+                                  />
+                                </div>
+                                <div>
+                                  <Label className="text-[10px]">Billing</Label>
+                                  <Select
+                                    className="h-8 w-[120px] text-xs"
+                                    value={draft.pay_type}
+                                    onChange={(e) => setRateDrafts((prev) => ({
+                                      ...prev,
+                                      [m.va_id]: { ...draft, pay_type: e.target.value as PayChoice },
+                                    }))}
+                                  >
+                                    <option value="hourly">Hourly</option>
+                                    <option value="package">Fixed</option>
+                                  </Select>
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="gold"
+                                  disabled={savingRateId === m.va_id || !draft.amount.trim()}
+                                  onClick={() => void saveVaRate(m.va_id, draft, currency)}
+                                >
+                                  {savingRateId === m.va_id ? "Saving…" : "Save"}
+                                </Button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                        {rateError && <p className="text-[11px] text-red-600">{rateError}</p>}
+                      </div>
+                    )}
                     {canEditTeamRoles && (
-                      <div className="mt-3 grid gap-2 rounded-xl border border-dashed border-primary/25 bg-primary/[0.03] p-3 sm:grid-cols-[1fr_1fr_auto]">
-                        <div>
-                          <Label className="text-[10px]">Add VA</Label>
-                          <Select value={teamAddVaId} onChange={(e) => setTeamAddVaId(e.target.value)} className="h-9">
-                            <option value="">Select VA…</option>
-                            {allVas
-                              .filter((v) => v.is_active && !(detail.team ?? []).some((m) => m.va_id === v.id && m.has_explicit_role))
-                              .map((v) => (
+                      <div className="mt-3 space-y-2 rounded-xl border border-dashed border-primary/25 bg-primary/[0.03] p-3">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary">Assign VA</p>
+                        <p className="text-xs text-muted-foreground">
+                          Pick a VA, set her role for this client, and add a task title to assign a task. Save applies this row. Add another VA after it saves.
+                        </p>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div>
+                            <Label className="text-[10px]">VA</Label>
+                            <Select value={assignDraft.va_id} onChange={(e) => setAssignDraft({ ...assignDraft, va_id: e.target.value })} className="h-9">
+                              <option value="">Select VA…</option>
+                              {allVas.filter((v) => v.is_active).map((v) => (
                                 <option key={v.id} value={v.id}>{v.name}</option>
                               ))}
-                          </Select>
-                        </div>
-                        <div>
-                          <Label className="text-[10px]">Role for this client</Label>
-                          <Input
-                            className="h-9"
-                            list="client-page-va-role-suggestions"
-                            placeholder="e.g. Graphic Designer"
-                            value={teamAddRole}
-                            onChange={(e) => setTeamAddRole(e.target.value)}
-                          />
-                        </div>
-                        <div className="flex items-end">
-                          <Button
-                            size="sm"
-                            variant="gold"
-                            className="w-full"
-                            disabled={!teamAddVaId || saveTeamRole.isPending}
-                            onClick={() => saveTeamRole.mutate({ va_id: teamAddVaId, role: teamAddRole })}
-                          >
-                            <Plus className="h-3.5 w-3.5" /> Add
-                          </Button>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">Role for this client</Label>
+                            <Input
+                              className="h-9"
+                              list="client-page-va-role-suggestions"
+                              placeholder="e.g. Graphic Designer"
+                              value={assignDraft.role}
+                              onChange={(e) => setAssignDraft({ ...assignDraft, role: e.target.value })}
+                            />
+                          </div>
+                          <div className="sm:col-span-2">
+                            <Label className="text-[10px]">Task title</Label>
+                            <Input
+                              className="h-9"
+                              placeholder="Task under this client"
+                              value={assignDraft.task_title}
+                              onChange={(e) => setAssignDraft({ ...assignDraft, task_title: e.target.value })}
+                            />
+                          </div>
+                          {isAdmin && (
+                            <>
+                              <div>
+                                <Label className="text-[10px]">Rate billing</Label>
+                                <Select
+                                  className="h-9"
+                                  value={assignDraft.pay_type}
+                                  onChange={(e) => setAssignDraft({ ...assignDraft, pay_type: e.target.value as PayChoice })}
+                                >
+                                  <option value="hourly">Hourly</option>
+                                  <option value="package">Fixed</option>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label className="text-[10px]">
+                                  Rate amount{assignDraft.va_id ? ` (${allVas.find((v) => v.id === assignDraft.va_id)?.currency || "PHP"})` : ""}
+                                </Label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  className="h-9"
+                                  value={assignDraft.amount}
+                                  onChange={(e) => setAssignDraft({ ...assignDraft, amount: e.target.value })}
+                                />
+                              </div>
+                            </>
+                          )}
                         </div>
                         <datalist id="client-page-va-role-suggestions">
                           {CLIENT_VA_ROLE_SUGGESTIONS.map((r) => <option key={r} value={r} />)}
                         </datalist>
+                        {detailError && <p className="text-[11px] text-red-600">{detailError}</p>}
+                        <div className="flex justify-end">
+                          <Button size="sm" variant="gold" disabled={!assignDraft.va_id || assignSaving} onClick={() => void saveAssignment()}>
+                            {assignSaving ? "Saving…" : "Save"}
+                          </Button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -817,12 +1123,12 @@ export function ClientsPage() {
                   </div>
                 )}
 
-                {detailTab === "invoices" && (
+                {detailTab === "invoices" && isAdmin && (
                   <div className="space-y-2">
                     {detail.invoices.map(i => (
                       <div key={i.id} className="flex items-center justify-between rounded-xl border p-3 text-xs">
                         <span><span className="font-bold">{i.invoice_number}</span><span className="block text-[11px] text-muted-foreground">{i.period_label} · due {formatDate(i.due_date)}</span></span>
-                        <span className="text-right"><span className="font-bold">{showPricing ? formatCurrency(i.amount) : `${i.total_hours} hrs`}</span><span className={cn("block text-[11px] font-semibold capitalize", i.status === "paid" ? "text-green-600" : "text-amber-600")}>{i.status}</span></span>
+                        <span className="text-right"><span className="font-bold">{(showPricing || isAdmin) && i.amount != null ? formatCurrency(i.amount) : `${i.total_hours} hrs`}</span><span className={cn("block text-[11px] font-semibold capitalize", i.status === "paid" ? "text-green-600" : "text-amber-600")}>{i.status}</span></span>
                       </div>
                     ))}
                     {detail.invoices.length === 0 && <p className="text-xs text-muted-foreground">No invoices yet for this client.</p>}
@@ -835,8 +1141,8 @@ export function ClientsPage() {
       )}
 
       {modal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-lg animate-fade-in">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
+          <div className={cn("max-h-[90vh] w-full overflow-y-auto rounded-xl border border-border bg-card p-5 shadow-lg animate-fade-in", modal === "approve" ? "max-w-lg" : "max-w-md")}>
             <h2 className="text-sm font-semibold">
               {modal === "approve"
                 ? `Approve client · ${approvingClient?.name || ""}`
@@ -849,15 +1155,26 @@ export function ClientsPage() {
                     : "Edit Sub-client"}
             </h2>
             {modal === "approve" && (
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Set the billing rate, then approve. The client goes live only after this step.
-                {approvingClient?.proposed_by_name ? ` Proposed by ${approvingClient.proposed_by_name}.` : ""}
-              </p>
+              <>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Set billing, assign VAs, and save each VA’s own rate. Approving here makes the client live.
+                </p>
+                <div className="mt-3 rounded-lg border bg-muted/40 px-3 py-2 text-xs">
+                  <p><span className="text-muted-foreground">Client</span> <span className="font-semibold">{approvingClient?.name || "—"}</span></p>
+                  <p className="mt-1"><span className="text-muted-foreground">Proposed by</span> <span className="font-semibold">{approvingClient?.proposed_by_name || "—"}</span></p>
+                </div>
+              </>
             )}
             {modal === "create" && isAuditor && tab === "clients" && (
               <p className="mt-1 text-[11px] text-muted-foreground">
-                This sends a pending request to the admin. They will set the VA rate and approve before the client appears as live.
+                This sends a pending request to the admin. They approve it and set each VA’s rate before the client is live.
               </p>
+            )}
+            {modal === "create" && tab === "clients" && (
+              <label className="mt-3 flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={assignAllVas} onChange={(e) => setAssignAllVas(e.target.checked)} />
+                Assign to all VAs
+              </label>
             )}
 
             {(tab === "clients" || modal === "approve") ? (
@@ -874,37 +1191,82 @@ export function ClientsPage() {
                 <div>
                   <Label>Billing Type</Label>
                   <Select
-                    value={clientForm.billing_type}
+                    value={clientForm.billing_type === "package_hours" && modal === "approve" ? "fixed" : clientForm.billing_type}
                     onChange={(e) =>
                       setClientForm({ ...clientForm, billing_type: e.target.value as "hourly" | "fixed" | "package_hours" })
                     }
                   >
                     <option value="hourly">Hourly</option>
-                    <option value="fixed">Fixed package</option>
-                    <option value="package_hours">Package + included hours</option>
+                    <option value="fixed">{modal === "approve" ? "Fixed" : "Fixed package"}</option>
+                    {modal !== "approve" && <option value="package_hours">Package + included hours</option>}
                   </Select>
                 </div>
-                {(showPricing || modal === "approve") && (
-                  <div>
-                    <Label>{clientForm.billing_type === "hourly" ? "Default hourly rate" : "Package amount"}</Label>
-                    <Input
-                      type="number"
-                      value={clientForm.default_rate}
-                      onChange={(e) => setClientForm({ ...clientForm, default_rate: e.target.value })}
-                    />
+                {modal === "approve" && (
+                  <div className="space-y-2 rounded-lg border p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Assign VAs</p>
+                      <Button type="button" size="sm" variant="outline" onClick={() => setProposalVas((rows) => [...rows, newProposalRow()])}>
+                        <Plus className="h-3 w-3" /> Add VA
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Role is optional. Rate is this VA’s hourly or fixed amount. A blank row is skipped.
+                    </p>
+                    {vasLoading && <p className="text-[11px] text-muted-foreground">Loading VAs…</p>}
+                    {proposalVas.map((row) => (
+                      <div key={row.key} className="grid gap-2 rounded-lg bg-muted/30 p-2 sm:grid-cols-2">
+                        <div className="sm:col-span-2">
+                          <Label className="text-[10px]">VA</Label>
+                          <Select value={row.va_id} onChange={(e) => updateProposalRow(row.key, { va_id: e.target.value })}>
+                            <option value="">Select VA…</option>
+                            {allVas
+                              .filter((v) => v.is_active && !proposalVas.some((other) => other.key !== row.key && other.va_id === v.id))
+                              .map((v) => (
+                                <option key={v.id} value={v.id}>{v.name}</option>
+                              ))}
+                          </Select>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <Label className="text-[10px]">Role (optional)</Label>
+                          <Input
+                            list="approve-va-role-suggestions"
+                            value={row.role}
+                            placeholder="e.g. Project coordinator"
+                            onChange={(e) => updateProposalRow(row.key, { role: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[10px]">Rate billing</Label>
+                          <Select value={row.pay_type} onChange={(e) => updateProposalRow(row.key, { pay_type: e.target.value as PayChoice })}>
+                            <option value="hourly">Hourly</option>
+                            <option value="package">Fixed</option>
+                          </Select>
+                        </div>
+                        <div>
+                          <Label className="text-[10px]">
+                            Rate amount{row.va_id ? ` (${allVas.find((v) => v.id === row.va_id)?.currency || "PHP"})` : ""}
+                          </Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={row.amount}
+                            onChange={(e) => updateProposalRow(row.key, { amount: e.target.value })}
+                          />
+                        </div>
+                        {proposalVas.length > 1 && (
+                          <div className="flex justify-end sm:col-span-2">
+                            <Button type="button" size="sm" variant="ghost" onClick={() => setProposalVas((rows) => rows.filter((r) => r.key !== row.key))}>
+                              Remove
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    <datalist id="approve-va-role-suggestions">
+                      {CLIENT_VA_ROLE_SUGGESTIONS.map((r) => <option key={r} value={r} />)}
+                    </datalist>
                   </div>
-                )}
-                {(showPricing || modal === "approve") && clientForm.billing_type === "package_hours" && (
-                  <>
-                    <div>
-                      <Label>Included hours</Label>
-                      <Input type="number" value={clientForm.included_hours || ""} onChange={(e) => setClientForm({ ...clientForm, included_hours: e.target.value })} />
-                    </div>
-                    <div>
-                      <Label>Overage rate</Label>
-                      <Input type="number" value={clientForm.overage_rate || ""} onChange={(e) => setClientForm({ ...clientForm, overage_rate: e.target.value })} />
-                    </div>
-                  </>
                 )}
               </div>
             ) : (
@@ -940,14 +1302,29 @@ export function ClientsPage() {
                 Cancel
               </Button>
               {modal === "approve" ? (
-                <Button
-                  variant="gold"
-                  size="sm"
-                  disabled={approveClient.isPending || !clientForm.default_rate}
-                  onClick={() => approveClient.mutate()}
-                >
-                  {approveClient.isPending ? "Approving…" : "Approve & go live"}
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={approveClient.isPending || rejectClient.isPending || !approvingClient}
+                    onClick={() => {
+                      if (!approvingClient) return
+                      if (confirm(`Decline proposal for "${approvingClient.name}"?`)) {
+                        rejectClient.mutate(approvingClient.id, { onSuccess: () => closeModal() })
+                      }
+                    }}
+                  >
+                    {rejectClient.isPending ? "Declining…" : "Decline"}
+                  </Button>
+                  <Button
+                    variant="gold"
+                    size="sm"
+                    disabled={approveClient.isPending || rejectClient.isPending}
+                    onClick={() => approveClient.mutate()}
+                  >
+                    {approveClient.isPending ? "Approving…" : "Approve & go live"}
+                  </Button>
+                </>
               ) : (
                 <Button
                   variant="gold"

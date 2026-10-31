@@ -114,6 +114,7 @@ class ClientCreate(BaseModel):
     default_rate: Decimal | None = None
     included_hours: Decimal | None = None
     overage_rate: Decimal | None = None
+    assign_all_vas: bool = False
 
 
 class ClientUpdate(BaseModel):
@@ -205,7 +206,7 @@ class VADelegateRequest(BaseModel):
 class NotificationPreferences(BaseModel):
     popup_enabled: bool = True
     sound_enabled: bool = True
-    sound_id: str = "chime"  # chime | bell | ping | loud
+    sound_id: str = "loud"  # chime | bell | ping | loud
     popup_types: dict[str, bool] = Field(default_factory=lambda: {
         "comment": True,
         "task": True,
@@ -214,6 +215,16 @@ class NotificationPreferences(BaseModel):
         "delegation": True,
         "invoice": True,
         "system": True,
+    })
+    # both | popup | sound | bell — per notification type
+    delivery: dict[str, str] = Field(default_factory=dict)
+    email_enabled: bool = True
+    email_types: dict[str, bool] = Field(default_factory=lambda: {
+        "comment": True,
+        "mention": True,
+        "task_assigned": True,
+        "task_updated": True,
+        "timesheet": True,
     })
 
 
@@ -239,6 +250,10 @@ class ProfileUpdate(BaseModel):
     portfolio_url: str | None = None
     status_message: str | None = None
     notification_preferences: NotificationPreferences | None = None
+    legal_name: str | None = None
+    # Project Manager only — stored on her VA row as compensation_mode=va_package.
+    va_package_amount: Decimal | None = None
+    va_package_currency: str | None = None
 
 
 class EmailChangeRequest(BaseModel):
@@ -282,6 +297,10 @@ class ProfileResponse(BaseModel):
     portfolio_url: str | None = None
     status_message: str | None = None
     notification_preferences: NotificationPreferences | None = None
+    legal_name: str | None = None
+    compensation_mode: str | None = None
+    va_package_amount: Decimal | None = None
+    va_package_currency: str | None = None
     created_at: datetime | None = None
 
 
@@ -339,6 +358,7 @@ class TaskCreate(BaseModel):
     sub_client_id: UUID | None = None
     project_id: UUID | None = None
     assignee_va_id: UUID | None = None
+    assignee_role: str | None = None
     status: TaskStatus = TaskStatus.todo
     priority: TaskPriority = TaskPriority.medium
     start_date: date | None = None
@@ -360,6 +380,7 @@ class TaskUpdate(BaseModel):
     sub_client_id: UUID | None = None
     project_id: UUID | None = None
     assignee_va_id: UUID | None = None
+    assignee_role: str | None = None
     status: TaskStatus | None = None
     priority: TaskPriority | None = None
     start_date: date | None = None
@@ -388,6 +409,7 @@ class TaskResponse(BaseModel):
     project_color: str | None = None
     assignee_va_id: UUID | None = None
     assignee_name: str | None = None
+    assignee_role: str | None = None
     status: TaskStatus
     priority: TaskPriority
     start_date: date | None = None
@@ -752,7 +774,21 @@ class VARateResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# Client Packages
+class VACompensationUpdate(BaseModel):
+    compensation_mode: str
+    va_package_amount: Decimal | None = None
+    va_package_currency: str | None = None
+
+
+class VACompensationResponse(BaseModel):
+    va_id: UUID
+    va_name: str | None = None
+    user_role: str | None = None
+    compensation_mode: str = "hourly"
+    va_package_amount: Decimal | None = None
+    va_package_currency: str | None = None
+
+
 class ClientPackageCreate(BaseModel):
     client_id: UUID
     name: str
@@ -936,12 +972,14 @@ class PayrollEntry(BaseModel):
     status: str = "approved"
     start_time: str | None = None
     end_time: str | None = None
+    is_flat: bool = False
 
 
 class PayrollBreakdown(BaseModel):
     label: str
     hours: Decimal
     pay: Decimal = Decimal("0")
+    kind: str = "hourly"  # hourly | package | va_package
 
 
 class PayrollDay(BaseModel):
@@ -975,6 +1013,8 @@ class PayrollVAResult(BaseModel):
     timesheet_submitted: bool = False
     timesheet_status: str | None = None
     timesheet_id: UUID | None = None
+    legal_name: str | None = None
+    compensation_mode: str = "hourly"
 
 
 class TimesheetSubmitRequest(BaseModel):

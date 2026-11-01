@@ -62,8 +62,8 @@ export function AnalyticsPage() {
           <h1 className="font-display text-xl font-bold">Analytics — Team Auditor</h1>
           <p className="text-xs text-muted-foreground">
             {isAdmin
-              ? "Monitor every VA like Monday's workload view — who is active, who is low, and who has assigned clients but no logs today or this week. Assign an Auditor to watch each VA."
-              : "Your auditor workspace: watch VA activity, spot no-log days early, and keep the team moving. Read-only by design."}
+              ? "Monitor every VA — who logged time today, who has no tasks, and who is quiet this week. Assign a Project Manager to watch each VA."
+              : "Project Manager workspace: watch VA activity and approve timesheets. Rates and pay stay hidden."}
           </p>
         </div>
         {activity && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">Week of {formatDate(activity.week_start)} – {formatDate(activity.week_end)}</p>}
@@ -86,7 +86,7 @@ export function AnalyticsPage() {
               </span>
             ))}
           </div>
-          <p className="mt-2 text-[11px] text-red-700/80">Admins, all Auditors, and each VA's assigned Auditor are notified once a day while someone stays inactive.</p>
+          <p className="mt-2 text-[11px] text-red-700/80">Admins and Project Managers get the same daily alert, with the VA’s name and the date, when someone logs no time or has no tasks that day.</p>
         </div>
       )}
 
@@ -155,7 +155,7 @@ export function AnalyticsPage() {
         </Card>
       </div>
 
-      <p className="flex items-center gap-2 px-1 text-[11px] text-muted-foreground"><Eye className="h-3.5 w-3.5" /> How it works: a VA with assigned clients/tasks but <b>no logs today and no logs this week</b> is flagged red. Under 8h this week (or overdue work) is low. No assignments = available for new work. Auditors see this board read-only; only Administrators can assign auditors, approve logs, or change tasks.</p>
+      <p className="flex items-center gap-2 px-1 text-[11px] text-muted-foreground"><Eye className="h-3.5 w-3.5" /> A VA with no time or no tasks for the day is flagged, and Admins and Project Managers are both notified with that VA’s name and the date. Under 8h this week is low activity. No assignments means available for new work.</p>
     </div>
   )
 }

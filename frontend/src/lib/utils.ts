@@ -10,19 +10,19 @@ export function roleLabel(role: string | null | undefined): string {
   const r = (role || "").toLowerCase()
   if (r === "va") return "VA"
   if (r === "admin") return "Admin"
-  if (r === "auditor") return "Auditor"
+  if (r === "auditor") return "Project Manager"
   return role || "—"
 }
 
-export function formatCurrency(amount: number | string, currency = "USD") {
-  const num = typeof amount === "string" ? parseFloat(amount) : amount
-  if (Number.isNaN(num)) return currency === "PHP" ? "₱0.00" : "$0.00"
+export function formatCurrency(amount: number | string | null | undefined, currency = "USD") {
+  const num = typeof amount === "string" ? parseFloat(amount) : Number(amount)
+  if (amount == null || Number.isNaN(num)) return currency === "PHP" ? "₱0.00" : "$0.00"
   if (currency === "PHP") return `₱${num.toFixed(2)}`
   return `$${num.toFixed(2)}`
 }
 
 /** PDF-safe currency: always uses the real ₱ character (must be rendered with NotoSans, not Times/Helvetica). */
-export function formatPdfCurrency(amount: number | string, currency: "PHP" | "USD" | string = "USD") {
+export function formatPdfCurrency(amount: number | string | null | undefined, currency: "PHP" | "USD" | string = "USD") {
   return formatCurrency(amount, currency === "PHP" ? "PHP" : "USD")
 }
 

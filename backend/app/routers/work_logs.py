@@ -15,6 +15,7 @@ from app.deps import CurrentUser, require_admin, require_admin_or_auditor, get_c
 from app.models import UserRole, VA, WorkLog, WorkLogAttachment, WorkLogStatus
 from app.schemas import WorkLogAttachmentResponse, WorkLogResponse, WorkLogUpdate
 from app.services import storage
+from app.services.log_display import log_task_name
 from app.services.calculations import calculate_hours, calculate_pay
 from app.services.images import ALLOWED_CONTENT_TYPES, optimize_image
 from app.services.notifications import push, va_user_id
@@ -54,6 +55,7 @@ def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
         invoice_id=log.invoice_id,
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
+        task_name=log_task_name(log),
         clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
         payable_on=getattr(log, "payable_on", None),
         rolled_to_next_payroll=bool(getattr(log, "payable_on", None)),
@@ -62,7 +64,7 @@ def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
     )
 
 
-@router.get("", response_model=list[WorkLogResponse])
+@router.get("", response_model=list[WorkLogResponse], response_model_exclude_none=True)
 def list_work_logs(
     current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
@@ -147,7 +149,7 @@ def _get_log(db: Session, log_id: UUID) -> WorkLog:
     return log
 
 
-@router.patch("/{log_id}", response_model=WorkLogResponse)
+@router.patch("/{log_id}", response_model=WorkLogResponse, response_model_exclude_none=True)
 def update_work_log(
     log_id: UUID,
     body: WorkLogUpdate,
@@ -187,7 +189,7 @@ def update_work_log(
     return _serialize_log(log, redact_money=current.role == UserRole.auditor)
 
 
-@router.post("/{log_id}/approve", response_model=WorkLogResponse)
+@router.post("/{log_id}/approve", response_model=WorkLogResponse, response_model_exclude_none=True)
 def approve_log(
     log_id: UUID,
     current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
@@ -199,7 +201,7 @@ def approve_log(
     return result
 
 
-@router.post("/{log_id}/reject", response_model=WorkLogResponse)
+@router.post("/{log_id}/reject", response_model=WorkLogResponse, response_model_exclude_none=True)
 def reject_log(
     log_id: UUID,
     current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],

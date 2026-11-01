@@ -7,7 +7,8 @@ import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/ui/badge"
 import { RichTextEditor } from "@/components/lexical/RichTextEditor"
-import { calculateHoursFromTimes, formatCurrency } from "@/lib/utils"
+import { calculateHoursFromTimes, formatCurrency, formatDate } from "@/lib/utils"
+import { groupByWeek } from "@/lib/weeks"
 import { Paperclip, Plus, X } from "lucide-react"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
 
@@ -51,6 +52,7 @@ export function VATimeLogPage() {
   const [form, setForm] = useState({
     work_date: new Date().toISOString().split("T")[0],
     client_id: "",
+    task_name: "",
     sub_client_id: "",
     project_id: "",
     task_id: "",
@@ -151,6 +153,7 @@ export function VATimeLogPage() {
           sub_client_id: form.sub_client_id || null,
           project_id: form.project_id || null,
           task_id: form.task_id || null,
+          task_name: form.task_name.trim(),
           description_lexical: descriptionLexical,
           description_plain: descriptionPlain,
           notes: form.notes || null,
@@ -182,6 +185,7 @@ export function VATimeLogPage() {
       if (form.task_id) qc.invalidateQueries({ queryKey: ["comments", "task", form.task_id] })
       setDescriptionPlain("")
       setDescriptionLexical(null)
+      setForm((f) => ({ ...f, task_name: "" }))
       setPendingFiles([])
       setError("")
     },
@@ -205,6 +209,15 @@ export function VATimeLogPage() {
           <div className="grid gap-3 sm:grid-cols-2">
             <div><Label>Date</Label><Input type="date" value={form.work_date} onChange={(e) => setForm({ ...form, work_date: e.target.value })} /></div>
             <div><Label>Client</Label><Select value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value, sub_client_id: "" })}><option value="">Select client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
+            <div className="sm:col-span-2">
+              <Label>Task name</Label>
+              <Input
+                value={form.task_name}
+                placeholder="e.g. 2027 Calendar Graphic Draft"
+                onChange={(e) => setForm({ ...form, task_name: e.target.value })}
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">This name prints in bold on your payslip, with the description underneath.</p>
+            </div>
             {subClients.length > 0 && <div><Label>Sub-client</Label><Select value={form.sub_client_id} onChange={(e) => setForm({ ...form, sub_client_id: e.target.value })}><option value="">None</option>{subClients.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>}
             <div>
               <div className="mb-1 flex items-center justify-between gap-2">
@@ -240,6 +253,7 @@ export function VATimeLogPage() {
                   setForm({
                     ...form,
                     task_id: e.target.value,
+                    task_name: t?.title || form.task_name,
                     client_id: t ? t.client_id : form.client_id,
                     project_id: (t && t.project_id) || form.project_id,
                   })
@@ -269,7 +283,7 @@ export function VATimeLogPage() {
           </div>
           <div>
             <div className="mb-1 flex items-center justify-between gap-2">
-              <Label>Task / Service Performed</Label>
+              <Label>Description of the work</Label>
               <Button type="button" size="sm" variant="outline" onClick={() => fileRef.current?.click()}>
                 <Paperclip className="h-3.5 w-3.5" /> Attach files
               </Button>
@@ -307,43 +321,66 @@ export function VATimeLogPage() {
             )}
           </div>
           {error && <p className="text-[11px] text-red-600">{error}</p>}
-          <Button variant="gold" className="w-full" onClick={() => submit.mutate()} disabled={!form.client_id || !descriptionPlain || submit.isPending}>
+          <Button variant="gold" className="w-full" onClick={() => submit.mutate()} disabled={!form.client_id || !form.task_name.trim() || !descriptionPlain || submit.isPending}>
             {submit.isPending ? "Submitting..." : "Submit Entry"}
           </Button>
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader className="pb-2"><CardTitle>Your Entries</CardTitle></CardHeader>
-        <CardContent>
-          <table className="w-full text-xs">
-            <thead><tr className="border-b border-border text-left text-muted-foreground"><th className="p-2">Date</th><th className="p-2">Client</th><th className="p-2">Time</th><th className="p-2">Hours</th>{showMoney && <><th className="p-2">Rate</th><th className="p-2">Pay</th></>}<th className="p-2">Status</th><th className="p-2"></th></tr></thead>
-            <tbody>{logs.map((log) => (
-              <tr key={log.id} className="border-b border-border">
-                <td className="p-2">{log.work_date}</td>
-                <td className="p-2">
-                  {log.client_name}
-                  {log.task_title && <span className="block text-[10px] text-muted-foreground">{log.task_title}</span>}
-                  {log.rolled_to_next_payroll && (
-                    <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-1.5 py-px text-[9px] font-bold text-amber-900">
-                      Rolls to next payroll{log.payable_on ? ` · ${log.payable_on}` : ""}
-                    </span>
-                  )}
-                </td>
-                <td className="p-2 whitespace-nowrap">{log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}<span className="block text-[10px] text-muted-foreground">{log.source === "clock" ? "clock" : "manual"}</span></td>
-                <td className="p-2">{log.hours}</td>
-                {showMoney && <><td className="p-2">{formatCurrency(log.va_rate)}</td><td className="p-2">{formatCurrency(log.va_pay)}</td></>}
-                <td className="p-2"><StatusBadge status={log.status} />{(log.attachment_count ?? 0) > 0 && <span className="ml-1 text-[10px] text-muted-foreground">📎{log.attachment_count}</span>}</td>
-                <td className="p-2 whitespace-nowrap">
-                  {(log.status === "submitted" || log.status === "rejected") ? <>
-                    <button className="underline mr-2" onClick={() => { setEditingLog(log); setEditDesc(log.description_plain); setEditTimes({ start_time: log.start_time?.slice(0, 5) || "09:00", end_time: log.end_time?.slice(0, 5) || "17:00" }) }}>Edit</button>
-                    <button className="underline text-red-600" onClick={() => { if (confirm("Delete this log entry?")) deleteLog.mutate(log.id) }}>Delete</button>
-                  </> : <span className="text-[10px] text-muted-foreground">locked</span>}
-                  {(log.attachment_count ?? 0) > 0 && <button className="ml-2 underline" onClick={() => setViewingLog(log)}>Files</button>}
-                </td>
-              </tr>
-            ))}</tbody>
-          </table>
+        <CardHeader className="pb-2">
+          <CardTitle>Your entries by week</CardTitle>
+          <p className="text-[11px] text-muted-foreground">Grouped Monday–Sunday so you can jump to a period.</p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {logs.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {groupByWeek(logs, (log) => log.work_date).map((week) => (
+                <button
+                  key={week.id}
+                  type="button"
+                  onClick={() => document.getElementById(`log-${week.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                  className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary"
+                >
+                  {week.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {groupByWeek(logs, (log) => log.work_date).map((week) => (
+            <div key={week.id} id={`log-${week.id}`} className="scroll-mt-24 overflow-x-auto rounded-2xl border">
+              <p className="bg-primary/5 px-3 py-2 text-xs font-bold text-primary">{week.label} · {week.items.reduce((s, log) => s + Number(log.hours || 0), 0).toFixed(2)} hrs</p>
+              <table className="w-full text-xs">
+                <thead><tr className="border-b border-border text-left text-muted-foreground"><th className="p-2">Date</th><th className="p-2">Client / task</th><th className="p-2">Time</th><th className="p-2">Hours</th>{showMoney && <><th className="p-2">Rate</th><th className="p-2">Pay</th></>}<th className="p-2">Status</th><th className="p-2"></th></tr></thead>
+                <tbody>{week.items.map((log) => (
+                  <tr key={log.id} className="border-b border-border align-top">
+                    <td className="p-2 whitespace-nowrap">{formatDate(log.work_date)}</td>
+                    <td className="p-2">
+                      <span className="font-semibold">{log.client_name}</span>
+                      <span className="block font-bold">{log.task_name || log.task_title || "Logged work"}</span>
+                      {log.description_plain && <span className="block text-[10px] text-muted-foreground line-clamp-2">{log.description_plain}</span>}
+                      {log.rolled_to_next_payroll && (
+                        <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-1.5 py-px text-[9px] font-bold text-amber-900">
+                          Rolls to next payroll{log.payable_on ? ` · ${log.payable_on}` : ""}
+                        </span>
+                      )}
+                    </td>
+                    <td className="p-2 whitespace-nowrap">{log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}<span className="block text-[10px] text-muted-foreground">{log.source === "clock" ? "clock" : "manual"}</span></td>
+                    <td className="p-2">{log.hours}</td>
+                    {showMoney && <><td className="p-2">{formatCurrency(log.va_rate)}</td><td className="p-2">{formatCurrency(log.va_pay)}</td></>}
+                    <td className="p-2"><StatusBadge status={log.status} />{(log.attachment_count ?? 0) > 0 && <span className="ml-1 text-[10px] text-muted-foreground">📎{log.attachment_count}</span>}</td>
+                    <td className="p-2 whitespace-nowrap">
+                      {(log.status === "submitted" || log.status === "rejected") ? <>
+                        <button className="underline mr-2" onClick={() => { setEditingLog(log); setEditDesc(log.description_plain); setEditTimes({ start_time: log.start_time?.slice(0, 5) || "09:00", end_time: log.end_time?.slice(0, 5) || "17:00" }) }}>Edit</button>
+                        <button className="underline text-red-600" onClick={() => { if (confirm("Delete this log entry?")) deleteLog.mutate(log.id) }}>Delete</button>
+                      </> : <span className="text-[10px] text-muted-foreground">locked</span>}
+                      {(log.attachment_count ?? 0) > 0 && <button className="ml-2 underline" onClick={() => setViewingLog(log)}>Files</button>}
+                    </td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          ))}
           {logs.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No entries yet. Clock in or submit your first log above.</p>}
         </CardContent>
       </Card>

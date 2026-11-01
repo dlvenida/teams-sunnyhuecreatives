@@ -52,7 +52,7 @@ def seed_database(db: Session) -> None:
             password_hash=hash_password("auditor2024"),
             role=UserRole.auditor,
             display_name="Audrey Auditor",
-            job_title="Auditor",
+            job_title="Project Manager",
         ))
         db.commit()
 

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, apiFetchBlob } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { formatDate } from "@/lib/utils"
-import { CheckCircle2, FileText, Film, Image as ImageIcon, X } from "lucide-react"
+import { CheckCircle2, FileText, Film, Image as ImageIcon, X, XCircle } from "lucide-react"
 
 interface Att {
   id: string
@@ -18,6 +18,7 @@ interface ReviewEntry {
   client_name?: string | null
   project_name?: string | null
   task_title?: string | null
+  task_name?: string | null
   description?: string | null
   notes?: string | null
   start_time?: string | null
@@ -36,6 +37,7 @@ interface ReviewPayload {
     period_start: string
     period_end: string
     status: string
+    review_note?: string | null
     entry_count: number
     total_hours: string
   }
@@ -147,17 +149,40 @@ export function TimesheetReviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allAtts.map((a) => a.id).join(",")])
 
+  const [reason, setReason] = useState("")
+  const [actionError, setActionError] = useState("")
+
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["payroll"] })
+    qc.invalidateQueries({ queryKey: ["payroll-timesheets-pending"] })
+    qc.invalidateQueries({ queryKey: ["timesheet-review", timesheetId] })
+  }
   const approve = useMutation({
     mutationFn: () => apiFetch(`/payroll/timesheets/${timesheetId}/review`, { method: "POST" }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["payroll"] })
-      qc.invalidateQueries({ queryKey: ["timesheet-review", timesheetId] })
+      setActionError("")
+      refresh()
       onClose()
     },
+    onError: (err: Error) => setActionError(err.message),
+  })
+  const reject = useMutation({
+    mutationFn: () => apiFetch(`/payroll/timesheets/${timesheetId}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason: reason.trim() || null }),
+    }),
+    onSuccess: () => {
+      setActionError("")
+      refresh()
+      onClose()
+    },
+    onError: (err: Error) => setActionError(err.message),
   })
 
   const sheet = data?.timesheet
   const reviewed = sheet?.status === "reviewed"
+  const rejected = sheet?.status === "rejected"
+  const busy = approve.isPending || reject.isPending
 
   return (
     <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/40" onClick={onClose}>
@@ -209,10 +234,10 @@ export function TimesheetReviewPanel({
                   </div>
                 </div>
 
-                {entry.task_title && (
-                  <p className="mt-2 text-[11px] font-semibold text-violet-700">Task: {entry.task_title}</p>
+                {(entry.task_name || entry.task_title) && (
+                  <p className="mt-2 text-sm font-bold text-foreground">{entry.task_name || entry.task_title}</p>
                 )}
-                <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">{entry.description || "—"}</p>
+                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{entry.description || "—"}</p>
                 {entry.notes && (
                   <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
                     <span className="font-bold">Comments: </span>
@@ -232,27 +257,60 @@ export function TimesheetReviewPanel({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-5 py-4">
-          <p className="text-xs text-muted-foreground">
-            Review every entry and attachment, then approve to unlock the Payroll PDF.
-          </p>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={onClose}>Close</Button>
-            {!reviewed && (
-              <Button
-                variant="success"
-                disabled={approve.isPending || isLoading}
-                onClick={() => approve.mutate()}
-              >
-                <CheckCircle2 className="h-4 w-4" />
-                {approve.isPending ? "Approving…" : "Approve timesheet"}
-              </Button>
-            )}
-            {reviewed && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-3 py-1.5 text-xs font-bold text-green-800">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Already approved
-              </span>
-            )}
+        <div className="space-y-3 border-t bg-muted/30 px-5 py-4">
+          {sheet?.review_note && (
+            <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+              <span className="font-bold">Rejection note: </span>{sheet.review_note}
+            </p>
+          )}
+          {actionError && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{actionError}</p>}
+          {!reviewed && (
+            <div>
+              <label className="text-[11px] font-semibold text-muted-foreground" htmlFor="reject-reason">Rejection note (optional)</label>
+              <textarea
+                id="reject-reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="What should the VA fix before resubmitting?"
+                className="mt-1 w-full rounded-xl border bg-card px-3 py-2 text-xs"
+                rows={2}
+              />
+            </div>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              Same review for Admin and Project Manager. Approve to unlock the payslip, or reject so the VA can fix and resubmit. Project Managers never see rates or pay.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={onClose}>Close</Button>
+              {!reviewed && (
+                <Button variant="danger" disabled={busy || isLoading} onClick={() => reject.mutate()}>
+                  <XCircle className="h-4 w-4" />
+                  {reject.isPending ? "Rejecting…" : "Reject"}
+                </Button>
+              )}
+              {!reviewed && (
+                <Button variant="success" disabled={busy || isLoading} onClick={() => approve.mutate()}>
+                  <CheckCircle2 className="h-4 w-4" />
+                  {approve.isPending ? "Approving…" : "Approve timesheet"}
+                </Button>
+              )}
+              {reviewed && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-3 py-1.5 text-xs font-bold text-green-800">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Approved
+                </span>
+              )}
+              {reviewed && (
+                <Button variant="danger" disabled={busy} onClick={() => reject.mutate()}>
+                  <XCircle className="h-4 w-4" /> Reject
+                </Button>
+              )}
+              {rejected && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-800">
+                  Rejected — waiting on the VA
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>

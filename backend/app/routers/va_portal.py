@@ -55,6 +55,7 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         invoice_id=log.invoice_id,
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
+        task_name=(log.task_name or "").strip() or (log.task.title if getattr(log, "task", None) else None),
         clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
         payable_on=getattr(log, "payable_on", None),
         rolled_to_next_payroll=bool(getattr(log, "payable_on", None)),
@@ -360,6 +361,7 @@ def my_earnings(
             "pay": str(l.va_pay),
             "project_name": l.project.name if getattr(l, "project", None) else None,
             "task_title": l.task.title if getattr(l, "task", None) else None,
+            "task_name": (l.task_name or "").strip() or (l.task.title if getattr(l, "task", None) else None),
             "source": l.source or "manual",
         }
         for l in sorted(range_logs, key=lambda x: (x.work_date, x.start_time or time.min))
@@ -532,6 +534,12 @@ def submit_work_log(
     )
     rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
     payable_on = resolve_payable_on(db, current.va_id, body.work_date)
+    task_name = (body.task_name or "").strip() or None
+    if not task_name and body.task_id:
+        from app.models import Task
+        linked = db.query(Task).filter(Task.id == body.task_id).first()
+        if linked and linked.title:
+            task_name = linked.title.strip()
 
     log = WorkLog(
         work_date=body.work_date,
@@ -540,6 +548,7 @@ def submit_work_log(
         sub_client_id=body.sub_client_id,
         project_id=body.project_id,
         task_id=body.task_id,
+        task_name=task_name,
         description_lexical=body.description_lexical,
         description_plain=body.description_plain,
         start_time=body.start_time,
@@ -610,6 +619,7 @@ def list_my_timesheets(
                 period_end=r.period_end,
                 status=r.status.value if hasattr(r.status, "value") else str(r.status),
                 notes=r.notes,
+                review_note=r.review_note,
                 submitted_at=r.submitted_at,
                 reviewed_at=r.reviewed_at,
                 entry_count=len(logs),
@@ -657,6 +667,7 @@ def submit_timesheet(
     if existing:
         existing.notes = body.notes
         existing.status = TimesheetStatus.submitted
+        existing.review_note = None
         existing.reviewed_at = None
         existing.reviewed_by = None
         db.commit()
@@ -720,6 +731,7 @@ def submit_timesheet(
         period_end=row.period_end,
         status=row.status.value if hasattr(row.status, "value") else str(row.status),
         notes=row.notes,
+        review_note=row.review_note,
         submitted_at=row.submitted_at,
         reviewed_at=row.reviewed_at,
         entry_count=len(logs),

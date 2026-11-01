@@ -195,7 +195,7 @@ export function VATimeLogPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
       <div>
-        <h1 className="text-base font-semibold">Log Time</h1>
+        <h1 className="text-base font-semibold">{isStaff ? "Log my time" : "Log Time"}</h1>
         <p className="text-[11px] text-muted-foreground">
           {showMoney
             ? "Rate auto-fills from your approved My Rates profile"

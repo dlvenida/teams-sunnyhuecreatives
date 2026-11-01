@@ -33,7 +33,7 @@ export function PayrollPage() {
   // even if the company "hide pricing" toggle is off elsewhere.
   const showPricing = isAdmin
   const chartColor = useCssVar("--chart", "#ec4899")
-  const [period, setPeriod] = useState("custom")
+  const [period, setPeriod] = useState("this_month")
   const [vaId, setVaId] = useState("")
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
@@ -184,7 +184,7 @@ export function PayrollPage() {
           <p className="text-xs text-muted-foreground">
             {isAdmin
               ? "VA submits timesheet → review entries → approve or reject → payslip (per client) → Mark Paid."
-              : "Project Manager review — approve or reject timesheets. VA name, dates, tasks, hours, and status only. Rates, pay, and payroll totals are hidden."}
+              : "Project Manager review. Approve or reject timesheets. You see the VA name, dates, tasks, hours, and status. Rates, pay, and payroll totals stay hidden."}
           </p>
         </div>
         {payroll && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">{formatDate(payroll.period_start)} – {formatDate(payroll.period_end)}</p>}
@@ -262,7 +262,7 @@ export function PayrollPage() {
         )}
         <div className="flex items-end gap-2">
           <Button variant="outline" onClick={exportCsv} disabled={!payroll}><FileSpreadsheet className="h-4 w-4" /> CSV</Button>
-          <Button variant="gold" onClick={() => exportPdf()} disabled={!payroll}><FileDown className="h-4 w-4" /> Payroll PDF</Button>
+          <Button variant="gold" onClick={() => exportPdf()} disabled={!payroll}><FileDown className="h-4 w-4" /> {isAdmin ? "Payroll PDF" : "Hours PDF"}</Button>
         </div>
       </div>
 

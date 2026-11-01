@@ -110,7 +110,7 @@ export function ProjectDetail({
 
             {tab === "discussion" && (
               <div>
-                <p className="mb-2 text-[11px] text-muted-foreground">Project-wide discussion for Admin, Auditors and Users — tag teammates with @, react, attach AVIF-optimized images and draw on them. For task-specific talk, open the task instead.</p>
+                <p className="mb-2 text-[11px] text-muted-foreground">Project discussion for Admin, Project Managers, and VAs. Tag teammates with @. For task-specific talk, open the task instead.</p>
                 <CommentThread scope="project" scopeId={project.id} scopeTitle={project.name} highlightCommentId={highlightCommentId} />
               </div>
             )}

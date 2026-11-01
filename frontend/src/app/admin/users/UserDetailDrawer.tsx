@@ -160,7 +160,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                   <p className="text-xs font-bold">Role per client</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     Job function titles only (not pay). Example: Social Media Manager for Client A, Email Marketing Specialist for Client B.
-                    {canEditRoles ? " Admin and Auditor can add or update anytime; the VA can also set their own." : ""}
+                    {canEditRoles ? " Admin and Project Manager can add or update anytime. The VA can also set their own." : ""}
                   </p>
                 </div>
                 {roleError && <p className="text-[11px] text-red-600">{roleError}</p>}

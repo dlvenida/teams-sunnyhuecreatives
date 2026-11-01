@@ -168,7 +168,7 @@ function AdminUserSwitcher() {
                 <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">{roleLabel(u.role)}</span>
               </button>
             ))}
-            {targets.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No active VA/auditor accounts to switch into.</p>}
+            {targets.length === 0 && <p className="px-2 py-2 text-xs text-muted-foreground">No active VA or Project Manager accounts to switch into.</p>}
           </div>
           <p className="border-t px-4 py-2 text-[10px] text-muted-foreground">An amber banner will let you exit back to Admin at any time.</p>
         </div>

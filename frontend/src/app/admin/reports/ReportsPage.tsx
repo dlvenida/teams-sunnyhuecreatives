@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link, useNavigate } from "react-router-dom"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, getAuthUser } from "@/lib/api"
 import type { ReportClientsResponse, ReportResponse, Settings } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -22,6 +22,7 @@ function initials(name: string) { return name.split(/\s+/).map(w => w[0]).slice(
 
 export function ReportsPage() {
   const navigate = useNavigate()
+  const isAdmin = getAuthUser()?.role === "admin"
   const { showPricing } = useDisplaySettings()
   const chartColor = useCssVar("--chart", "#ec4899")
   const now = new Date()
@@ -167,7 +168,7 @@ export function ReportsPage() {
               <div className="flex flex-wrap gap-2">
                 <Button variant="outline" onClick={exportCsv}><FileSpreadsheet className="h-4 w-4" /> CSV</Button>
                 <Button variant="outline" onClick={exportPdf}><FileDown className="h-4 w-4" /> PDF</Button>
-                <Button variant="gold" onClick={() => navigate(`/admin/invoices?client=${selected}&month=${month}&year=${year}&cutoff=${cutoff}`)}>Create Invoice <ArrowRight className="h-4 w-4" /></Button>
+                {isAdmin && <Button variant="gold" onClick={() => navigate(`/admin/invoices?client=${selected}&month=${month}&year=${year}&cutoff=${cutoff}`)}>Create Invoice <ArrowRight className="h-4 w-4" /></Button>}
               </div>
             </div>
 
@@ -175,7 +176,7 @@ export function ReportsPage() {
               <StatCard title="Total Billable Hours" value={`${report.total_hours} hrs`} subtitle={`${report.lines.length} entries · ${report.days_worked ?? 0} days worked`} />
               <StatCard title="Tasks Completed" value={report.tasks_done ?? 0} subtitle="Marked done in this period" />
               <StatCard title="Pending Approval" value={`${report.pending_hours ?? 0} hrs`} subtitle={`${report.pending_count ?? 0} logs not yet in this report`} />
-              <StatCard title={report.show_rate ? "Total Amount" : "Ready to Invoice"} value={report.show_rate && report.total_amount != null ? formatCurrency(report.total_amount) : `${selectedSummary?.ready_to_invoice_hours ?? 0} hrs`} subtitle={selectedSummary?.invoice_number ? `Invoice ${selectedSummary.invoice_number} · ${selectedSummary.invoice_status}` : "Approved & not yet invoiced"} />
+              <StatCard title={report.show_rate ? "Total Amount" : "Approved hours"} value={report.show_rate && report.total_amount != null ? formatCurrency(report.total_amount) : `${selectedSummary?.ready_to_invoice_hours ?? 0} hrs`} subtitle={selectedSummary?.invoice_number ? `Invoice ${selectedSummary.invoice_number} · ${selectedSummary.invoice_status}` : "Approved and not yet invoiced"} />
             </div>
 
             {Number(report.pending_hours ?? 0) > 0 && (

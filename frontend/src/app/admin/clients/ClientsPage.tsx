@@ -628,7 +628,7 @@ export function ClientsPage() {
                         </p>
                         <p className="text-xs text-muted-foreground">
                           Job titles only (not pay). Same VA can be “Social Media Manager” here and “Email Marketing Specialist” on another client.
-                          {canEditTeamRoles ? " Admin and Auditor can add or edit." : ""}
+                          {canEditTeamRoles ? " Admin and Project Manager can add or edit." : ""}
                         </p>
                       </div>
                     </div>

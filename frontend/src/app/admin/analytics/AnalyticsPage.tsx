@@ -38,7 +38,7 @@ export function AnalyticsPage() {
   })
   const auditorCandidates = [
     ...(profile ? [{ id: profile.id, label: `${profile.display_name} (Admin)` }] : []),
-    ...appUsers.filter(u => u.role === "auditor").map(u => ({ id: u.id, label: `${u.name} (Auditor)` })),
+    ...appUsers.filter(u => u.role === "auditor").map(u => ({ id: u.id, label: `${u.name} (Project Manager)` })),
     ...allVas.filter(v => v.user_id).map(v => ({ id: v.user_id!, label: `${v.name} (VA)` })),
   ]
 
@@ -59,10 +59,10 @@ export function AnalyticsPage() {
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">Analytics — Team Auditor</h1>
+          <h1 className="font-display text-xl font-bold">Analytics</h1>
           <p className="text-xs text-muted-foreground">
             {isAdmin
-              ? "Monitor every VA — who logged time today, who has no tasks, and who is quiet this week. Assign a Project Manager to watch each VA."
+              ? "See who logged time today, who has no tasks, and who is quiet this week. Assign a Project Manager to watch each VA."
               : "Project Manager workspace: watch VA activity and approve timesheets. Rates and pay stay hidden."}
           </p>
         </div>
@@ -108,7 +108,7 @@ export function AnalyticsPage() {
           <CardContent className="overflow-x-auto p-0">
             {isLoading && <p className="p-4 text-sm text-muted-foreground">Checking team activity…</p>}
             <table className="w-full text-xs">
-              <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Member</th><th className="p-3">Status</th><th className="p-3">Assigned Clients</th><th className="p-3">Tasks</th><th className="p-3">Hours Today / Week</th><th className="p-3">Last Active</th><th className="p-3"><span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Auditor</span></th></tr></thead>
+              <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Member</th><th className="p-3">Status</th><th className="p-3">Assigned Clients</th><th className="p-3">Tasks</th><th className="p-3">Hours Today / Week</th><th className="p-3">Last Active</th><th className="p-3"><span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Project Manager</span></th></tr></thead>
               <tbody>
                 {members.map(m => (
                   <tr key={m.va_id} className={cn("border-b last:border-0 hover:bg-primary/[0.03]", m.status === "inactive" && "bg-red-50/50")}>
@@ -135,15 +135,15 @@ export function AnalyticsPage() {
                             value={m.reviewer_user_id ?? ""}
                             onChange={(e) => setAuditor.mutate({ vaId: m.va_id, auditor: e.target.value || null })}
                             className="h-8 max-w-[160px] rounded-lg border bg-card px-2 text-[11px] font-medium"
-                            title="Assign a specific user (Auditor) to review this VA"
+                            title="Assign a Project Manager to watch this VA"
                           >
-                            <option value="">No auditor</option>
+                            <option value="">No project manager</option>
                             {auditorCandidates.filter(c => c.id !== m.user_id).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                           </select>
-                          {m.reviewer_name && <span className="mt-1 block text-[10px] text-muted-foreground">Auditor: {m.reviewer_name}</span>}
+                          {m.reviewer_name && <span className="mt-1 block text-[10px] text-muted-foreground">Project Manager: {m.reviewer_name}</span>}
                         </>
                       ) : (
-                        <span className="text-[11px] font-medium text-muted-foreground">{m.reviewer_name ? `Auditor: ${m.reviewer_name}` : "No auditor assigned"}</span>
+                        <span className="text-[11px] font-medium text-muted-foreground">{m.reviewer_name ? `Project Manager: ${m.reviewer_name}` : "No project manager assigned"}</span>
                       )}
                     </td>
                   </tr>

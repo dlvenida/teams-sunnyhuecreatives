@@ -9,10 +9,11 @@ import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
 import { cn, formatCurrency, formatDate, payrollPdfFilename } from "@/lib/utils"
 import { PayrollDocument } from "@/components/pdf/PayrollDocument"
-import { PayslipDocument } from "@/components/pdf/PayslipDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
+import { PayslipPaperModal } from "@/components/payroll/PayslipPaperModal"
 import { TimesheetReviewPanel } from "@/components/payroll/TimesheetReviewPanel"
 import { buildPayslip } from "@/lib/payslip"
+import { renderPayslipHtml } from "@/lib/payslipHtml"
 import { generatePdfBlob } from "@/lib/pdf"
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeCheck, Banknote, CheckCircle2, ClipboardCheck, FileDown, FileSpreadsheet, Trash2, Wallet } from "lucide-react"
@@ -39,6 +40,7 @@ export function PayrollPage() {
   const [openVa, setOpenVa] = useState<string>("")
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
   const [pdfFilename, setPdfFilename] = useState("va-payroll.pdf")
+  const [payslipHtml, setPayslipHtml] = useState<string | null>(null)
   const [editing, setEditing] = useState<{ id: string; description: string; start_time: string; end_time: string; va_rate: string; va_name: string; work_date: string } | null>(null)
   const [markPaidError, setMarkPaidError] = useState("")
   const [pdfError, setPdfError] = useState("")
@@ -156,7 +158,7 @@ export function PayrollPage() {
     setPdfFilename(payrollPdfFilename(nameForFile, payroll.period_start, payroll.period_end))
     if (isAdmin) {
       const slips = doc.vas.map((va) => buildPayslip(va, payroll.period_start, payroll.period_end, settings))
-      setPdfBlob(await generatePdfBlob(<PayslipDocument slips={slips} />))
+      setPayslipHtml(renderPayslipHtml(slips))
       return
     }
     setPdfBlob(await generatePdfBlob(
@@ -602,6 +604,9 @@ export function PayrollPage() {
         />
       )}
       <PdfPreviewModal blob={pdfBlob} filename={pdfFilename} onClose={() => setPdfBlob(null)} />
+      {payslipHtml && (
+        <PayslipPaperModal html={payslipHtml} filename={pdfFilename} onClose={() => setPayslipHtml(null)} />
+      )}
     </div>
   )
 }

@@ -41,7 +41,7 @@ DEFAULT_TEMPLATES = [
      "cta_label": "Open My Board", "cta_url": "", "variables": ["name", "from_name", "tasks", "work_logs"]},
     {"key": "log_submitted", "name": "New Time Log Submitted (Admin)", "subject": "🕒 New time log from {{va_name}} — {{client}}",
      "body_html": "<p>A VA just submitted a time log for review.</p><p><strong>{{va_name}}</strong> · {{client}} · {{date}} · {{hours}} hrs<br>{{description}}</p>",
-     "cta_label": "Review in All Logs", "cta_url": "", "variables": ["va_name", "client", "date", "hours", "description"]},
+     "cta_label": "Review logs", "cta_url": "", "variables": ["va_name", "client", "date", "hours", "description"]},
     {"key": "log_approved", "name": "Time Log Approved", "subject": "✅ Your time log was approved — {{client}}",
      "body_html": "<p>Hi {{name}},</p><p>Good news — your time log for <strong>{{client}}</strong> on {{date}} ({{hours}} hrs) was approved and now counts toward payroll.</p>",
      "cta_label": "View My Logs", "cta_url": "", "variables": ["name", "client", "date", "hours"]},

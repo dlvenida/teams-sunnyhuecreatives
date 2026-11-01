@@ -255,9 +255,9 @@ export function VAPayrollPage() {
     <div className="mx-auto max-w-4xl space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">My Payroll</h1>
+          <h1 className="font-display text-xl font-bold">My timesheets & pay</h1>
           <p className="text-xs text-muted-foreground">
-            Your year of pay at a glance — peso amounts first — plus submit a timesheet for any period.
+            Grouped by week, Monday to Sunday. Submit a timesheet when the week is ready. Peso amounts are yours.
           </p>
         </div>
       </div>

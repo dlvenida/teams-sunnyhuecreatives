@@ -9,6 +9,7 @@ import { cn, formatDate } from "@/lib/utils"
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Activity, Eye, ShieldCheck, Siren } from "lucide-react"
 import { useCssVar } from "@/hooks/useCssVar"
+import { InsightsTabs } from "@/components/nav/AreaTabs"
 
 const STATUS_META = {
   inactive: { label: "No activity", pill: "border-red-200 bg-red-100 text-red-700", bar: "bg-red-400" },
@@ -59,15 +60,16 @@ export function AnalyticsPage() {
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">Analytics</h1>
+          <h1 className="font-display text-xl font-bold">Team activity</h1>
           <p className="text-xs text-muted-foreground">
             {isAdmin
-              ? "See who logged time today, who has no tasks, and who is quiet this week. Assign a Project Manager to watch each VA."
-              : "Project Manager workspace: watch VA activity and approve timesheets. Rates and pay stay hidden."}
+              ? "Who logged time today, who has no tasks, and who is quiet this week. Assign a Project Manager to watch each VA."
+              : "Watch VA activity. Rates and pay stay hidden. Timesheet approval lives under Timesheet review."}
           </p>
         </div>
         {activity && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">Week of {formatDate(activity.week_start)} – {formatDate(activity.week_end)}</p>}
       </div>
+      <InsightsTabs />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Team Hours This Week" value={`${teamHoursWeek.toFixed(2)} hrs`} subtitle={`${teamHoursToday.toFixed(2)} hrs today`} />

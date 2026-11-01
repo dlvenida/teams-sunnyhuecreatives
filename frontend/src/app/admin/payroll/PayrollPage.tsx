@@ -180,7 +180,7 @@ export function PayrollPage() {
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">VA Payroll</h1>
+          <h1 className="font-display text-xl font-bold">{isAdmin ? "Timesheets & pay" : "Timesheet review"}</h1>
           <p className="text-xs text-muted-foreground">
             {isAdmin
               ? "VA submits timesheet → review entries → approve or reject → payslip (per client) → Mark Paid."
@@ -281,7 +281,7 @@ export function PayrollPage() {
         </div>
 
         {n(payroll.total_pending_hours) > 0 && (
-          <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800"><AlertTriangle className="h-4 w-4 shrink-0" /> {payroll.total_pending_hours} hrs are still <b>submitted</b> and not counted in pay yet. <Link to="/admin/logs" className="font-bold underline">Approve them in All Logs →</Link></p>
+          <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800"><AlertTriangle className="h-4 w-4 shrink-0" /> {payroll.total_pending_hours} hrs are still <b>submitted</b> and not counted in pay yet. <Link to="/admin/logs" className="font-bold underline">Approve them in Review logs</Link></p>
         )}
 
         {/* Charts row */}

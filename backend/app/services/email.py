@@ -162,7 +162,7 @@ def send_va_submission_notification(va_name: str, client_name: str, hours: str, 
         f"<p>A VA just submitted a time log for review.</p>" + detail_rows([
             ("VA", va_name), ("Client", client_name), ("Date", work_date), ("Hours", hours), ("Work", description),
         ]),
-        "Review in All Logs", f"{settings.app_url}/admin/logs",
+        "Review logs", f"{settings.app_url}/admin/logs",
     )
     return send_email(_resend_config()[2], f"New submission from {va_name} — {client_name}", html_body, template_key="log_submitted")
 

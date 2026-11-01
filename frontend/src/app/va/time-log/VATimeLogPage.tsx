@@ -11,6 +11,7 @@ import { calculateHoursFromTimes, formatCurrency, formatDate } from "@/lib/utils
 import { groupByWeek } from "@/lib/weeks"
 import { Paperclip, Plus, X } from "lucide-react"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
+import { TimeAreaTabs } from "@/components/nav/AreaTabs"
 
 interface ApprovedRate {
   id: string
@@ -195,13 +196,16 @@ export function VATimeLogPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
       <div>
-        <h1 className="text-base font-semibold">{isStaff ? "Log my time" : "Log Time"}</h1>
+        <h1 className="text-base font-semibold">{isStaff ? "Log my time" : "Log time"}</h1>
         <p className="text-[11px] text-muted-foreground">
-          {showMoney
-            ? "Rate auto-fills from your approved My Rates profile"
-            : "Log your own hours — date, start/end, and task or service performed."}
+          {isStaff
+            ? "Your own hours. To approve the team, use Review logs."
+            : showMoney
+              ? "Rate auto-fills from your approved My Rates profile."
+              : "Log your own hours: date, start and end, and the task you did."}
         </p>
       </div>
+      {isStaff && <TimeAreaTabs />}
 
       <Card>
         <CardHeader className="pb-2"><CardTitle>New Entry</CardTitle></CardHeader>

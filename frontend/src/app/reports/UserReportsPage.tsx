@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { cn, formatDate, roleLabel } from "@/lib/utils"
 import { CreateReportModal, REPORT_CATEGORIES } from "@/components/reports/CreateReportModal"
 import { Flag, Inbox } from "lucide-react"
+import { InsightsTabs } from "@/components/nav/AreaTabs"
 
 const STATUS_META: Record<string, string> = {
   open: "bg-red-100 text-red-700 border-red-200",
@@ -44,10 +45,10 @@ export function UserReportsPage() {
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-display text-xl font-bold">{isStaff ? "Team Reports" : "My Reports"}</h1>
+          <h1 className="font-display text-xl font-bold">{isStaff ? "Team inbox" : "My Reports"}</h1>
           <p className="max-w-xl text-sm text-muted-foreground">
             {isStaff
-              ? "Reports sent by the team to the Administrator and Project Manager. Acknowledge or resolve them. The reporter is notified."
+              ? "Reports the team sends to the Administrator and Project Manager. Acknowledge or resolve them. The reporter is notified. Client hours and team activity are the other tabs."
               : "Create a report for the Administrator and Project Manager, and track what happens to it here."}
           </p>
         </div>
@@ -56,6 +57,7 @@ export function UserReportsPage() {
           <Button variant="gold" size="sm" onClick={() => setCreateOpen(true)}><Flag className="h-3.5 w-3.5" /> Create a Report</Button>
         </div>
       </div>
+      {isStaff && <InsightsTabs />}
 
       <div className="flex flex-wrap gap-2">
         {[["", `All (${reports.length})`], ["open", `Open (${counts.open})`], ["acknowledged", `Acknowledged (${counts.acknowledged})`], ["resolved", `Resolved (${counts.resolved})`]].map(([id, label]) => (

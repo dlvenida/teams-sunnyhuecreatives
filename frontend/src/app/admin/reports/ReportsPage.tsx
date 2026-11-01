@@ -14,6 +14,7 @@ import { generatePdfBlob } from "@/lib/pdf"
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, CheckCircle2, Clock3, FileDown, FileSpreadsheet, ReceiptText, Search } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
+import { InsightsTabs } from "@/components/nav/AreaTabs"
 import { useCssVar } from "@/hooks/useCssVar"
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => ({ value: i + 1, label: new Date(2000, i).toLocaleString("en", { month: "long" }) }))
@@ -82,11 +83,12 @@ export function ReportsPage() {
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">Client Reports</h1>
-          <p className="text-xs text-muted-foreground">Billable work per client for the period — pick a client to see the full report. Nothing to generate, it computes itself.</p>
+          <h1 className="font-display text-xl font-bold">Client hours</h1>
+          <p className="text-xs text-muted-foreground">Billable work per client. Pick a client and the report fills in. This is not the team inbox and not the activity board.</p>
         </div>
         <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">{list?.period_label ?? "…"} · <span className="text-primary">{list?.total_hours ?? "0"} hrs billable</span>{Number(list?.total_pending_hours ?? 0) > 0 && <span className="text-amber-600"> · {list?.total_pending_hours} hrs pending approval</span>}</p>
       </div>
+      <InsightsTabs />
 
       {/* Period controls — everything below updates automatically */}
       <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-6">
@@ -180,7 +182,7 @@ export function ReportsPage() {
             </div>
 
             {Number(report.pending_hours ?? 0) > 0 && (
-              <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800"><AlertTriangle className="h-4 w-4 shrink-0" /> {report.pending_hours} hrs ({report.pending_count} logs) are still waiting for approval and are <b>not</b> in this report yet. <Link to="/admin/logs" className="font-bold underline">Review in All Logs →</Link></p>
+              <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800"><AlertTriangle className="h-4 w-4 shrink-0" /> {report.pending_hours} hrs ({report.pending_count} logs) are still waiting for approval and are <b>not</b> in this report yet. <Link to="/admin/logs" className="font-bold underline">Review in Review logs</Link></p>
             )}
 
             <div className="grid gap-4 lg:grid-cols-3">

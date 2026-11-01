@@ -133,7 +133,7 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
             except Exception:
                 pass
         pending = db.query(WorkLog).filter(WorkLog.status == WorkLogStatus.submitted).count()
-        if pending: attention.append({"type": "pending_logs", "severity": "medium", "title": f"{pending} time log(s) waiting for approval", "detail": "Review in All Logs", "link": "/admin/logs"})
+        if pending: attention.append({"type": "pending_logs", "severity": "medium", "title": f"{pending} time log(s) waiting for approval", "detail": "Open Review logs", "link": "/admin/logs"})
         unpaid = db.query(Invoice).filter(Invoice.status == InvoiceStatus.unpaid).count()
         if unpaid and current.role == UserRole.admin:
             attention.append({"type": "unpaid_invoices", "severity": "medium", "title": f"{unpaid} unpaid invoice(s)", "detail": "Follow up on payments", "link": "/admin/invoices"})
@@ -332,7 +332,6 @@ def get_dashboard_summary(
             .scalar()
             or Decimal("0")
         )
-        from app.models import ClientApprovalStatus
         active_clients = db.query(Client).filter(
             Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved
         ).count()

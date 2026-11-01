@@ -6,11 +6,9 @@ import type { DashboardOverview, DashboardSummary, TaskItem } from "@/lib/types"
 import type { UserProfile } from "@/lib/profile"
 import { formatCurrency, formatDate, cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Input, Label } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TASK_STATUSES, PRIORITY_META, formatDuration } from "@/components/tasks/task-utils"
-import { OwnerFinancePanel } from "@/components/dashboard/OwnerFinancePanel"
-import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, DollarSign, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, TrendingUp, Volume2, X } from "lucide-react"
+import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, DollarSign, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, TrendingUp, Volume2, Wallet, X } from "lucide-react"
 
 const BIBLE_VERSES = [
   { text: "She is clothed with strength and dignity; she can laugh at the days to come.", author: "Proverbs 31:25" },
@@ -319,25 +317,6 @@ export function DashboardPage() {
 
   const { data: overview, isLoading: ovLoading } = useQuery({ queryKey: ["dashboard-overview"], queryFn: () => apiFetch<DashboardOverview>("/dashboard/overview"), refetchInterval: 30_000 })
   const { data } = useQuery({ queryKey: ["dashboard"], queryFn: () => apiFetch<DashboardSummary>("/dashboard/summary"), enabled: isStaff })
-  const [payFrom, setPayFrom] = useState("")
-  const [payTo, setPayTo] = useState("")
-  type Earnings = {
-    this_week: { hours: string; earned: string; currency: string }
-    this_month: { hours: string; earned: string; currency: string }
-    all_time: { hours: string; earned: string; currency: string }
-    range?: { hours: string; earned: string; currency: string } | null
-    by_client: { client_name: string; hours: string; earned: string; pay_type: string; currency: string; status: string }[]
-  }
-  const { data: earnings } = useQuery({
-    queryKey: ["va-earnings", payFrom, payTo],
-    queryFn: () => {
-      const qs = new URLSearchParams()
-      if (payFrom) qs.set("date_from", payFrom)
-      if (payTo) qs.set("date_to", payTo)
-      return apiFetch<Earnings>(`/va/earnings${qs.toString() ? `?${qs}` : ""}`)
-    },
-    enabled: isVA,
-  })
   const approve = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}/approve`, { method: "POST" }), onSuccess: () => { qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["dashboard-overview"] }) } })
   const reject = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}/reject`, { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboard"] }) })
 
@@ -346,117 +325,139 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      {/* Hero — open, no box */}
       <div className="px-1 pt-2 sm:px-2">
         <p className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.14em] text-primary"><GreetIcon className="h-4 w-4" /> {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</p>
-        <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
-          <h1 className="break-words font-extrabold leading-[1.05] tracking-tight" style={{ fontSize: "clamp(1.65rem, 7vw, 2.9rem)" }}>{greetLabel}, <span className="gradient-text">{firstName}</span> <span className={cn("inline-block", emojiClass)} aria-hidden="true">{emoji}</span><span className="emoji-wave inline-block" aria-hidden="true">👋</span></h1>
-          {isVA && (profile?.job_title || profile?.tenure_label) && (
-            <p className="mt-2 text-sm text-muted-foreground">
-              {profile.job_title && <span className="font-semibold text-foreground">{profile.job_title}</span>}
-              {profile.job_title && profile.tenure_label ? " · " : ""}
-              {profile.tenure_label}
-            </p>
-          )}
-          <div className="flex flex-wrap gap-4 pb-1 text-center sm:gap-8">
-            {[{ label: "Due today", v: c.due_today, icon: CalendarDays }, { label: "Overdue", v: c.overdue, icon: AlertTriangle }, { label: "Done this week", v: c.done_this_week, icon: CheckCircle2 }].map(s => (
-              <div key={s.label}>
-                <s.icon className={cn("mx-auto h-5 w-5", s.label === "Overdue" && c.overdue > 0 ? "text-red-500" : "text-primary")} />
-                <div className={cn("mt-1 text-2xl font-extrabold leading-none sm:text-3xl", s.label === "Overdue" && c.overdue > 0 && "text-red-600")}>{s.v}</div>
-                <div className="mt-1 text-[11px] font-medium text-muted-foreground">{s.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="mt-4 max-w-3xl">
-          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary/80">Bible verse of the day 💕</p>
-          <p className="mt-1 flex items-start gap-2.5 text-lg font-medium leading-snug text-foreground/90"><Sparkles className="mt-1 h-4.5 w-4.5 shrink-0 text-primary" /><span>“{quote.text}” <span className="text-sm font-semibold text-primary/80">— {quote.author}</span></span></p>
-        </div>
-        <div className="mt-5 flex flex-wrap gap-2 [&>a]:min-w-0 [&_button]:w-full min-[480px]:[&_button]:w-auto">
-          <Link to={`${base}/tasks`}><Button variant="gold" size="lg"><ListTodo className="h-4 w-4" /> Open Task Board</Button></Link>
-          {isVA && <Link to="/va/time-clock"><Button variant="outline" size="lg"><Play className="h-4 w-4" /> Clock In</Button></Link>}
+        <h1 className="mt-2 break-words font-extrabold leading-[1.05] tracking-tight" style={{ fontSize: "clamp(1.65rem, 7vw, 2.9rem)" }}>{greetLabel}, <span className="gradient-text">{firstName}</span> <span className={cn("inline-block", emojiClass)} aria-hidden="true">{emoji}</span><span className="emoji-wave inline-block" aria-hidden="true">👋</span></h1>
+        {isVA && (profile?.job_title || profile?.tenure_label) && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            {profile.job_title && <span className="font-semibold text-foreground">{profile.job_title}</span>}
+            {profile.job_title && profile.tenure_label ? " · " : ""}
+            {profile.tenure_label}
+          </p>
+        )}
+        <div className="mt-4 flex flex-wrap gap-2 [&>a]:min-w-0 [&_button]:w-full min-[480px]:[&_button]:w-auto">
+          {isVA && <Link to="/va/time-clock"><Button variant="gold" size="lg"><Play className="h-4 w-4" /> Clock in</Button></Link>}
+          {isVA && <Link to="/va/time-log"><Button variant="gold" size="lg"><Timer className="h-4 w-4" /> Log time</Button></Link>}
+          {isVA && <Link to="/va/payroll"><Button variant="outline" size="lg"><Wallet className="h-4 w-4" /> My timesheets</Button></Link>}
+          {isStaff && <Link to="/admin/payroll"><Button variant="gold" size="lg"><Wallet className="h-4 w-4" /> {isAdmin ? "Timesheets & pay" : "Review timesheets"}</Button></Link>}
+          <Link to={`${base}/tasks`}><Button variant={isVA ? "outline" : "gold"} size="lg"><ListTodo className="h-4 w-4" /> Open Task Board</Button></Link>
+          {isAdmin && <Link to="/admin/invoices"><Button variant="outline" size="lg">Invoices</Button></Link>}
           <Link to={`${base}/projects`}><Button variant="outline" size="lg">Projects <ArrowRight className="h-3.5 w-3.5" /></Button></Link>
           <Button variant="outline" size="lg" onClick={() => setReaderOpen(true)}><Volume2 className="h-4 w-4 text-primary" /> Listen to updates</Button>
+        </div>
+        <div className="mt-4 max-w-3xl">
+          <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary/80">Bible verse of the day</p>
+          <p className="mt-1 flex items-start gap-2.5 text-base font-medium leading-snug text-foreground/90"><Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><span>“{quote.text}” <span className="text-sm font-semibold text-primary/80">{quote.author}</span></span></p>
         </div>
       </div>
 
       {readerOpen && <div id="dashboard-reader" className="scroll-mt-20"><DashboardReader overview={overview} isAdmin={isStaff} firstName={firstName} autoPlay onClose={() => setReaderOpen(false)} /></div>}
 
-      {/* VA earnings strip + pay report (Approved only) */}
-      {isVA && earnings && (
-        <div className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-3">
-            {[
-              { label: "This Week", ...earnings.this_week },
-              { label: "This Month", ...earnings.this_month },
-              { label: "All Time", ...earnings.all_time },
-            ].map((s) => (
-              <Card key={s.label} className="min-w-0">
-                <CardContent className="p-4">
-                  <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
-                  <p className="mt-1 text-2xl font-extrabold">{formatCurrency(s.earned, s.currency)}</p>
-                  <p className="text-[11px] text-muted-foreground">{s.hours}h approved</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-          <Card>
-            <CardHeader className="pb-2"><CardTitle>My Pay Report</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-[11px] text-muted-foreground">Only Jane-approved entries count. Pending and rejected work is excluded.</p>
-              <div className="flex flex-wrap items-end gap-3">
-                <div><Label className="text-[11px]">From</Label><Input type="date" value={payFrom} onChange={(e) => setPayFrom(e.target.value)} /></div>
-                <div><Label className="text-[11px]">To</Label><Input type="date" value={payTo} onChange={(e) => setPayTo(e.target.value)} /></div>
-                <Button variant="outline" size="sm" onClick={() => { setPayFrom(""); setPayTo("") }}>Clear</Button>
-              </div>
-              {earnings.range && (payFrom || payTo) && (
-                <p className="text-sm font-semibold">
-                  Range total: {formatCurrency(earnings.range.earned, earnings.range.currency)} · {earnings.range.hours}h approved
-                </p>
-              )}
-              {earnings.by_client.length > 0 && (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Client</th><th className="p-3">Type</th><th className="p-3">Hours</th><th className="p-3">Earned</th><th className="p-3">Status</th></tr></thead>
-                    <tbody>
-                      {earnings.by_client.map((r) => (
-                        <tr key={r.client_name} className="border-b">
-                          <td className="p-3 font-semibold">{r.client_name}</td>
-                          <td className="p-3 capitalize">{r.pay_type}</td>
-                          <td className="p-3">{r.hours}</td>
-                          <td className="p-3">{formatCurrency(r.earned, r.currency)}</td>
-                          <td className="p-3">{r.status}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {earnings.by_client.length === 0 && <p className="text-xs text-muted-foreground">No approved work in this range yet.</p>}
+      <div className="grid grid-cols-3 gap-3">
+        {[{ label: "Due today", v: c.due_today, icon: CalendarDays }, { label: "Overdue", v: c.overdue, icon: AlertTriangle }, { label: "Done this week", v: c.done_this_week, icon: CheckCircle2 }].map(s => (
+          <Card key={s.label} className="min-w-0">
+            <CardContent className="p-4 text-center">
+              <s.icon className={cn("mx-auto h-5 w-5", s.label === "Overdue" && c.overdue > 0 ? "text-red-500" : "text-primary")} />
+              <div className={cn("mt-1 text-2xl font-extrabold leading-none sm:text-3xl", s.label === "Overdue" && c.overdue > 0 && "text-red-600")}>{s.v}</div>
+              <div className="mt-1 text-[11px] font-medium text-muted-foreground">{s.label}</div>
             </CardContent>
           </Card>
+        ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* What to prepare */}
+        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><ClipboardList className="h-4 w-4 text-primary" /> What to Prepare Today</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {overview.prepare.map((item, i) => <label key={i} className="flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 text-xs hover:bg-muted/40"><input type="checkbox" className="mt-0.5 accent-[var(--primary)]" /><span>{item}</span></label>)}
+            {overview.prepare.length === 0 && <p className="text-xs text-muted-foreground">You're all caught up. Review the board for what's next.</p>}
+          </CardContent></Card>
+
+        {/* Today's tasks */}
+        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><Flame className="h-4 w-4 text-primary" /> Current tasks today</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {overview.today_tasks.map(t => <MiniTask key={t.id} t={t} base={base} />)}
+            {overview.today_tasks.length === 0 && <p className="text-xs text-muted-foreground">Nothing due today. Pull something from the backlog below.</p>}
+            <Link className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline" to={`${base}/tasks`}>View full Task Board <ArrowRight className="h-3 w-3" /></Link>
+          </CardContent></Card>
+
+        {/* Needs attention */}
+        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-red-500" /> Needs Attention {overview.needs_attention.length > 0 && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">{overview.needs_attention.length}</span>}</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {overview.needs_attention.map((a, i) => <Link key={i} to={a.link} className={cn("block rounded-xl border p-3 monday-card", a.severity === "high" ? "border-red-200 bg-red-50/70" : "border-amber-200 bg-amber-50/70")}><p className="text-xs font-semibold">{a.title}</p><p className="text-[11px] text-muted-foreground">{a.detail}</p></Link>)}
+            {overview.needs_attention.length === 0 && <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-xs"><CheckCircle2 className="mr-1 inline h-4 w-4 text-green-600" /> All clear. Nothing overdue, blocked, or waiting.</div>}
+            {overview.live_clock.length > 0 && <div className="pt-1"><p className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"><Timer className="h-3.5 w-3.5" /> Live clock</p>{overview.live_clock.map(e => <div key={e.id} className="mb-1.5 flex items-center justify-between rounded-lg border px-2.5 py-2 text-[11px]"><span><span className="live-dot mr-1.5 inline-block h-2 w-2 rounded-full bg-green-500" />{isAdmin ? `${e.va_name} · ` : ""}{e.task_title || e.client_name || "Working"}</span><span className="font-mono font-bold">{formatDuration(e.elapsed_seconds)}</span></div>)}</div>}
+          </CardContent></Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Coming up this week</CardTitle></CardHeader><CardContent className="space-y-2">
+          {overview.upcoming.map(t => <MiniTask key={t.id} t={t} base={base} />)}{overview.upcoming.length === 0 && <p className="text-xs text-muted-foreground">No deadlines in the next 7 days.</p>}
+        </CardContent></Card>
+        {/* Projects */}
+        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Projects at a Glance</CardTitle></CardHeader><CardContent className="space-y-3">
+          {overview.projects.map(p => { const pct = p.task_total ? Math.round((p.task_done / p.task_total) * 100) : 0; return (
+            <Link key={p.id} to={`${base}/tasks?project=${p.id}`} className="block rounded-xl border p-3 monday-card"><div className="flex justify-between text-xs"><span className="font-semibold">{p.name}</span><span className="text-muted-foreground">{pct}%</span></div>
+              <div className="mt-1 text-[11px] text-muted-foreground">{p.client_name} · {p.cadence} · {p.task_done}/{p.task_total} done</div>
+              <div className="mt-2 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, background: p.color }} /></div></Link>) })}
+          {overview.projects.length === 0 && <p className="text-xs text-muted-foreground">No active projects yet.</p>}
+        </CardContent></Card>
+        {isStaff ? (
+          <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Team load</CardTitle></CardHeader><CardContent className="space-y-2">
+            {(overview.team_load ?? []).map(v => (
+              <div key={v.name} className="flex items-center gap-3 text-xs">
+                <span className="w-20 truncate font-semibold">{v.name}</span>
+                <span className="h-2 flex-1 rounded-full bg-slate-100"><span className={cn("block h-2 rounded-full", v.overdue ? "bg-red-400" : v.open >= 5 ? "bg-amber-400" : "bg-green-400")} style={{ width: `${Math.min(100, v.open * 14)}%` }} /></span>
+                <span className="text-muted-foreground">{v.open} open{v.overdue ? ` · ${v.overdue} overdue` : ""}{v.due_today ? ` · ${v.due_today} today` : ""}</span>
+              </div>
+            ))}
+            {(overview.team_load ?? []).length === 0 && <p className="text-xs text-muted-foreground">No open tasks assigned yet.</p>}
+            <p className="pt-1 text-[11px] text-muted-foreground">Balance the board: move work from red/amber to green before assigning new tasks.</p>
+          </CardContent></Card>
+        ) : (
+          <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Tomorrow</CardTitle></CardHeader><CardContent className="space-y-2">
+            {(overview.tomorrow_tasks ?? []).map(t => <MiniTask key={t.id} t={t} base={base} />)}
+            {(overview.tomorrow_tasks ?? []).length === 0 && <p className="text-xs text-muted-foreground">Nothing due tomorrow. Pull one thing forward if you finish early today.</p>}
+          </CardContent></Card>
+        )}
+      </div>
+
+      {isStaff && data && data.pending_logs.length > 0 && (
+          <Card><CardHeader className="pb-2"><CardTitle>Pending Approval ({data.pending_logs.length})</CardTitle></CardHeader><CardContent className="overflow-x-auto p-0"><table className="w-full text-xs">
+            <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">VA</th><th className="p-3">Client</th><th className="p-3">Hours</th><th className="p-3">Actions</th></tr></thead>
+            <tbody>{data.pending_logs.map(log => <tr key={log.id} className="border-b"><td className="p-3">{log.work_date}</td><td className="p-3">{log.va_name}</td><td className="p-3">{log.client_name}</td><td className="p-3">{log.hours}</td><td className="p-3"><div className="flex gap-1"><Button size="sm" variant="success" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></div></td></tr>)}</tbody></table></CardContent></Card>
+      )}
+
+      {isStaff && data && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            { label: "Pending Entries", value: data.pending_entries },
+            { label: "Approved Hours", value: data.approved_hours },
+            { label: "Active Clients", value: data.active_clients },
+            { label: "Active VAs", value: data.active_vas },
+          ].map((s) => (
+            <Card key={s.label} className="min-w-0"><CardContent className="p-4"><p className="text-[11px] font-medium text-muted-foreground">{s.label}</p><p className="mt-1 text-2xl font-extrabold">{s.value}</p></CardContent></Card>
+          ))}
         </div>
       )}
 
-      {/* Owner earnings + expenses — admin only (never shown to VA or auditor) */}
-      {isAdmin && <OwnerFinancePanel />}
-
-      {/* Jane profit bar + business stats (admin only — money hidden for auditor) */}
       {isAdmin && data && (
         <div className="space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-2 px-1">
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Money</p>
+            <div className="flex flex-wrap gap-2">
+              <Link to="/admin/invoices"><Button variant="outline" size="sm">Invoices</Button></Link>
+              <Link to="/admin/finance"><Button variant="gold" size="sm"><DollarSign className="h-3.5 w-3.5" /> Earnings & expenses</Button></Link>
+            </div>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {[
               { label: "Total Invoiced", value: formatCurrency(data.total_invoiced), icon: DollarSign },
               { label: "Paid by Clients", value: formatCurrency(data.paid_by_clients), icon: CheckCircle2 },
               { label: "Total VA Payout", value: formatCurrency(data.total_va_payout), icon: DollarSign },
-              {
-                label: "Estimated Profit",
-                value: formatCurrency(data.estimated_profit),
-                icon: TrendingUp,
-                tone: Number(data.estimated_profit) >= 0 ? "text-green-600" : "text-red-600",
-              },
-              { label: "Pending Entries", value: String(data.pending_entries), icon: ClipboardList },
-              { label: "Approved Hours", value: String(data.approved_hours), icon: Timer },
+              { label: "Estimated Profit", value: formatCurrency(data.estimated_profit), icon: TrendingUp, tone: Number(data.estimated_profit) >= 0 ? "text-green-600" : "text-red-600" },
+              { label: "This Week's VA Pay", value: formatCurrency(data.this_week_va_pay), icon: Wallet },
+              { label: "Invoices Issued", value: String(data.invoices_issued), icon: ClipboardList },
             ].map((s) => (
               <Card key={s.label} className="min-w-0">
                 <CardContent className="flex items-center gap-3 p-4">
@@ -469,24 +470,9 @@ export function DashboardPage() {
               </Card>
             ))}
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              { label: "Active Clients", value: data.active_clients },
-              { label: "Invoices Issued", value: data.invoices_issued },
-              { label: "This Week's VA Pay", value: formatCurrency(data.this_week_va_pay) },
-              { label: "Active VAs", value: data.active_vas },
-            ].map((s) => (
-              <Card key={s.label} className="min-w-0">
-                <CardContent className="p-4">
-                  <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
-                  <p className="mt-1 text-2xl font-extrabold">{s.value}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
           <div className="grid gap-4 lg:grid-cols-2">
             <Card className="min-w-0">
-              <CardHeader className="pb-2"><CardTitle>Hours by Client</CardTitle></CardHeader>
+              <CardHeader className="pb-2"><CardTitle>Hours by client</CardTitle></CardHeader>
               <CardContent className="space-y-2">
                 {data.hours_by_client.length === 0 && <p className="text-xs text-muted-foreground">No approved hours yet.</p>}
                 {data.hours_by_client.slice(0, 8).map((row) => {
@@ -504,7 +490,7 @@ export function DashboardPage() {
               </CardContent>
             </Card>
             <Card className="min-w-0">
-              <CardHeader className="pb-2"><CardTitle>VA Pay This Week</CardTitle></CardHeader>
+              <CardHeader className="pb-2"><CardTitle>VA pay this week</CardTitle></CardHeader>
               <CardContent className="grid gap-2 sm:grid-cols-2">
                 {data.va_pay_this_week.length === 0 && <p className="text-xs text-muted-foreground">No approved VA pay this week.</p>}
                 {data.va_pay_this_week.map((v) => (
@@ -520,7 +506,6 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* Smart advice — time & workload aware */}
       <div>
         <p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground"><Lightbulb className="h-3.5 w-3.5 text-primary" /> Smart advice for {greetLabel.replace("Good ", "").toLowerCase()}</p>
         <div className="grid gap-3 lg:grid-cols-3">
@@ -532,82 +517,6 @@ export function DashboardPage() {
           ))}
         </div>
       </div>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        {/* What to prepare */}
-        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><ClipboardList className="h-4 w-4 text-primary" /> What to Prepare Today</CardTitle></CardHeader>
-          <CardContent className="space-y-2">
-            {overview.prepare.map((item, i) => <label key={i} className="flex cursor-pointer items-start gap-2.5 rounded-xl border p-3 text-xs hover:bg-muted/40"><input type="checkbox" className="mt-0.5 accent-[var(--primary)]" /><span>{item}</span></label>)}
-            {overview.prepare.length === 0 && <p className="text-xs text-muted-foreground">You're all caught up. Review the board for what's next.</p>}
-          </CardContent></Card>
-
-        {/* Today's tasks */}
-        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><Flame className="h-4 w-4 text-primary" /> Current Tasks — Today</CardTitle></CardHeader>
-          <CardContent className="space-y-2">
-            {overview.today_tasks.map(t => <MiniTask key={t.id} t={t} base={base} />)}
-            {overview.today_tasks.length === 0 && <p className="text-xs text-muted-foreground">Nothing due today. Pull something from the backlog below.</p>}
-            <Link className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline" to={`${base}/tasks`}>View full Task Board <ArrowRight className="h-3 w-3" /></Link>
-          </CardContent></Card>
-
-        {/* Needs attention */}
-        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-red-500" /> Needs Attention {overview.needs_attention.length > 0 && <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">{overview.needs_attention.length}</span>}</CardTitle></CardHeader>
-          <CardContent className="space-y-2">
-            {overview.needs_attention.map((a, i) => <Link key={i} to={a.link} className={cn("block rounded-xl border p-3 monday-card", a.severity === "high" ? "border-red-200 bg-red-50/70" : "border-amber-200 bg-amber-50/70")}><p className="text-xs font-semibold">{a.title}</p><p className="text-[11px] text-muted-foreground">{a.detail}</p></Link>)}
-            {overview.needs_attention.length === 0 && <div className="rounded-xl border border-green-200 bg-green-50 p-3 text-xs"><CheckCircle2 className="mr-1 inline h-4 w-4 text-green-600" /> All clear — nothing overdue, blocked, or waiting.</div>}
-            {overview.live_clock.length > 0 && <div className="pt-1"><p className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-muted-foreground"><Timer className="h-3.5 w-3.5" /> Live clock</p>{overview.live_clock.map(e => <div key={e.id} className="mb-1.5 flex items-center justify-between rounded-lg border px-2.5 py-2 text-[11px]"><span><span className="live-dot mr-1.5 inline-block h-2 w-2 rounded-full bg-green-500" />{isAdmin ? `${e.va_name} · ` : ""}{e.task_title || e.client_name || "Working"}</span><span className="font-mono font-bold">{formatDuration(e.elapsed_seconds)}</span></div>)}</div>}
-          </CardContent></Card>
-      </div>
-
-      <div className="grid gap-4 lg:grid-cols-3">
-        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Coming Up — Next 7 Days</CardTitle></CardHeader><CardContent className="space-y-2">
-          {overview.upcoming.map(t => <MiniTask key={t.id} t={t} base={base} />)}{overview.upcoming.length === 0 && <p className="text-xs text-muted-foreground">No deadlines in the next 7 days.</p>}
-        </CardContent></Card>
-        {/* Projects */}
-        <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Projects at a Glance</CardTitle></CardHeader><CardContent className="space-y-3">
-          {overview.projects.map(p => { const pct = p.task_total ? Math.round((p.task_done / p.task_total) * 100) : 0; return (
-            <Link key={p.id} to={`${base}/tasks?project=${p.id}`} className="block rounded-xl border p-3 monday-card"><div className="flex justify-between text-xs"><span className="font-semibold">{p.name}</span><span className="text-muted-foreground">{pct}%</span></div>
-              <div className="mt-1 text-[11px] text-muted-foreground">{p.client_name} · {p.cadence} · {p.task_done}/{p.task_total} done</div>
-              <div className="mt-2 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full transition-all" style={{ width: `${pct}%`, background: p.color }} /></div></Link>) })}
-          {overview.projects.length === 0 && <p className="text-xs text-muted-foreground">No active projects yet.</p>}
-        </CardContent></Card>
-        {isStaff ? (
-          <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Team Load — Who's Busy</CardTitle></CardHeader><CardContent className="space-y-2">
-            {(overview.team_load ?? []).map(v => (
-              <div key={v.name} className="flex items-center gap-3 text-xs">
-                <span className="w-20 truncate font-semibold">{v.name}</span>
-                <span className="h-2 flex-1 rounded-full bg-slate-100"><span className={cn("block h-2 rounded-full", v.overdue ? "bg-red-400" : v.open >= 5 ? "bg-amber-400" : "bg-green-400")} style={{ width: `${Math.min(100, v.open * 14)}%` }} /></span>
-                <span className="text-muted-foreground">{v.open} open{v.overdue ? ` · ${v.overdue} overdue` : ""}{v.due_today ? ` · ${v.due_today} today` : ""}</span>
-              </div>
-            ))}
-            {(overview.team_load ?? []).length === 0 && <p className="text-xs text-muted-foreground">No open tasks assigned yet.</p>}
-            <p className="pt-1 text-[11px] text-muted-foreground">Balance the board: move work from red/amber to green before assigning new tasks.</p>
-          </CardContent></Card>
-        ) : (
-          <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Tomorrow</CardTitle></CardHeader><CardContent className="space-y-2">
-            {(overview.tomorrow_tasks ?? []).map(t => <MiniTask key={t.id} t={t} base={base} />)}
-            {(overview.tomorrow_tasks ?? []).length === 0 && <p className="text-xs text-muted-foreground">Nothing due tomorrow. A calm start — pull one thing forward if you finish early today.</p>}
-          </CardContent></Card>
-        )}
-      </div>
-
-      {isStaff && data && data.pending_logs.length > 0 && (
-          <Card><CardHeader className="pb-2"><CardTitle>Pending Approval ({data.pending_logs.length})</CardTitle></CardHeader><CardContent className="overflow-x-auto p-0"><table className="w-full text-xs">
-            <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">VA</th><th className="p-3">Client</th><th className="p-3">Hours</th><th className="p-3">Actions</th></tr></thead>
-            <tbody>{data.pending_logs.map(log => <tr key={log.id} className="border-b"><td className="p-3">{log.work_date}</td><td className="p-3">{log.va_name}</td><td className="p-3">{log.client_name}</td><td className="p-3">{log.hours}</td><td className="p-3"><div className="flex gap-1"><Button size="sm" variant="success" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></div></td></tr>)}</tbody></table></CardContent></Card>
-      )}
-
-      {isStaff && data && !isAdmin && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { label: "Pending Entries", value: data.pending_entries },
-            { label: "Approved Hours", value: data.approved_hours },
-            { label: "Active Clients", value: data.active_clients },
-            { label: "Active VAs", value: data.active_vas },
-          ].map((s) => (
-            <Card key={s.label} className="min-w-0"><CardContent className="p-4"><p className="text-[11px] font-medium text-muted-foreground">{s.label}</p><p className="mt-1 text-2xl font-extrabold">{s.value}</p></CardContent></Card>
-          ))}
-        </div>
-      )}
     </div>
   )
 }

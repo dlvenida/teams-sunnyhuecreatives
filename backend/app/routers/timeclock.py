@@ -34,7 +34,7 @@ from app.schemas import (
     TimeClockResponse,
 )
 from app.services.calculations import calculate_pay
-from app.services.notifications import admin_and_auditor_user_ids, admin_user_ids, push
+from app.services.notifications import push
 
 router = APIRouter(prefix="/time-clock", tags=["time-clock"])
 DEFAULT_TZ = "Asia/Manila"
@@ -188,8 +188,6 @@ def clock_in(body: ClockInRequest, current: Annotated[CurrentUser, Depends(requi
     db.commit()
     db.refresh(entry)
     loaded = _load(db, entry.id)
-    push(db, admin_user_ids(db), "clock", f"⏱️ {loaded.va.name if loaded.va else 'A VA'} clocked in",
-         f"{(loaded.task.title if loaded.task else None) or (loaded.client.name if loaded.client else 'General work')}", "/admin/time-clock")
     return _serialize(loaded)
 
 
@@ -377,15 +375,6 @@ def request_correction(
         )
         .filter(TimeClockCorrectionRequest.id == req.id)
         .first()
-    )
-    va_name = req.va.name if req.va else "VA"
-    push(
-        db,
-        admin_and_auditor_user_ids(db),
-        "clock",
-        f"🕒 {va_name} requested a time clock revision",
-        f"{body.reason.strip()[:140]} · {req.entry.client.name if req.entry and req.entry.client else 'General'}",
-        "/admin/time-clock",
     )
     return _serialize_correction(req)
 

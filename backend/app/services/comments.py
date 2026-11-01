@@ -203,10 +203,21 @@ def notify_reaction(db: Session, *, scope: str, comment, emoji: str, reactor_nam
     excerpt = (comment.body or "").strip().replace("\n", " ")
     if len(excerpt) > 140:
         excerpt = excerpt[:140] + "…"
+    # Reactions are routine. Admins and Project Managers are not notified.
+    from app.models import UserRole
+    audience = _audience_ids(recipient_ids)
+    if audience:
+        staff_ids = {
+            u.id for u in db.query(User).filter(
+                User.id.in_(audience),
+                User.role.in_([UserRole.admin, UserRole.auditor]),
+            ).all()
+        }
+        audience = [uid for uid in audience if uid not in staff_ids]
     push(
-        db, _audience_ids(recipient_ids), "comment",
+        db, audience, "comment",
         f"{emoji} {reactor_name} reacted on: {scope_title}",
-        f"Reacted {emoji} to: “{excerpt}”" if excerpt else f"Reacted {emoji} to a comment",
+        f"Reacted {emoji} to: \"{excerpt}\"" if excerpt else f"Reacted {emoji} to a comment",
         link, exclude_user_id=exclude_user_id,
     )
 
@@ -214,7 +225,7 @@ def notify_reaction(db: Session, *, scope: str, comment, emoji: str, reactor_nam
     author_id = comment.author_user_id
     if author_id and author_id != exclude_user_id:
         user = db.query(User).filter(User.id == author_id, User.is_active.is_(True)).first()
-        if user and user.email:
+        if user and user.email and user.role not in (UserRole.admin, UserRole.auditor):
             first = (user.display_name or user.email.split("@")[0]).split(" ")[0]
             html = branded_email(
                 f"Hey {first}! Someone reacted {emoji}",
@@ -248,7 +259,7 @@ def sort_comments(items: list[dict], sort: str) -> list[dict]:
     return pinned + rest
 
 
-def notify_mentions(db: Session, mentions, *, scope_label: str, title: str, body: str, link: str, exclude_user_id) -> None:
+def notify_mentions(db: Session, mentions, *, scope_label: str, title: str, body: str, link: str, exclude_user_id, actor_name: str = "", verb: str = "mentioned") -> None:
     from app.config import settings as app_settings
     from app.models import User
     from app.services.email import branded_email, send_email
@@ -260,12 +271,18 @@ def notify_mentions(db: Session, mentions, *, scope_label: str, title: str, body
             ids.append(uuid.UUID(str(m.get("user_id"))))
         except Exception:
             continue
+    who = (actor_name or "Someone").strip() or "Someone"
+    context = (body or "").strip().replace("\n", " ")
+    if len(context) > 160:
+        context = context[:160].rstrip() + "..."
+    context = context.replace("\u2014", ", ").replace("\u2013", "-")
+    where = f"In {title}" if title else scope_label
     push(
         db,
         ids,
         "comment",
-        f"🔔 You were mentioned in {scope_label}: {title}",
-        body[:200],
+        f"{who} {verb} you",
+        f"{where}. {context}".strip() if context else where,
         link,
         exclude_user_id=exclude_user_id,
     )

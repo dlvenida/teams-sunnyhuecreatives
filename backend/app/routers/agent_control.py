@@ -41,7 +41,7 @@ from app.routers.settings import get_settings as read_settings, update_settings 
 from app.routers.tasks import create_task
 from app.services import comments as comment_svc
 from app.services.email import branded_email, send_email
-from app.services.notifications import admin_user_ids, push, va_user_id
+from app.services.notifications import push, va_user_id
 from app.deps import CurrentUser
 
 router = APIRouter(prefix="/agent", tags=["agent-control"])
@@ -464,7 +464,7 @@ def run_action(body: ActionRequest, actor: Annotated[str, Depends(require_agent)
             entry = TimeClockEntry(va_id=va.id, task_id=UUID(p["task_id"]) if p.get("task_id") else None,
                                    clock_in=datetime.now(timezone.utc), status=ClockStatus.running, notes="Clocked in by Grok Bot")
             db.add(entry); db.commit()
-            push(db, admin_user_ids(db), "clock", f"⏱️ {va.name} clocked in (via Grok Bot)", "", "/admin/time-clock")
+            # Clock-ins are routine and are not sent to Admin or Project Manager.
             db.refresh(entry)
             _audit(db, actor, body.action, "time_clock", str(entry.id), p, va.name)
             return {"ok": True, "entry_id": str(entry.id), "va": va.name}

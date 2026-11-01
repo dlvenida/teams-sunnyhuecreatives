@@ -23,8 +23,8 @@ from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionRe
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
 from app.services.calculations import calculate_hours
-from app.services.email import send_timesheet_submitted_notification, send_va_submission_notification
-from app.services.notifications import admin_and_auditor_user_ids, push
+from app.services.email import send_timesheet_submitted_notification
+from app.services.notifications import push
 from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
 from app.services.work_log_overlap import assert_no_time_overlap
 
@@ -570,16 +570,7 @@ def submit_work_log(
         .first()
     )
 
-    send_va_submission_notification(
-        va_name=log.va.name,
-        client_name=log.client.name,
-        hours=str(log.hours),
-        work_date=str(log.work_date),
-        description=log.description_plain[:200],
-    )
-    push(db, admin_and_auditor_user_ids(db), "log", f"🕒 New time log from {log.va.name}",
-         f"{log.client.name} · {log.work_date} · {log.hours} hrs waiting for approval.", "/admin/logs")
-
+    # Routine time logs are not sent to Admin or Project Manager.
     return _serialize_log(log)
 
 
@@ -704,15 +695,23 @@ def submit_timesheet(
         (va.user.display_name.strip() if va and va.user and va.user.display_name else "")
         or (va.name if va else "VA")
     )
-    # In-app for admin + auditor; email for admins
-    push(
-        db,
-        admin_and_auditor_user_ids(db),
-        "log",
-        f"📋 Timesheet submitted by {va_label}",
-        f"{body.date_from} – {body.date_to} · {hours} hrs · {len(logs)} entries — Pending Approval.",
-        "/admin/payroll",
-    )
+    from app.models import User as _User, UserRole as _UserRole
+    from app.services.notifications import first_name_of, possessive_pronoun
+    pronoun = possessive_pronoun(va.user if va else None)
+    staff = db.query(_User).filter(
+        _User.role.in_([_UserRole.admin, _UserRole.auditor]),
+        _User.is_active.is_(True),
+    ).all()
+    for person in staff:
+        first = first_name_of(person)
+        push(
+            db,
+            [person.id],
+            "log",
+            f"Hi {first}, {va_label} submitted {pronoun} timesheet",
+            f"{body.date_from} to {body.date_to}. {hours} hrs, {len(logs)} entries.",
+            "/admin/payroll",
+        )
     try:
         send_timesheet_submitted_notification(
             va_label,
@@ -720,6 +719,7 @@ def submit_timesheet(
             str(body.date_to),
             str(hours),
             len(logs),
+            pronoun=pronoun,
         )
     except Exception:
         pass

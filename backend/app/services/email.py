@@ -173,41 +173,45 @@ def send_timesheet_submitted_notification(
     period_end: str,
     hours: str,
     entry_count: int,
+    pronoun: str = "their",
 ) -> bool:
-    """Email admins when a VA officially submits a timesheet for payroll review."""
+    """Email admins and project managers when a VA submits a timesheet."""
     from app.models import User, UserRole
     from app.database import SessionLocal
+    from app.services.notifications import first_name_of
 
-    html_body = branded_email(
-        f"Timesheet waiting for review — {va_name}",
-        f"{va_name} submitted {hours} hrs for {period_start} – {period_end}",
-        (
-            f"<p><strong>{va_name}</strong> submitted their timesheet and it’s waiting for your approval.</p>"
-            + detail_rows([
-                ("VA", va_name),
-                ("Period", f"{period_start} – {period_end}"),
-                ("Hours", hours),
-                ("Entries", str(entry_count)),
-            ])
-            + "<p>Open VA Payroll → Timesheet Review to approve before generating the payroll PDF.</p>"
-        ),
-        "Review timesheet",
-        f"{settings.app_url}/admin/payroll",
-    )
-    subject = f"📋 Timesheet submitted by {va_name} — awaiting approval"
-    # Prefer notifying every active admin; fall back to Resend “from/to” inbox.
     sent_any = False
     try:
         db = SessionLocal()
         try:
-            admins = db.query(User).filter(User.role == UserRole.admin, User.is_active.is_(True)).all()
-            for admin in admins:
-                if admin.email and send_email(admin.email, subject, html_body, template_key="timesheet_submitted"):
+            staff = db.query(User).filter(
+                User.role.in_([UserRole.admin, UserRole.auditor]),
+                User.is_active.is_(True),
+            ).all()
+            for person in staff:
+                if not person.email:
+                    continue
+                first = first_name_of(person)
+                subject = f"Hi {first}, {va_name} submitted {pronoun} timesheet"
+                html_body = branded_email(
+                    subject,
+                    f"{period_start} to {period_end}",
+                    (
+                        f"<p>Hi {first},</p>"
+                        f"<p><strong>{va_name}</strong> submitted {pronoun} timesheet.</p>"
+                        + detail_rows([
+                            ("Period", f"{period_start} to {period_end}"),
+                            ("Hours", hours),
+                            ("Entries", str(entry_count)),
+                        ])
+                    ),
+                    "Review timesheet",
+                    f"{settings.app_url}/admin/payroll",
+                )
+                if send_email(person.email, subject, html_body, template_key="timesheet_submitted"):
                     sent_any = True
         finally:
             db.close()
     except Exception:
         pass
-    if not sent_any:
-        return send_email(_resend_config()[2], subject, html_body, template_key="timesheet_submitted")
-    return True
+    return sent_any

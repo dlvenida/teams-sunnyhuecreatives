@@ -125,13 +125,26 @@ def submit_rate(
     db.add(rate)
     db.commit()
     rate = _load(db, rate.id)
+    va_name = rate.va.name if rate.va else "A VA"
+    client_name = rate.client.name if rate.client else "a client"
+    # No amounts here. Project Managers must not see rates or pay.
     push(
         db,
         admin_user_ids(db),
         "system",
-        f"💵 Rate request from {rate.va.name if rate.va else 'VA'}",
-        f"{rate.client.name if rate.client else 'Client'} · {rate.pay_type.value} · {rate.currency.value} {rate.amount}",
+        f"{va_name} asked about a rate",
+        f"For {client_name}.",
         "/admin/va-rates",
+    )
+    from app.services.notifications import admin_and_auditor_user_ids
+    pm_ids = [uid for uid in admin_and_auditor_user_ids(db) if uid not in set(admin_user_ids(db))]
+    push(
+        db,
+        pm_ids,
+        "system",
+        f"{va_name} asked about a rate",
+        f"For {client_name}.",
+        "/admin/users",
     )
     return _serialize(rate)
 

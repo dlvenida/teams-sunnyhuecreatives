@@ -8,7 +8,7 @@ from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin_or_auditor
 from app.models import UserReport, UserRole, VA
 from app.schemas import UserReportCreate, UserReportResponse, UserReportUpdate
-from app.services.notifications import admin_and_auditor_user_ids, push
+from app.services.notifications import push
 
 router = APIRouter(prefix="/user-reports", tags=["user-reports"])
 
@@ -49,11 +49,7 @@ def create_report(body: UserReportCreate, current: Annotated[CurrentUser, Depend
     db.commit()
     db.refresh(report)
     loaded = _load(db, report.id)
-    # Notify every Administrator + Auditor (in-app; notification link opens their inbox)
-    link = "/admin/user-reports"
-    push(db, admin_and_auditor_user_ids(db), "system", f"📣 New report from {name}: {report.title}",
-         f"{report.category.replace('_', ' ').title()}" + (f" · {loaded.client.name}" if loaded and loaded.client else "") + f" — {report.body[:160]}", link,
-         exclude_user_id=current.user.id)
+    # Team reports are not pushed to Admin or Project Manager. They still appear in Team Reports.
     return _serialize(loaded)
 
 

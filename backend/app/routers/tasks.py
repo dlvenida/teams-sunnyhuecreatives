@@ -128,14 +128,18 @@ def _spawn_and_notify(db: Session, done_task: Task) -> Task | None:
         except Exception:
             pass
     if done_task.created_by:
-        push(
-            db,
-            [done_task.created_by],
-            "task",
-            f"🔁 Next repeat created: {child_full.title}",
-            f"Due {child_full.due_date} · same client, assignee, and schedule",
-            f"/tasks?task={child_full.id}",
-        )
+        from app.models import User as _User
+        creator = db.query(_User).filter(_User.id == done_task.created_by).first()
+        # Routine repeat copies are not sent to Admin or Project Manager.
+        if creator and creator.role == UserRole.va:
+            push(
+                db,
+                [done_task.created_by],
+                "task",
+                f"Next repeat created: {child_full.title}",
+                f"Due {child_full.due_date}. Same client, assignee, and schedule.",
+                f"/tasks?task={child_full.id}",
+            )
     return child_full
 
 
@@ -342,11 +346,16 @@ def add_comment(task_id: UUID, body: TaskCommentCreate, current: Annotated[Curre
         db.commit()
     task_full = _base_query(db).filter(Task.id == task_id).first()
     if task_full:
-        notify_task_comment(db, task_full, c.body, name, author_is_assignee=bool(current.va_id and task_full.assignee_va_id == current.va_id))
+        notify_task_comment(
+            db, task_full, c.body, name,
+            author_user_id=current.user.id,
+            author_is_assignee=bool(current.va_id and task_full.assignee_va_id == current.va_id),
+        )
     from app.services.notifications import task_deep_link
     comment_svc.notify_mentions(
         db, mentions, scope_label="a task", title=task_full.title if task_full else "Task",
-        body=f"{name}: {c.body}", link=task_deep_link(task_id, c.id), exclude_user_id=current.user.id,
+        body=c.body, link=task_deep_link(task_id, c.id), exclude_user_id=current.user.id,
+        actor_name=name, verb="mentioned",
     )
     return comment_svc.serialize_comment(db, c, "task", current.user.id)
 

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.models import Notification, VA
-from app.services.notifications import admin_and_auditor_user_ids, push, va_user_id
+from app.services.notifications import push, va_user_id
 from app.services.payroll_calendar import (
     active_vas,
     current_and_upcoming,
@@ -54,17 +54,8 @@ def run_timesheet_reminders(db: Session) -> dict:
             continue
         push(db, [uid], "log", va_title, va_body, "/va/payroll")
 
-    # Staff: alert when deadline is today (or within 1 day) and VAs are still missing
-    if missing and info["days_until_deadline"] <= 1:
-        names = ", ".join(v.name for v in missing[:8])
-        more = f" (+{len(missing) - 8} more)" if len(missing) > 8 else ""
-        staff_title = f"{len(missing)} VA(s) have not submitted timesheets yet"
-        staff_body = f"Deadline is {label} ({period_end}). Missing: {names}{more}."
-        for uid in admin_and_auditor_user_ids(db):
-            if _already_notified(db, uid, staff_title):
-                continue
-            push(db, [uid], "log", staff_title, staff_body, "/admin/payroll")
-
+    # Missing-timesheet reminders stay with the VA. Admins and Project Managers
+    # are notified only when a timesheet is actually submitted.
     return {
         "skipped": False,
         "missing_count": len(missing),

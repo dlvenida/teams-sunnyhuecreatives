@@ -200,7 +200,7 @@ export function PayrollPage() {
               <h2 className="font-display text-base font-bold text-amber-950">
                 {pendingSheets.length} timesheet{pendingSheets.length === 1 ? "" : "s"} waiting for review
               </h2>
-              <p className="text-xs text-amber-900/80">Open Timesheet Review to check entries &amp; attachments, then approve. PDF stays locked until approved.</p>
+              <p className="text-xs text-amber-900/80">Open a timesheet to read every entry on this screen, then approve or reject. The payslip stays locked until approved.</p>
             </div>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">

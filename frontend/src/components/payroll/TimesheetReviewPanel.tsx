@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, apiFetchBlob } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { formatDate } from "@/lib/utils"
+import { groupByWeek } from "@/lib/weeks"
 import { CheckCircle2, FileText, Film, Image as ImageIcon, X, XCircle } from "lucide-react"
 
 interface Att {
@@ -52,12 +53,44 @@ function isVideo(ctype: string) {
 }
 
 function hoursMinutes(hoursStr: string) {
-  const h = Number(hoursStr || 0)
-  const whole = Math.floor(h)
-  const mins = Math.round((h - whole) * 60)
-  if (whole === 0) return `${mins} min`
-  if (mins === 0) return `${whole} hr${whole === 1 ? "" : "s"}`
-  return `${whole} hr${whole === 1 ? "" : "s"} ${mins} min`
+  const totalMins = Math.round(Number(hoursStr || 0) * 60)
+  const whole = Math.floor(totalMins / 60)
+  const mins = totalMins % 60
+  const hr = whole === 0 ? "" : whole === 1 ? "1 hr" : `${whole} hrs`
+  const min = mins === 0 ? "" : mins === 1 ? "1 min" : `${mins} mins`
+  return [hr, min].filter(Boolean).join(" ") || "0 mins"
+}
+
+function clockLabel(value?: string | null) {
+  if (!value) return ""
+  const [hRaw, mRaw] = value.slice(0, 5).split(":")
+  const h = Number(hRaw)
+  const m = Number(mRaw)
+  if (Number.isNaN(h) || Number.isNaN(m)) return value
+  const suffix = h >= 12 ? "PM" : "AM"
+  const hour = h % 12 || 12
+  return `${hour}:${String(m).padStart(2, "0")} ${suffix}`
+}
+
+function loggedWhen(entry: ReviewEntry) {
+  const day = formatDate(entry.work_date)
+  if (entry.start_time && entry.end_time) return `${day}, ${clockLabel(entry.start_time)} to ${clockLabel(entry.end_time)}`
+  if (entry.start_time) return `${day}, from ${clockLabel(entry.start_time)}`
+  return day
+}
+
+function weekdayLabel(iso: string) {
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number)
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })
+}
+
+function Field({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
+      <p className="mt-0.5 text-sm font-semibold leading-snug text-foreground">{value}</p>
+    </div>
+  )
 }
 
 function AttachmentThumb({
@@ -187,7 +220,7 @@ export function TimesheetReviewPanel({
   return (
     <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/40" onClick={onClose}>
       <div
-        className="flex h-full w-full max-w-3xl flex-col bg-card shadow-2xl animate-in slide-in-from-right"
+        className="flex h-full w-full max-w-4xl flex-col bg-card shadow-2xl animate-in slide-in-from-right"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
@@ -214,46 +247,72 @@ export function TimesheetReviewPanel({
             <p className="rounded-xl border bg-muted/30 p-6 text-center text-sm text-muted-foreground">No entries in this timesheet.</p>
           )}
 
-          <div className="space-y-4">
-            {(data?.entries ?? []).map((entry) => (
-              <article key={entry.id} className="rounded-2xl border bg-background p-4">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <p className="text-sm font-bold">{formatDate(entry.work_date)}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {entry.client_name}
-                      {entry.project_name ? ` · ${entry.project_name}` : ""}
-                      {entry.start_time && entry.end_time ? ` · ${entry.start_time}–${entry.end_time}` : ""}
-                    </p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-extrabold">{hoursMinutes(entry.hours)}</p>
-                    <p className="text-[10px] font-semibold uppercase text-muted-foreground">
-                      {entry.source === "clock" ? "Clock" : "Manual"} · {entry.status}
-                    </p>
-                  </div>
-                </div>
+          {sheet && data && data.entries.length > 0 && (
+            <div className="mb-5 rounded-2xl border border-primary/25 bg-primary/5 px-4 py-3">
+              <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary">Total</p>
+              <p className="font-display text-2xl font-bold">{hoursMinutes(sheet.total_hours)}</p>
+              <p className="text-xs text-muted-foreground">
+                {sheet.entry_count} {sheet.entry_count === 1 ? "entry" : "entries"} · {formatDate(sheet.period_start)} to {formatDate(sheet.period_end)}
+              </p>
+            </div>
+          )}
 
-                {(entry.task_name || entry.task_title) && (
-                  <p className="mt-2 text-sm font-bold text-foreground">{entry.task_name || entry.task_title}</p>
-                )}
-                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{entry.description || "—"}</p>
-                {entry.notes && (
-                  <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    <span className="font-bold">Comments: </span>
-                    {entry.notes}
-                  </p>
-                )}
-
-                {entry.attachments.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {entry.attachments.map((a) => (
-                      <AttachmentThumb key={a.id} att={a} url={urls[a.id]} onOpen={() => setLightbox(a)} />
-                    ))}
+          <div className="space-y-6">
+            {groupByWeek(data?.entries ?? [], (entry) => entry.work_date).map((week) => {
+              const byDate = new Map<string, ReviewEntry[]>()
+              for (const entry of week.items) {
+                const list = byDate.get(entry.work_date) ?? []
+                list.push(entry)
+                byDate.set(entry.work_date, list)
+              }
+              const dates = [...byDate.keys()].sort()
+              return (
+                <section key={week.id} className="space-y-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <h3 className="text-sm font-bold">Week {week.weekNumber} · {formatDate(week.start)} to {formatDate(week.end)}</h3>
+                    <p className="text-xs font-semibold text-primary">{hoursMinutes(String(week.items.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)))}</p>
                   </div>
-                )}
-              </article>
-            ))}
+                  {dates.map((iso) => {
+                    const dayEntries = (byDate.get(iso) ?? []).slice().sort((a, b) => (a.start_time || "").localeCompare(b.start_time || ""))
+                    return (
+                      <div key={iso} className="space-y-2">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground">
+                          {weekdayLabel(iso)} · {hoursMinutes(String(dayEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0)))}
+                        </p>
+                        {dayEntries.map((entry) => {
+                          const notes = [entry.description?.trim(), entry.notes?.trim() && entry.notes.trim() !== entry.description?.trim() ? entry.notes.trim() : ""].filter(Boolean).join("\n\n")
+                          return (
+                            <article key={entry.id} className="rounded-2xl border bg-background p-4">
+                              <div className="flex flex-wrap items-start justify-between gap-3">
+                                <h4 className="font-display text-base font-bold">{entry.task_name || entry.task_title || "No task name"}</h4>
+                                <p className="shrink-0 rounded-full bg-primary/10 px-3 py-1 text-sm font-extrabold text-primary">{hoursMinutes(entry.hours)}</p>
+                              </div>
+                              <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+                                <Field label="Project" value={entry.project_name || "No project"} />
+                                <Field label="Client" value={entry.client_name || "No client"} />
+                                <Field label="Duration" value={hoursMinutes(entry.hours)} />
+                                <Field label="Logged" value={loggedWhen(entry)} />
+                              </dl>
+                              <div className="mt-3">
+                                <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground">Description</p>
+                                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-foreground">{notes || "No description"}</p>
+                              </div>
+                              {entry.attachments.length > 0 && (
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {entry.attachments.map((a) => (
+                                    <AttachmentThumb key={a.id} att={a} url={urls[a.id]} onOpen={() => setLightbox(a)} />
+                                  ))}
+                                </div>
+                              )}
+                            </article>
+                          )
+                        })}
+                      </div>
+                    )
+                  })}
+                </section>
+              )
+            })}
           </div>
         </div>
 
@@ -279,7 +338,7 @@ export function TimesheetReviewPanel({
           )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
-              Same review for Admin and Project Manager. Approve to unlock the payslip, or reject so the VA can fix and resubmit. Project Managers never see rates or pay.
+              Approve to unlock the payslip, or reject so the VA can fix and resubmit. Project Managers do not see rates or pay on this screen.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={onClose}>Close</Button>
@@ -307,7 +366,7 @@ export function TimesheetReviewPanel({
               )}
               {rejected && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-800">
-                  Rejected — waiting on the VA
+                  Rejected. Waiting on the VA.
                 </span>
               )}
             </div>

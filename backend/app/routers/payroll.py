@@ -12,6 +12,7 @@ from app.deps import CurrentUser, require_admin, require_admin_or_auditor
 from app.models import (
     Currency,
     PayrollRun,
+    Project,
     Task,
     TaskStatus,
     TimesheetStatus,
@@ -325,6 +326,35 @@ def list_runs(
     ]
 
 
+def _review_entry(log: WorkLog, include_money: bool = False) -> dict:
+    """One log, fully spelled out for the approval screen. Money keys are omitted for Project Managers."""
+    project = log.project
+    project_client = project.client.name if project is not None and getattr(project, "client", None) is not None else None
+    entry = {
+        "id": str(log.id),
+        "work_date": str(log.work_date),
+        "client_name": project_client or (log.client.name if log.client else None),
+        "project_name": project.name if project is not None else None,
+        "task_title": log.task.title if log.task else None,
+        "task_name": log_task_name(log),
+        "description": log.description_plain or "",
+        "notes": log.notes or "",
+        "start_time": log.start_time.strftime("%H:%M") if log.start_time else None,
+        "end_time": log.end_time.strftime("%H:%M") if log.end_time else None,
+        "hours": str(log.hours),
+        "source": log.source or "manual",
+        "status": log.status.value if hasattr(log.status, "value") else str(log.status),
+        "attachments": [
+            WorkLogAttachmentResponse.model_validate(a).model_dump(mode="json")
+            for a in (log.attachments or [])
+        ],
+    }
+    if include_money:
+        entry["va_rate"] = str(log.va_rate)
+        entry["va_pay"] = str(log.va_pay)
+    return entry
+
+
 @router.get("/timesheets/{timesheet_id}/entries")
 def timesheet_entries(
     timesheet_id: UUID,
@@ -344,7 +374,7 @@ def timesheet_entries(
         db.query(WorkLog)
         .options(
             joinedload(WorkLog.client),
-            joinedload(WorkLog.project),
+            joinedload(WorkLog.project).joinedload(Project.client),
             joinedload(WorkLog.task),
             joinedload(WorkLog.attachments),
         )
@@ -376,28 +406,7 @@ def timesheet_entries(
             total_hours=sum((l.hours for l in logs), Decimal("0")),
         ),
         "entries": [
-            {
-                **{
-                    "id": str(l.id),
-                    "work_date": str(l.work_date),
-                    "client_name": l.client.name if l.client else None,
-                    "project_name": l.project.name if l.project else None,
-                    "task_title": l.task.title if l.task else None,
-                    "task_name": log_task_name(l),
-                    "description": l.description_plain,
-                    "notes": l.notes,
-                    "start_time": l.start_time.strftime("%H:%M") if l.start_time else None,
-                    "end_time": l.end_time.strftime("%H:%M") if l.end_time else None,
-                    "hours": str(l.hours),
-                    "source": l.source or "manual",
-                    "status": l.status.value if hasattr(l.status, "value") else str(l.status),
-                    "attachments": [
-                        WorkLogAttachmentResponse.model_validate(a).model_dump(mode="json")
-                        for a in (l.attachments or [])
-                    ],
-                },
-                **({} if redact else {"va_rate": str(l.va_rate), "va_pay": str(l.va_pay)}),
-            }
+            _review_entry(l, include_money=not redact)
             for l in logs
         ],
     }

@@ -983,6 +983,8 @@ class PayrollVAResult(BaseModel):
     timesheet_submitted: bool = False
     timesheet_status: str | None = None
     timesheet_id: UUID | None = None
+    timesheet_period_start: date | None = None
+    timesheet_period_end: date | None = None
 
 
 class TimesheetSubmitRequest(BaseModel):

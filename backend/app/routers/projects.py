@@ -116,10 +116,20 @@ def add_project_comment(project_id: UUID, body: ProjectCommentCreate, current: A
                                            CommentAttachment.scope_id == project_id, CommentAttachment.uploaded_by == current.user.id
                                            ).update({CommentAttachment.comment_id: c.id}, synchronize_session=False)
         db.commit()
-    from app.services.notifications import project_deep_link
+    from app.services.notifications import notify_involved_comment, project_deep_link, project_involved_user_ids
+    notify_involved_comment(
+        db,
+        author_name=name,
+        author_user_id=current.user.id,
+        comment_body=c.body,
+        context_title=p.name,
+        link=project_deep_link(project_id, c.id),
+        recipient_ids=project_involved_user_ids(db, p),
+    )
     comment_svc.notify_mentions(
-        db, mentions, scope_label="a project discussion", title=p.name, body=f"{name}: {c.body}",
+        db, mentions, scope_label="a project discussion", title=p.name, body=c.body,
         link=project_deep_link(project_id, c.id), exclude_user_id=current.user.id,
+        actor_name=name, verb="mentioned",
     )
     return comment_svc.serialize_comment(db, c, "project", current.user.id)
 
@@ -223,8 +233,9 @@ def create_meetup(project_id: UUID, body: MeetupCreate, current: Annotated[Curre
     from app.services.notifications import project_deep_link
     comment_svc.notify_mentions(
         db, attendees, scope_label="a project meet-up", title=p.name,
-        body=f"📅 {m.title} — {m.starts_at.strftime('%b %d, %Y %I:%M %p')}",
+        body=f"{m.title}, {m.starts_at.strftime('%b %d, %Y %I:%M %p')}",
         link=project_deep_link(project_id), exclude_user_id=current.user.id,
+        actor_name=m.created_by_name or "Someone", verb="tagged",
     )
     return m
 

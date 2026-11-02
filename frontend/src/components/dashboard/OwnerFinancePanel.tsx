@@ -106,7 +106,7 @@ export function OwnerFinancePanel() {
           </p>
           <h2 className="font-display text-lg font-bold">Your money at a glance</h2>
           <p className="text-xs text-muted-foreground">
-            Client income, VA payroll, and other expenses — private to you. Pick dates and a USD→PHP rate to see pesos too.
+            Client income, VA payroll, and other expenses. Private to you. Pick dates and a USD to PHP rate to see pesos too.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">

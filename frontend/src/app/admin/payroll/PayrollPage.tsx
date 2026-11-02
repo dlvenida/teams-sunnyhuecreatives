@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
-import type { PayrollResponse, PayrollRun, Settings, VA } from "@/lib/types"
+import type { PayrollResponse, PayrollRun, PayrollVA, Settings, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
@@ -10,11 +10,13 @@ import { StatCard } from "@/components/magicui/stat-card"
 import { cn, formatCurrency, formatDate, payrollPdfFilename } from "@/lib/utils"
 import { PayrollDocument } from "@/components/pdf/PayrollDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
+import { PayslipPaperModal } from "@/components/payroll/PayslipPaperModal"
 import { TimesheetReviewPanel } from "@/components/payroll/TimesheetReviewPanel"
+import { buildPayslip } from "@/lib/payslip"
+import { renderPayslipHtml } from "@/lib/payslipHtml"
 import { generatePdfBlob } from "@/lib/pdf"
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeCheck, Banknote, CheckCircle2, ClipboardCheck, FileDown, FileSpreadsheet, Trash2, Wallet } from "lucide-react"
-import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { useCssVar } from "@/hooks/useCssVar"
 
 const PERIODS = [
@@ -26,22 +28,24 @@ const n = (v?: string | number | null) => Number(v ?? 0)
 
 export function PayrollPage() {
   const qc = useQueryClient()
-  const { showPricing } = useDisplaySettings()
   const isAdmin = getAuthUser()?.role === "admin"
-  // Admin payslips include rate/pay; auditors review hours only (no money)
-  const pdfShowPricing = isAdmin
+  // Payroll money is always visible to Admin. Project Managers (auditor) never see it,
+  // even if the company "hide pricing" toggle is off elsewhere.
+  const showPricing = isAdmin
   const chartColor = useCssVar("--chart", "#ec4899")
-  const [period, setPeriod] = useState("custom")
+  const [period, setPeriod] = useState("this_month")
   const [vaId, setVaId] = useState("")
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
   const [openVa, setOpenVa] = useState<string>("")
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
   const [pdfFilename, setPdfFilename] = useState("va-payroll.pdf")
+  const [payslipHtml, setPayslipHtml] = useState<string | null>(null)
   const [editing, setEditing] = useState<{ id: string; description: string; start_time: string; end_time: string; va_rate: string; va_name: string; work_date: string } | null>(null)
   const [markPaidError, setMarkPaidError] = useState("")
   const [pdfError, setPdfError] = useState("")
   const [reviewTimesheetId, setReviewTimesheetId] = useState<string | null>(null)
+  const [payReview, setPayReview] = useState<PayrollVA | null>(null)
   const [usdPhpRate, setUsdPhpRate] = useState("")
   const parsedRate = (() => {
     const r = parseFloat(usdPhpRate)
@@ -79,7 +83,11 @@ export function PayrollPage() {
     }),
     enabled: period !== "custom" || (!!dateFrom && !!dateTo),
   })
-  const { data: runs = [] } = useQuery({ queryKey: ["payroll-runs"], queryFn: () => apiFetch<PayrollRun[]>("/payroll/runs") })
+  const { data: runs = [] } = useQuery({
+    queryKey: ["payroll-runs"],
+    queryFn: () => apiFetch<PayrollRun[]>("/payroll/runs"),
+    enabled: isAdmin,
+  })
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["payroll"] })
@@ -100,7 +108,7 @@ export function PayrollPage() {
           description_plain: editing!.description,
           start_time: editing!.start_time,
           end_time: editing!.end_time,
-          va_rate: parseFloat(editing!.va_rate),
+          ...(showPricing ? { va_rate: parseFloat(editing!.va_rate) } : {}),
         }),
       }),
     onSuccess: () => {
@@ -148,14 +156,22 @@ export function PayrollPage() {
         ? doc.vas[0].va_name
         : "Team"
     setPdfFilename(payrollPdfFilename(nameForFile, payroll.period_start, payroll.period_end))
+    if (isAdmin) {
+      const slips = doc.vas.map((va) => buildPayslip(va, payroll.period_start, payroll.period_end, settings))
+      setPayslipHtml(renderPayslipHtml(slips))
+      return
+    }
     setPdfBlob(await generatePdfBlob(
-      <PayrollDocument payroll={doc} settings={settings} showPricing={pdfShowPricing} usdPhpRate={parsedRate} />,
+      <PayrollDocument payroll={doc} settings={settings} showPricing={false} usdPhpRate={null} />,
     ))
   }
   const exportCsv = () => {
     if (!payroll) return
-    const rows = [["VA", "Date", "Client", "Project", "Task", "Description", "Source", "Status", "Hours", "Rate", "Pay", "Currency"],
-      ...payroll.vas.flatMap(va => va.entries.map(e => [va.va_name, e.work_date, e.client_name, e.project_name ?? "", e.task_title ?? "", `"${(e.description || "").replace(/"/g, '""')}"`, e.source ?? "", e.status ?? "", e.hours, e.rate, e.pay, va.currency]))]
+    const rows = showPricing
+      ? [["VA", "Date", "Client", "Project", "Task", "Description", "Source", "Status", "Hours", "Rate", "Pay", "Currency"],
+        ...payroll.vas.flatMap(va => va.entries.map(e => [va.va_name, e.work_date, e.client_name, e.project_name ?? "", e.task_name || e.task_title || "", `"${(e.description || "").replace(/"/g, '""')}"`, e.source ?? "", e.status ?? "", e.hours, e.rate ?? "", e.pay ?? "", va.currency]))]
+      : [["VA", "Date", "Client", "Project", "Task", "Description", "Source", "Status", "Hours"],
+        ...payroll.vas.flatMap(va => va.entries.map(e => [va.va_name, e.work_date, e.client_name, e.project_name ?? "", e.task_name || e.task_title || "", `"${(e.description || "").replace(/"/g, '""')}"`, e.source ?? "", e.status ?? "", e.hours]))]
     const blob = new Blob([rows.map(r => r.join(",")).join("\n")], { type: "text/csv" })
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "va-payroll.csv"; a.click(); URL.revokeObjectURL(a.href)
   }
@@ -164,9 +180,11 @@ export function PayrollPage() {
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">VA Payroll</h1>
+          <h1 className="font-display text-xl font-bold">{isAdmin ? "Timesheets & pay" : "Timesheet review"}</h1>
           <p className="text-xs text-muted-foreground">
-            VA submits timesheet → you review entries &amp; attachments → approve → then Payroll PDF / Mark Paid unlock.
+            {isAdmin
+              ? "VA submits timesheet → review entries → approve or reject → payslip (per client) → Mark Paid."
+              : "Project Manager review. Approve or reject timesheets. You see the VA name, dates, tasks, hours, and status. Rates, pay, and payroll totals stay hidden."}
           </p>
         </div>
         {payroll && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">{formatDate(payroll.period_start)} – {formatDate(payroll.period_end)}</p>}
@@ -182,7 +200,7 @@ export function PayrollPage() {
               <h2 className="font-display text-base font-bold text-amber-950">
                 {pendingSheets.length} timesheet{pendingSheets.length === 1 ? "" : "s"} waiting for review
               </h2>
-              <p className="text-xs text-amber-900/80">Open Timesheet Review to check entries &amp; attachments, then approve. PDF stays locked until approved.</p>
+              <p className="text-xs text-amber-900/80">Open a timesheet to read every entry on this screen, then approve or reject. The payslip stays locked until approved.</p>
             </div>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -244,7 +262,7 @@ export function PayrollPage() {
         )}
         <div className="flex items-end gap-2">
           <Button variant="outline" onClick={exportCsv} disabled={!payroll}><FileSpreadsheet className="h-4 w-4" /> CSV</Button>
-          <Button variant="gold" onClick={() => exportPdf()} disabled={!payroll}><FileDown className="h-4 w-4" /> Payroll PDF</Button>
+          <Button variant="gold" onClick={() => exportPdf()} disabled={!payroll}><FileDown className="h-4 w-4" /> {isAdmin ? "Payroll PDF" : "Hours PDF"}</Button>
         </div>
       </div>
 
@@ -263,7 +281,7 @@ export function PayrollPage() {
         </div>
 
         {n(payroll.total_pending_hours) > 0 && (
-          <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800"><AlertTriangle className="h-4 w-4 shrink-0" /> {payroll.total_pending_hours} hrs are still <b>submitted</b> and not counted in pay yet. <Link to="/admin/logs" className="font-bold underline">Approve them in All Logs →</Link></p>
+          <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800"><AlertTriangle className="h-4 w-4 shrink-0" /> {payroll.total_pending_hours} hrs are still <b>submitted</b> and not counted in pay yet. <Link to="/admin/logs" className="font-bold underline">Approve them in Review logs</Link></p>
         )}
 
         {/* Charts row */}
@@ -296,8 +314,8 @@ export function PayrollPage() {
                   <div className="flex items-start gap-3">
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-extrabold text-primary">{initials(va.va_name)}</span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-bold">{va.va_name} <span className="text-[11px] font-semibold text-muted-foreground">({va.currency})</span></span>
-                      <span className="block truncate text-[11px] text-muted-foreground">{va.payment_label ?? "No payment details on profile"}</span>
+                      <span className="block truncate text-sm font-bold">{va.va_name}{showPricing ? <span className="text-[11px] font-semibold text-muted-foreground"> ({va.currency})</span> : null}</span>
+                      {showPricing && <span className="block truncate text-[11px] text-muted-foreground">{va.payment_label ?? "No payment details on profile"}</span>}
                     </span>
                     {va.change_pct != null && n(va.prev_hours) > 0 && (
                       <span className={cn("flex items-center gap-0.5 rounded-full px-2 py-0.5 text-[10px] font-bold", va.change_pct >= 0 ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700")}>
@@ -325,11 +343,13 @@ export function PayrollPage() {
                     <span className="rounded-full bg-violet-50 px-2 py-0.5 text-violet-700">✓ {va.tasks_done} tasks done</span>
                     {n(va.pending_hours) > 0 && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">⚠ {va.pending_hours}h pending</span>}
                     {va.timesheet_status === "reviewed" ? (
-                      <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">📋 Timesheet approved</span>
+                      <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">Timesheet approved</span>
+                    ) : va.timesheet_status === "rejected" ? (
+                      <span className="rounded-full bg-rose-100 px-2 py-0.5 font-extrabold text-rose-800">Timesheet rejected</span>
                     ) : va.timesheet_submitted ? (
                       <span className="rounded-full bg-amber-200 px-2 py-0.5 font-extrabold uppercase tracking-wide text-amber-900">Pending Approval</span>
                     ) : (
-                      <span className="rounded-full bg-rose-100 px-2 py-0.5 text-rose-700">📋 Timesheet not submitted</span>
+                      <span className="rounded-full bg-rose-100 px-2 py-0.5 text-rose-700">Timesheet not submitted</span>
                     )}
                   </div>
                 </button>
@@ -342,7 +362,7 @@ export function PayrollPage() {
                       onClick={() => setReviewTimesheetId(va.timesheet_id!)}
                     >
                       <ClipboardCheck className="h-3.5 w-3.5" />
-                      {va.timesheet_status === "reviewed" ? "View timesheet" : "Review & Approve"}
+                      {va.timesheet_status === "reviewed" ? "View timesheet" : "Review"}
                     </Button>
                   )}
                   {isAdmin && !va.is_paid && n(va.total_hours) > 0 && (
@@ -358,30 +378,23 @@ export function PayrollPage() {
                             ? "Approve the timesheet in Timesheet Review first"
                             : undefined
                       }
-                      onClick={() => markPaid.mutate({
-                        va_id: va.va_id,
-                        period_start: payroll.period_start,
-                        period_end: payroll.period_end,
-                        total_hours: va.total_hours,
-                        total_pay: va.total_pay,
-                        currency: va.currency,
-                        method: va.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer",
-                        usd_php_rate: parsedRate,
-                      })}
+                      onClick={() => setPayReview(va)}
                     >
                       <Wallet className="h-3.5 w-3.5" /> Mark Paid
                     </Button>
                   )}
                   {isAdmin && va.is_paid && va.run_id && <Button size="sm" variant="outline" className="flex-1" onClick={() => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) }}>Undo Paid</Button>}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={va.timesheet_status !== "reviewed"}
-                    title={va.timesheet_status !== "reviewed" ? "Approve timesheet first" : undefined}
-                    onClick={() => exportPdf(va.va_id)}
-                  >
-                    <FileDown className="h-3.5 w-3.5" /> Payslip
-                  </Button>
+                  {isAdmin && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={va.timesheet_status !== "reviewed"}
+                      title={va.timesheet_status !== "reviewed" ? "Approve timesheet first" : "Payslip arranged per client"}
+                      onClick={() => exportPdf(va.va_id)}
+                    >
+                      <FileDown className="h-3.5 w-3.5" /> Payslip
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}
@@ -389,42 +402,99 @@ export function PayrollPage() {
           {payroll.vas.length === 0 && <p className="rounded-2xl border bg-card p-6 text-center text-sm text-muted-foreground">No approved or pending work in this period. Approved logs appear here automatically.</p>}
         </div>
 
-        {/* Entries for the opened VA */}
-        {openVa && payroll.vas.filter(v => v.va_id === openVa).map(va => (
+        {/* Per-client task breakdown — what the payslip prints, reviewed before Mark Paid */}
+        {openVa && payroll.vas.filter(v => v.va_id === openVa).map(va => {
+          const slip = buildPayslip(va, payroll.period_start, payroll.period_end, settings)
+          return (
           <Card key={va.va_id}>
-            <CardHeader className="pb-2"><CardTitle>{va.va_name} — Entries ({va.entry_count})</CardTitle></CardHeader>
-            <CardContent className="overflow-x-auto p-0">
-              <table className="w-full text-xs">
-                <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">Client / Project</th><th className="p-3">Description</th><th className="p-3">Source</th><th className="p-3">Hours</th>{showPricing && <><th className="p-3">Rate</th><th className="p-3">Pay</th></>}<th className="p-3 text-right">Edit</th></tr></thead>
-                <tbody>{va.entries.map(e => (
-                  <tr key={e.id} className="border-b last:border-0 hover:bg-muted/30">
-                    <td className="whitespace-nowrap p-3">{formatDate(e.work_date)}</td>
-                    <td className="p-3"><span className="font-medium">{e.client_name}</span>{e.project_name && <span className="block text-[11px] text-muted-foreground">{e.project_name}</span>}</td>
-                    <td className="max-w-xs p-3"><span className="line-clamp-2">{e.description}</span>{e.task_title && <span className="block text-[11px] text-muted-foreground">Task: {e.task_title}</span>}</td>
-                    <td className="p-3"><span className={cn("rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", e.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{e.source === "clock" ? "Clock" : "Manual"}</span></td>
-                    <td className="p-3 font-bold">{e.hours}</td>
-                    {showPricing && <><td className="p-3">{formatCurrency(e.rate, va.currency)}</td><td className="p-3 font-semibold">{formatCurrency(e.pay, va.currency)}</td></>}
-                    <td className="p-3 text-right">
-                      <Button size="sm" variant="ghost" onClick={() => setEditing({
-                        id: e.id,
-                        description: e.description || "",
-                        start_time: e.start_time?.slice(0, 5) || "09:00",
-                        end_time: e.end_time?.slice(0, 5) || "17:00",
-                        va_rate: String(e.rate ?? ""),
-                        va_name: va.va_name,
-                        work_date: e.work_date,
-                      })}>Edit</Button>
-                    </td>
-                  </tr>))}
-                  {va.entries.length === 0 && <tr><td colSpan={showPricing ? 8 : 6} className="p-5 text-center text-muted-foreground">No approved entries — only pending work so far (see the ⚠ chip on the card).</td></tr>}
-                </tbody>
-              </table>
+            <CardHeader className="pb-2">
+              <CardTitle>{va.va_name} — by client</CardTitle>
+              <p className="text-[11px] text-muted-foreground">
+                {showPricing
+                  ? "Review each client’s tasks, rate, and amount before Mark Paid. The Payslip button prints this same breakdown."
+                  : "Hours, tasks, and dates only. Rates and amounts are hidden for Project Managers."}
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-4 p-4">
+              {slip.clients.length === 0 && <p className="text-sm text-muted-foreground">No approved entries in this period yet.</p>}
+              {slip.clients.map((client) => (
+                <div key={client.name} className="overflow-hidden rounded-2xl border">
+                  <div className="flex flex-wrap items-end justify-between gap-2 bg-primary/5 px-3 py-2">
+                    <div>
+                      <p className="font-display text-sm font-bold text-primary">{client.name}</p>
+                      {showPricing && client.rate != null && (
+                        <p className="text-[11px] text-muted-foreground">
+                          Rate {formatCurrency(client.rate, va.currency)}{client.payType === "package" ? " package" : "/hr"}
+                        </p>
+                      )}
+                    </div>
+                    <p className="text-xs font-semibold">
+                      {client.hours.toFixed(2)} hrs
+                      {showPricing ? ` · ${formatCurrency(client.amount, va.currency)}` : ""}
+                    </p>
+                  </div>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b text-left text-[10px] font-bold uppercase tracking-wide text-primary">
+                        <th className="p-2">Date</th>
+                        <th className="p-2">Task</th>
+                        <th className="p-2">Hours</th>
+                        {showPricing && <th className="p-2">Amount</th>}
+                        <th className="p-2" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {client.tasks.map((task, i) => {
+                        const entry = va.entries.find((e) => e.work_date === task.date && (e.task_name || e.task_title || "Logged work") === task.task && e.client_name === client.name)
+                        return (
+                          <tr key={`${client.name}-${i}`} className="border-b last:border-0 align-top">
+                            <td className="whitespace-nowrap p-2">{formatDate(task.date)}</td>
+                            <td className="p-2">
+                              <span className="font-bold">{task.task}</span>
+                              {task.description && <span className="mt-0.5 block text-[11px] text-muted-foreground">{task.description}</span>}
+                            </td>
+                            <td className="p-2 font-bold">{task.hours.toFixed(2)}</td>
+                            {showPricing && <td className="p-2 font-semibold">{client.payType === "package" ? "—" : formatCurrency(task.amount, va.currency)}</td>}
+                            <td className="p-2 text-right">
+                              {entry && (
+                                <Button size="sm" variant="ghost" onClick={() => setEditing({
+                                  id: entry.id,
+                                  description: entry.description || "",
+                                  start_time: entry.start_time?.slice(0, 5) || "09:00",
+                                  end_time: entry.end_time?.slice(0, 5) || "17:00",
+                                  va_rate: String(entry.rate ?? ""),
+                                  va_name: va.va_name,
+                                  work_date: entry.work_date,
+                                })}>Edit</Button>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  {showPricing && (
+                    <p className="px-3 py-2 text-right text-[11px] text-muted-foreground">
+                      {client.name} subtotal · {client.hours.toFixed(2)} hrs
+                      {client.rate != null && client.payType !== "package" ? ` × ${formatCurrency(client.rate, va.currency)}/hr` : ""}
+                      {" · "}{formatCurrency(client.amount, va.currency)}
+                    </p>
+                  )}
+                </div>
+              ))}
+              {slip.clients.length > 0 && (
+                <p className="text-right text-sm font-extrabold">
+                  Grand total {slip.totalHours.toFixed(2)} hrs
+                  {showPricing ? ` · ${formatCurrency(slip.totalPay, va.currency)}` : ""}
+                </p>
+              )}
             </CardContent>
           </Card>
-        ))}
+          )
+        })}
 
-        {/* Payment history */}
-        <Card>
+        {/* Payment history — admin only (amounts) */}
+        {isAdmin && <Card>
           <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><Banknote className="h-4 w-4 text-primary" /> Payment History</CardTitle></CardHeader>
           <CardContent className="overflow-x-auto p-0">
             <table className="w-full text-xs">
@@ -453,7 +523,7 @@ export function PayrollPage() {
               </tbody>
             </table>
           </CardContent>
-        </Card>
+        </Card>}
       </>)}
 
       {editing && (
@@ -467,12 +537,61 @@ export function PayrollPage() {
                 <div><Label>Start</Label><Input type="time" value={editing.start_time} onChange={(e) => setEditing({ ...editing, start_time: e.target.value })} /></div>
                 <div><Label>End</Label><Input type="time" value={editing.end_time} onChange={(e) => setEditing({ ...editing, end_time: e.target.value })} /></div>
               </div>
-              <div><Label>VA Rate</Label><Input type="number" step="0.01" value={editing.va_rate} onChange={(e) => setEditing({ ...editing, va_rate: e.target.value })} /></div>
-              <p className="text-[11px] text-muted-foreground">Hours and pay recalculate from start/end and rate.</p>
+              {showPricing && <div><Label>VA Rate</Label><Input type="number" step="0.01" value={editing.va_rate} onChange={(e) => setEditing({ ...editing, va_rate: e.target.value })} /></div>}
+              <p className="text-[11px] text-muted-foreground">{showPricing ? "Hours and pay recalculate from start/end and rate." : "Hours recalculate from start and end. Rates stay hidden."}</p>
               <div className="flex gap-2">
                 <Button variant="gold" className="flex-1" disabled={saveEntry.isPending || !editing.description} onClick={() => saveEntry.mutate()}>Save</Button>
                 <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {payReview && payroll && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setPayReview(null)}>
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary">Review before Mark Paid</p>
+            <h2 className="font-display text-lg font-bold">{payReview.va_name}</h2>
+            <p className="mb-3 text-xs text-muted-foreground">{formatDate(payroll.period_start)} – {formatDate(payroll.period_end)}</p>
+            {buildPayslip(payReview, payroll.period_start, payroll.period_end, settings).clients.map((client) => (
+              <div key={client.name} className="flex items-start justify-between gap-3 border-b py-2 text-xs">
+                <div>
+                  <p className="font-bold">{client.name}</p>
+                  <p className="text-[11px] text-muted-foreground">{client.tasks.length} task{client.tasks.length === 1 ? "" : "s"} · {client.hours.toFixed(2)} hrs{client.rate != null ? ` × ${formatCurrency(client.rate, payReview.currency)}/hr` : ""}</p>
+                </div>
+                <p className="font-bold">{formatCurrency(client.amount, payReview.currency)}</p>
+              </div>
+            ))}
+            <p className="mt-3 text-right font-display text-2xl font-bold text-primary">
+              {formatCurrency(buildPayslip(payReview, payroll.period_start, payroll.period_end, settings).totalPay, payReview.currency)}
+            </p>
+            <p className="text-right text-[11px] text-muted-foreground">
+              Grand total {buildPayslip(payReview, payroll.period_start, payroll.period_end, settings).totalHours.toFixed(2)} hrs
+            </p>
+            <div className="mt-4 flex gap-2">
+              <Button
+                variant="success"
+                className="flex-1"
+                disabled={markPaid.isPending}
+                onClick={() => {
+                  const slip = buildPayslip(payReview, payroll.period_start, payroll.period_end, settings)
+                  markPaid.mutate({
+                    va_id: payReview.va_id,
+                    period_start: payroll.period_start,
+                    period_end: payroll.period_end,
+                    total_hours: slip.totalHours,
+                    total_pay: slip.totalPay,
+                    currency: payReview.currency,
+                    method: payReview.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer",
+                    usd_php_rate: parsedRate,
+                  })
+                  setPayReview(null)
+                }}
+              >
+                <Wallet className="h-3.5 w-3.5" /> Confirm &amp; mark paid
+              </Button>
+              <Button variant="outline" onClick={() => setPayReview(null)}>Back</Button>
             </div>
           </div>
         </div>
@@ -485,6 +604,9 @@ export function PayrollPage() {
         />
       )}
       <PdfPreviewModal blob={pdfBlob} filename={pdfFilename} onClose={() => setPdfBlob(null)} />
+      {payslipHtml && (
+        <PayslipPaperModal html={payslipHtml} filename={pdfFilename} onClose={() => setPayslipHtml(null)} />
+      )}
     </div>
   )
 }

@@ -51,10 +51,21 @@ def seed_database(db: Session) -> None:
             username=unique_username(db, "auditor@sunnyhue.local"),
             password_hash=hash_password("auditor2024"),
             role=UserRole.auditor,
-            display_name="Audrey Auditor",
-            job_title="Auditor",
+            display_name="Audrey Reyes",
+            job_title="Project Manager",
         ))
         db.commit()
+
+    demo_pm = db.query(User).filter(User.email == "auditor@sunnyhue.local").first()
+    if demo_pm and (demo_pm.display_name == "Audrey Auditor" or demo_pm.job_title == "Auditor"):
+        demo_pm.display_name = "Audrey Reyes"
+        demo_pm.job_title = "Project Manager"
+        db.commit()
+    if demo_pm:
+        demo_va = db.query(VA).filter(VA.user_id == demo_pm.id, VA.name == "Audrey Auditor").first()
+        if demo_va:
+            demo_va.name = "Audrey Reyes"
+            db.commit()
 
     if db.query(Client).count() > 0:
         seed_sample_work_logs(db)

@@ -277,7 +277,7 @@ export function CommentThread({
       </div>
 
       {isLoading ? <p className="text-xs text-muted-foreground">Loading comments…</p>
-        : roots.length === 0 ? <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">No comments match. Start the discussion below — Admin, Auditors and Users can all join in.</p>
+        : roots.length === 0 ? <p className="rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground">No comments yet. Admin, Project Managers, and VAs can all join in below.</p>
         : <div className="space-y-2">{roots.map(c => renderComment(c))}</div>}
 
       {/* Composer */}

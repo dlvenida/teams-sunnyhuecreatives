@@ -125,14 +125,20 @@ def submit_rate(
     db.add(rate)
     db.commit()
     rate = _load(db, rate.id)
-    push(
-        db,
-        admin_user_ids(db),
-        "system",
-        f"💵 Rate request from {rate.va.name if rate.va else 'VA'}",
-        f"{rate.client.name if rate.client else 'Client'} · {rate.pay_type.value} · {rate.currency.value} {rate.amount}",
-        "/admin/va-rates",
-    )
+    va_name = rate.va.name if rate.va else "A VA"
+    client_name = rate.client.name if rate.client else "a client"
+    from app.services.notification_mail import actor_first, email_user_ids
+    va_first = actor_first(va_name)
+    title = f"{va_first} asked about a rate"
+    detail = f"For {client_name}."
+    # No amounts. Project Managers and Admins both see the same words.
+    admins = admin_user_ids(db)
+    push(db, admins, "system", title, detail, "/admin/va-rates")
+    email_user_ids(db, admins, title=title, paragraphs=[detail], link="/admin/va-rates", template_key="rate_request", link_label="Open rate requests")
+    from app.services.notifications import admin_and_auditor_user_ids
+    pm_ids = [uid for uid in admin_and_auditor_user_ids(db) if uid not in set(admins)]
+    push(db, pm_ids, "system", title, detail, "/admin/users")
+    email_user_ids(db, pm_ids, title=title, paragraphs=[detail], link="/admin/users", template_key="rate_request", link_label="Open the team")
     return _serialize(rate)
 
 

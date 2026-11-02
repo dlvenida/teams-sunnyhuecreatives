@@ -552,6 +552,7 @@ class VAWorkLogUpdate(BaseModel):
     sub_client_id: UUID | None = None
     project_id: UUID | None = None
     task_id: UUID | None = None
+    task_name: str | None = None
     description_plain: str | None = None
     description_lexical: dict[str, Any] | None = None
     start_time: time | None = None
@@ -693,6 +694,7 @@ class WorkLogCreate(BaseModel):
     sub_client_id: UUID | None = None
     project_id: UUID | None = None
     task_id: UUID | None = None
+    task_name: str | None = None
     description_lexical: dict[str, Any] | None = None
     description_plain: str
     start_time: time
@@ -796,6 +798,7 @@ class WorkLogUpdate(BaseModel):
     sub_client_id: UUID | None = None
     project_id: UUID | None = None
     task_id: UUID | None = None
+    task_name: str | None = None
     description_lexical: dict[str, Any] | None = None
     description_plain: str | None = None
     start_time: time | None = None
@@ -828,6 +831,7 @@ class WorkLogResponse(BaseModel):
     project_name: str | None = None
     task_id: UUID | None = None
     task_title: str | None = None
+    task_name: str | None = None
     clock_in_at: datetime | None = None
     clock_out_at: datetime | None = None
     source: str = "manual"
@@ -928,10 +932,12 @@ class PayrollEntry(BaseModel):
     client_name: str
     description: str
     hours: Decimal
-    rate: Decimal
-    pay: Decimal
+    # Omitted entirely for the project manager (auditor) — never send 0 as a stand-in for hidden pay.
+    rate: Decimal | None = None
+    pay: Decimal | None = None
     project_name: str | None = None
     task_title: str | None = None
+    task_name: str | None = None
     source: str = "manual"
     status: str = "approved"
     start_time: str | None = None
@@ -941,7 +947,9 @@ class PayrollEntry(BaseModel):
 class PayrollBreakdown(BaseModel):
     label: str
     hours: Decimal
-    pay: Decimal = Decimal("0")
+    pay: Decimal | None = None
+    rate: Decimal | None = None
+    pay_type: str | None = None
 
 
 class PayrollDay(BaseModel):
@@ -954,7 +962,7 @@ class PayrollVAResult(BaseModel):
     va_name: str
     currency: Currency
     total_hours: Decimal
-    total_pay: Decimal
+    total_pay: Decimal | None = None
     entry_count: int
     entries: list[PayrollEntry]
     pending_hours: Decimal = Decimal("0")
@@ -967,7 +975,7 @@ class PayrollVAResult(BaseModel):
     by_client: list[PayrollBreakdown] = []
     daily: list[PayrollDay] = []
     prev_hours: Decimal = Decimal("0")
-    prev_pay: Decimal = Decimal("0")
+    prev_pay: Decimal | None = None
     change_pct: float | None = None
     payment_label: str | None = None
     is_paid: bool = False
@@ -983,6 +991,10 @@ class TimesheetSubmitRequest(BaseModel):
     notes: str | None = None
 
 
+class TimesheetRejectRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=2000)
+
+
 class TimesheetSubmissionResponse(BaseModel):
     id: UUID
     va_id: UUID
@@ -991,6 +1003,7 @@ class TimesheetSubmissionResponse(BaseModel):
     period_end: date
     status: str
     notes: str | None = None
+    review_note: str | None = None
     submitted_at: datetime
     reviewed_at: datetime | None = None
     entry_count: int = 0
@@ -1001,8 +1014,8 @@ class PayrollResponse(BaseModel):
     period_start: date
     period_end: date
     vas: list[PayrollVAResult]
-    total_php: Decimal
-    total_usd: Decimal
+    total_php: Decimal | None = None
+    total_usd: Decimal | None = None
     total_hours: Decimal = Decimal("0")
     total_pending_hours: Decimal = Decimal("0")
 

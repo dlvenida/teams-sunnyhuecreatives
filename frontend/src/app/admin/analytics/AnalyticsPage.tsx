@@ -9,6 +9,7 @@ import { cn, formatDate } from "@/lib/utils"
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Activity, Eye, ShieldCheck, Siren } from "lucide-react"
 import { useCssVar } from "@/hooks/useCssVar"
+import { InsightsTabs } from "@/components/nav/AreaTabs"
 
 const STATUS_META = {
   inactive: { label: "No activity", pill: "border-red-200 bg-red-100 text-red-700", bar: "bg-red-400" },
@@ -38,7 +39,7 @@ export function AnalyticsPage() {
   })
   const auditorCandidates = [
     ...(profile ? [{ id: profile.id, label: `${profile.display_name} (Admin)` }] : []),
-    ...appUsers.filter(u => u.role === "auditor").map(u => ({ id: u.id, label: `${u.name} (Auditor)` })),
+    ...appUsers.filter(u => u.role === "auditor").map(u => ({ id: u.id, label: `${u.name} (Project Manager)` })),
     ...allVas.filter(v => v.user_id).map(v => ({ id: v.user_id!, label: `${v.name} (VA)` })),
   ]
 
@@ -59,15 +60,16 @@ export function AnalyticsPage() {
     <div className="space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">Analytics — Team Auditor</h1>
+          <h1 className="font-display text-xl font-bold">Team activity</h1>
           <p className="text-xs text-muted-foreground">
             {isAdmin
-              ? "Monitor every VA like Monday's workload view — who is active, who is low, and who has assigned clients but no logs today or this week. Assign an Auditor to watch each VA."
-              : "Your auditor workspace: watch VA activity, spot no-log days early, and keep the team moving. Read-only by design."}
+              ? "Who logged time today, who has no tasks, and who is quiet this week. Assign a Project Manager to watch each VA."
+              : "Watch VA activity. Rates and pay stay hidden. Timesheet approval lives under Timesheet review."}
           </p>
         </div>
         {activity && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">Week of {formatDate(activity.week_start)} – {formatDate(activity.week_end)}</p>}
       </div>
+      <InsightsTabs />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Team Hours This Week" value={`${teamHoursWeek.toFixed(2)} hrs`} subtitle={`${teamHoursToday.toFixed(2)} hrs today`} />
@@ -86,7 +88,7 @@ export function AnalyticsPage() {
               </span>
             ))}
           </div>
-          <p className="mt-2 text-[11px] text-red-700/80">Admins, all Auditors, and each VA's assigned Auditor are notified once a day while someone stays inactive.</p>
+          <p className="mt-2 text-[11px] text-red-700/80">Admins and Project Managers get the same daily alert, with the VA’s name and the date, when someone logs no time or has no tasks that day.</p>
         </div>
       )}
 
@@ -108,7 +110,7 @@ export function AnalyticsPage() {
           <CardContent className="overflow-x-auto p-0">
             {isLoading && <p className="p-4 text-sm text-muted-foreground">Checking team activity…</p>}
             <table className="w-full text-xs">
-              <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Member</th><th className="p-3">Status</th><th className="p-3">Assigned Clients</th><th className="p-3">Tasks</th><th className="p-3">Hours Today / Week</th><th className="p-3">Last Active</th><th className="p-3"><span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Auditor</span></th></tr></thead>
+              <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Member</th><th className="p-3">Status</th><th className="p-3">Assigned Clients</th><th className="p-3">Tasks</th><th className="p-3">Hours Today / Week</th><th className="p-3">Last Active</th><th className="p-3"><span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> Project Manager</span></th></tr></thead>
               <tbody>
                 {members.map(m => (
                   <tr key={m.va_id} className={cn("border-b last:border-0 hover:bg-primary/[0.03]", m.status === "inactive" && "bg-red-50/50")}>
@@ -135,15 +137,15 @@ export function AnalyticsPage() {
                             value={m.reviewer_user_id ?? ""}
                             onChange={(e) => setAuditor.mutate({ vaId: m.va_id, auditor: e.target.value || null })}
                             className="h-8 max-w-[160px] rounded-lg border bg-card px-2 text-[11px] font-medium"
-                            title="Assign a specific user (Auditor) to review this VA"
+                            title="Assign a Project Manager to watch this VA"
                           >
-                            <option value="">No auditor</option>
+                            <option value="">No project manager</option>
                             {auditorCandidates.filter(c => c.id !== m.user_id).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                           </select>
-                          {m.reviewer_name && <span className="mt-1 block text-[10px] text-muted-foreground">Auditor: {m.reviewer_name}</span>}
+                          {m.reviewer_name && <span className="mt-1 block text-[10px] text-muted-foreground">Project Manager: {m.reviewer_name}</span>}
                         </>
                       ) : (
-                        <span className="text-[11px] font-medium text-muted-foreground">{m.reviewer_name ? `Auditor: ${m.reviewer_name}` : "No auditor assigned"}</span>
+                        <span className="text-[11px] font-medium text-muted-foreground">{m.reviewer_name ? `Project Manager: ${m.reviewer_name}` : "No project manager assigned"}</span>
                       )}
                     </td>
                   </tr>
@@ -155,7 +157,7 @@ export function AnalyticsPage() {
         </Card>
       </div>
 
-      <p className="flex items-center gap-2 px-1 text-[11px] text-muted-foreground"><Eye className="h-3.5 w-3.5" /> How it works: a VA with assigned clients/tasks but <b>no logs today and no logs this week</b> is flagged red. Under 8h this week (or overdue work) is low. No assignments = available for new work. Auditors see this board read-only; only Administrators can assign auditors, approve logs, or change tasks.</p>
+      <p className="flex items-center gap-2 px-1 text-[11px] text-muted-foreground"><Eye className="h-3.5 w-3.5" /> A VA with no time or no tasks for the day is flagged, and Admins and Project Managers are both notified with that VA’s name and the date. Under 8h this week is low activity. No assignments means available for new work.</p>
     </div>
   )
 }

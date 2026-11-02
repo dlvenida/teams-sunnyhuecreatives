@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { Eye, LogOut } from "lucide-react"
 import { exitImpersonation, getAuthUser, getImpersonationBackup } from "@/lib/api"
+import { roleLabel } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
 export function ImpersonationBanner() {
@@ -19,7 +20,7 @@ export function ImpersonationBanner() {
       <Eye className="h-4 w-4 shrink-0" />
       <span>
         Viewing as <strong>{user?.name || backup?.targetName || "user"}</strong>
-        <span className="capitalize"> ({user?.role})</span> — you are seeing exactly what they see. Signed in as admin: {adminName}.
+        <span> ({roleLabel(user?.role)})</span>. You are seeing exactly what they see. Signed in as admin: {adminName}.
       </span>
       <Button size="sm" variant="gold" className="h-7" onClick={exit}>
         <LogOut className="h-3.5 w-3.5" /> Exit view &amp; back to Admin

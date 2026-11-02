@@ -86,6 +86,7 @@ export interface WorkLog {
   project_name?: string | null
   task_id?: string | null
   task_title?: string | null
+  task_name?: string | null
   clock_in_at?: string | null
   clock_out_at?: string | null
   source?: string
@@ -163,8 +164,8 @@ export interface PayrollResponse {
   period_start: string
   period_end: string
   vas: PayrollVA[]
-  total_php: string
-  total_usd: string
+  total_php?: string | null
+  total_usd?: string | null
   total_hours?: string
   total_pending_hours?: string
 }
@@ -174,7 +175,7 @@ export interface PayrollVA {
   va_name: string
   currency: "PHP" | "USD"
   total_hours: string
-  total_pay: string
+  total_pay?: string | null
   timesheet_submitted?: boolean
   timesheet_status?: string | null
   timesheet_id?: string | null
@@ -185,10 +186,11 @@ export interface PayrollVA {
     client_name: string
     description: string
     hours: string
-    rate: string
-    pay: string
+    rate?: string | null
+    pay?: string | null
     project_name?: string | null
     task_title?: string | null
+    task_name?: string | null
     source?: string
     status?: string
     start_time?: string | null
@@ -201,7 +203,7 @@ export interface PayrollVA {
   clock_hours?: string
   manual_hours?: string
   tasks_done?: number
-  by_client?: { label: string; hours: string; pay: string }[]
+  by_client?: { label: string; hours: string; pay?: string | null; rate?: string | null; pay_type?: string | null }[]
   daily?: { work_date: string; hours: string }[]
   prev_hours?: string
   prev_pay?: string

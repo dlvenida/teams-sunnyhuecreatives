@@ -10,6 +10,7 @@ import { cn, formatCurrency, formatDate } from "@/lib/utils"
 import { Check, X, Pencil, Trash2, Download, Search, Clock3, Hand, Paperclip } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
+import { TimeAreaTabs } from "@/components/nav/AreaTabs"
 
 const STATUS_META: Record<string, { label: string; dot: string; pill: string }> = {
   submitted: { label: "Submitted", dot: "bg-amber-500", pill: "bg-amber-100 text-amber-800 border-amber-200" },
@@ -132,11 +133,12 @@ export function LogsPage() {
     <div className="space-y-4 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">All Logs</h1>
-          <p className="text-xs text-muted-foreground">Every VA time log — approve what's submitted, spot the clock-ins, and keep payroll & reports clean.</p>
+          <h1 className="font-display text-xl font-bold">Review logs</h1>
+          <p className="text-xs text-muted-foreground">The team list. Approve or reject each entry. To write your own hours, use Log my time.</p>
         </div>
         <Button variant="outline" onClick={handleExport}><Download className="h-4 w-4" /> Export CSV</Button>
       </div>
+      <TimeAreaTabs />
 
       {/* Summary */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

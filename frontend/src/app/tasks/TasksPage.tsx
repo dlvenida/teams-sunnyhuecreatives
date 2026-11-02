@@ -358,7 +358,7 @@ export function TasksPage() {
             </div>
             <div className="mb-4"><DetailAttachments scope="task" scopeId={commentTask.id} /></div>
             <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> Comments & Updates</h3>
-            <p className="mb-2 text-[11px] text-muted-foreground">Admin, Auditors and Users can comment here — tag teammates with @, react with emoji, attach images (auto-AVIF into the bucket) and draw on them.</p>
+            <p className="mb-2 text-[11px] text-muted-foreground">Admin, Project Managers, and VAs can comment here. Tag teammates with @, react with emoji, and attach images.</p>
             <CommentThread scope="task" scopeId={commentTask.id} scopeTitle={commentTask.title} highlightCommentId={highlightCommentId} />
           </div>
         </div>

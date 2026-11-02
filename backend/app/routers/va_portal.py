@@ -23,8 +23,7 @@ from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionRe
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
 from app.services.calculations import calculate_hours
-from app.services.email import send_timesheet_submitted_notification, send_va_submission_notification
-from app.services.notifications import admin_and_auditor_user_ids, push
+from app.services.notifications import push
 from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
 from app.services.work_log_overlap import assert_no_time_overlap
 
@@ -55,6 +54,7 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         invoice_id=log.invoice_id,
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
+        task_name=(log.task_name or "").strip() or (log.task.title if getattr(log, "task", None) else None),
         clock_in_at=log.clock_in_at, clock_out_at=log.clock_out_at, source=log.source or "manual",
         payable_on=getattr(log, "payable_on", None),
         rolled_to_next_payroll=bool(getattr(log, "payable_on", None)),
@@ -360,6 +360,7 @@ def my_earnings(
             "pay": str(l.va_pay),
             "project_name": l.project.name if getattr(l, "project", None) else None,
             "task_title": l.task.title if getattr(l, "task", None) else None,
+            "task_name": (l.task_name or "").strip() or (l.task.title if getattr(l, "task", None) else None),
             "source": l.source or "manual",
         }
         for l in sorted(range_logs, key=lambda x: (x.work_date, x.start_time or time.min))
@@ -532,6 +533,12 @@ def submit_work_log(
     )
     rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
     payable_on = resolve_payable_on(db, current.va_id, body.work_date)
+    task_name = (body.task_name or "").strip() or None
+    if not task_name and body.task_id:
+        from app.models import Task
+        linked = db.query(Task).filter(Task.id == body.task_id).first()
+        if linked and linked.title:
+            task_name = linked.title.strip()
 
     log = WorkLog(
         work_date=body.work_date,
@@ -540,6 +547,7 @@ def submit_work_log(
         sub_client_id=body.sub_client_id,
         project_id=body.project_id,
         task_id=body.task_id,
+        task_name=task_name,
         description_lexical=body.description_lexical,
         description_plain=body.description_plain,
         start_time=body.start_time,
@@ -561,16 +569,7 @@ def submit_work_log(
         .first()
     )
 
-    send_va_submission_notification(
-        va_name=log.va.name,
-        client_name=log.client.name,
-        hours=str(log.hours),
-        work_date=str(log.work_date),
-        description=log.description_plain[:200],
-    )
-    push(db, admin_and_auditor_user_ids(db), "log", f"🕒 New time log from {log.va.name}",
-         f"{log.client.name} · {log.work_date} · {log.hours} hrs waiting for approval.", "/admin/logs")
-
+    # Routine time logs are not sent to Admin or Project Manager.
     return _serialize_log(log)
 
 
@@ -610,6 +609,7 @@ def list_my_timesheets(
                 period_end=r.period_end,
                 status=r.status.value if hasattr(r.status, "value") else str(r.status),
                 notes=r.notes,
+                review_note=r.review_note,
                 submitted_at=r.submitted_at,
                 reviewed_at=r.reviewed_at,
                 entry_count=len(logs),
@@ -657,6 +657,7 @@ def submit_timesheet(
     if existing:
         existing.notes = body.notes
         existing.status = TimesheetStatus.submitted
+        existing.review_note = None
         existing.reviewed_at = None
         existing.reviewed_by = None
         db.commit()
@@ -689,29 +690,36 @@ def submit_timesheet(
         body.date_to,
     ).all()
     hours = sum((l.hours for l in logs), Decimal("0"))
-    va_label = (
-        (va.user.display_name.strip() if va and va.user and va.user.display_name else "")
-        or (va.name if va else "VA")
-    )
-    # In-app for admin + auditor; email for admins
-    push(
-        db,
-        admin_and_auditor_user_ids(db),
-        "log",
-        f"📋 Timesheet submitted by {va_label}",
-        f"{body.date_from} – {body.date_to} · {hours} hrs · {len(logs)} entries — Pending Approval.",
-        "/admin/payroll",
-    )
-    try:
-        send_timesheet_submitted_notification(
-            va_label,
-            str(body.date_from),
-            str(body.date_to),
-            str(hours),
-            len(logs),
-        )
-    except Exception:
-        pass
+    shown = ((va.name if va and va.name else "") or (va.user.display_name if va and va.user and va.user.display_name else "")).strip()
+    va_first = shown.split()[0] if shown else "A VA"
+    from app.config import settings as _settings
+    from app.models import User as _User, UserRole as _UserRole
+    from app.services.notification_mail import send_notification_email
+    from app.services.notifications import first_name_of, possessive_pronoun
+    pronoun = possessive_pronoun(va.user if va else None)
+    staff = db.query(_User).filter(
+        _User.role.in_([_UserRole.admin, _UserRole.auditor]),
+        _User.is_active.is_(True),
+    ).all()
+    period_line = f"{body.date_from} to {body.date_to}. {hours} hrs, {len(logs)} entries."
+    review_url = f"{_settings.app_url.rstrip('/')}/admin/payroll"
+    for person in staff:
+        first = first_name_of(person)
+        title = f"Hi {first}, {va_first} submitted {pronoun} timesheet"
+        push(db, [person.id], "log", title, period_line, "/admin/payroll")
+        if person.email:
+            try:
+                send_notification_email(
+                    person.email,
+                    title,
+                    title,
+                    [period_line],
+                    review_url,
+                    "Review the timesheet",
+                    "timesheet_submitted",
+                )
+            except Exception:
+                pass
     return TimesheetSubmissionResponse(
         id=row.id,
         va_id=row.va_id,
@@ -720,6 +728,7 @@ def submit_timesheet(
         period_end=row.period_end,
         status=row.status.value if hasattr(row.status, "value") else str(row.status),
         notes=row.notes,
+        review_note=row.review_note,
         submitted_at=row.submitted_at,
         reviewed_at=row.reviewed_at,
         entry_count=len(logs),

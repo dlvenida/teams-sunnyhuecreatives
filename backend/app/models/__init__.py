@@ -67,6 +67,7 @@ class WorkLogStatus(str, enum.Enum):
 class TimesheetStatus(str, enum.Enum):
     submitted = "submitted"
     reviewed = "reviewed"
+    rejected = "rejected"
 
 
 class InvoiceStatus(str, enum.Enum):
@@ -442,6 +443,8 @@ class WorkLog(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     description_lexical: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     description_plain: Mapped[str] = mapped_column(Text)
+    # Free-text task name the VA types on the log (payslip "Task" line). Falls back to the linked board task.
+    task_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     start_time: Mapped[time] = mapped_column(Time)
     end_time: Mapped[time] = mapped_column(Time)
     hours: Mapped[Decimal] = mapped_column(Numeric(8, 2))
@@ -574,6 +577,7 @@ class TimesheetSubmission(Base):
         Enum(TimesheetStatus, name="timesheet_status"), default=TimesheetStatus.submitted
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(

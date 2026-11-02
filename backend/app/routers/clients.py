@@ -29,7 +29,7 @@ from app.schemas import (
     SubClientResponse,
     SubClientUpdate,
 )
-from app.services.notifications import admin_user_ids, push
+from app.services.notifications import push
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
@@ -133,15 +133,7 @@ def create_client(
         db.flush()
         db.commit()
         db.refresh(client)
-        push(
-            db,
-            admin_user_ids(db),
-            "system",
-            f"New client proposal: {client.name}",
-            f"{current.user.display_name or current.user.email} requested a new client. Review, set the rate, and approve.",
-            "/admin/clients",
-            exclude_user_id=current.user.id,
-        )
+        # Client proposals are not an Admin/PM notification. They still show on Clients.
         client = (
             db.query(Client)
             .options(joinedload(Client.proposer))

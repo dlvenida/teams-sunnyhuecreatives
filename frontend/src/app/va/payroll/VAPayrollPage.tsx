@@ -9,6 +9,7 @@ import { cn, formatCurrency, formatDate, formatInvoiceDate, payrollPdfFilename }
 import { VAEarningsDocument } from "@/components/pdf/VAEarningsDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { generatePdfBlob } from "@/lib/pdf"
+import { groupByWeek } from "@/lib/weeks"
 import { BadgeCheck, CheckCircle2, FileDown, Send, Wallet } from "lucide-react"
 
 interface EarningsResponse {
@@ -30,6 +31,7 @@ interface EarningsResponse {
     pay: string
     project_name?: string | null
     task_title?: string | null
+    task_name?: string | null
     source?: string
   }[]
   date_from?: string | null
@@ -44,6 +46,7 @@ interface TimesheetRow {
   submitted_at: string
   total_hours: string
   entry_count: number
+  review_note?: string | null
 }
 
 interface HistoryEntry {
@@ -71,6 +74,89 @@ interface HistoryResponse {
   total_paid_php: string
   paid_count: number
   unpaid_count: number
+}
+
+function WeekedEntries({
+  entries,
+  currency,
+}: {
+  entries: EarningsResponse["entries"]
+  currency: string
+}) {
+  const weeks = groupByWeek(entries, (e) => e.work_date)
+  if (entries.length === 0) {
+    return (
+      <Card>
+        <CardHeader className="pb-2"><CardTitle>Time logs by week</CardTitle></CardHeader>
+        <CardContent><p className="text-sm text-muted-foreground">No approved entries in this range.</p></CardContent>
+      </Card>
+    )
+  }
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <h3 className="font-display text-base font-bold">Time logs by week</h3>
+          <p className="text-xs text-muted-foreground">Jump to a week instead of scrolling one long list.</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {weeks.map((week) => (
+          <button
+            key={week.id}
+            type="button"
+            onClick={() => document.getElementById(week.id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary hover:bg-primary/15"
+          >
+            {week.label}
+          </button>
+        ))}
+      </div>
+      {weeks.map((week) => {
+        const hours = week.items.reduce((s, e) => s + Number(e.hours || 0), 0)
+        const pay = week.items.reduce((s, e) => s + Number(e.pay || 0), 0)
+        return (
+          <Card key={week.id} id={week.id} className="scroll-mt-24">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex flex-wrap items-baseline justify-between gap-2">
+                <span>{week.label}</span>
+                <span className="text-xs font-semibold text-muted-foreground">{hours.toFixed(2)} hrs · {formatCurrency(pay, currency)}</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-x-auto p-0">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b bg-muted/40 text-left text-muted-foreground">
+                    <th className="p-3">Date</th>
+                    <th className="p-3">Client</th>
+                    <th className="p-3">Task</th>
+                    <th className="p-3">Hours</th>
+                    <th className="p-3">Rate</th>
+                    <th className="p-3">Pay</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {week.items.map((e) => (
+                    <tr key={e.id} className="border-b last:border-0 align-top">
+                      <td className="whitespace-nowrap p-3">{formatDate(e.work_date)}</td>
+                      <td className="p-3 font-medium">{e.client_name}</td>
+                      <td className="max-w-xs p-3">
+                        <span className="font-bold">{e.task_name || e.task_title || "Logged work"}</span>
+                        {e.description && <span className="mt-0.5 block text-[11px] text-muted-foreground">{e.description}</span>}
+                      </td>
+                      <td className="p-3 font-bold">{e.hours}</td>
+                      <td className="p-3">{formatCurrency(e.rate, currency)}</td>
+                      <td className="p-3 font-semibold">{formatCurrency(e.pay, currency)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </CardContent>
+          </Card>
+        )
+      })}
+    </div>
+  )
 }
 
 function defaultRange() {
@@ -125,7 +211,7 @@ export function VAPayrollPage() {
       }),
     onSuccess: () => {
       setSubmitErr("")
-      setSubmitMsg("Timesheet submitted! Admin and auditor can review it for payroll.")
+      setSubmitMsg("Timesheet submitted. Admin and your Project Manager can approve or reject it.")
       qc.invalidateQueries({ queryKey: ["va-timesheets"] })
       qc.invalidateQueries({ queryKey: ["va-payroll-history"] })
     },
@@ -169,9 +255,9 @@ export function VAPayrollPage() {
     <div className="mx-auto max-w-4xl space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">My Payroll</h1>
+          <h1 className="font-display text-xl font-bold">My timesheets & pay</h1>
           <p className="text-xs text-muted-foreground">
-            Your year of pay at a glance — peso amounts first — plus submit a timesheet for any period.
+            Grouped by week, Monday to Sunday. Submit a timesheet when the week is ready. Peso amounts are yours.
           </p>
         </div>
       </div>
@@ -320,7 +406,9 @@ export function VAPayrollPage() {
             "flex items-center gap-2 rounded-xl border px-3 py-2 text-xs",
             submitted.status === "reviewed"
               ? "border-green-200 bg-green-50 text-green-900"
-              : "border-sky-200 bg-sky-50 text-sky-800",
+              : submitted.status === "rejected"
+                ? "border-rose-200 bg-rose-50 text-rose-900"
+                : "border-sky-200 bg-sky-50 text-sky-800",
           )}>
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             <span>
@@ -329,6 +417,11 @@ export function VAPayrollPage() {
               {submitted.status === "reviewed" && (
                 <span className="mt-1 block text-[11px]">
                   You cannot resubmit this period. Late entries for these dates still work — they roll over to the next payroll (paid after the next cutoff: 15th or end of month).
+                </span>
+              )}
+              {submitted.status === "rejected" && (
+                <span className="mt-1 block text-[11px]">
+                  Rejected{submitted.review_note ? `: ${submitted.review_note}` : ""}. Update your time logs and resubmit this period.
                 </span>
               )}
             </span>
@@ -396,38 +489,10 @@ export function VAPayrollPage() {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader className="pb-2"><CardTitle>Timesheet detail</CardTitle></CardHeader>
-              <CardContent className="overflow-x-auto p-0">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b bg-muted/40 text-left text-muted-foreground">
-                      <th className="p-3">Date</th>
-                      <th className="p-3">Client</th>
-                      <th className="p-3">Description</th>
-                      <th className="p-3">Hours</th>
-                      <th className="p-3">Rate</th>
-                      <th className="p-3">Pay</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(earnings.entries ?? []).map((e) => (
-                      <tr key={e.id} className="border-b last:border-0">
-                        <td className="whitespace-nowrap p-3">{formatDate(e.work_date)}</td>
-                        <td className="p-3 font-medium">{e.client_name}</td>
-                        <td className="max-w-xs p-3"><span className="line-clamp-2">{e.description || e.task_title || "—"}</span></td>
-                        <td className="p-3 font-bold">{e.hours}</td>
-                        <td className="p-3">{formatCurrency(e.rate, earnings.currency)}</td>
-                        <td className="p-3 font-semibold">{formatCurrency(e.pay, earnings.currency)}</td>
-                      </tr>
-                    ))}
-                    {(earnings.entries ?? []).length === 0 && (
-                      <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No approved entries in this range.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </CardContent>
-            </Card>
+            <WeekedEntries
+              entries={earnings.entries ?? []}
+              currency={earnings.currency}
+            />
           </>
         )}
       </div>

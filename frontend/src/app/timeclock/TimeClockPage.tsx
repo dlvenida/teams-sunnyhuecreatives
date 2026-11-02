@@ -197,7 +197,7 @@ export function TimeClockPage() {
           </div>
           <button onClick={() => setRequesting(null)} className="rounded-full p-1.5 hover:bg-muted"><X className="h-4 w-4" /></button>
         </div>
-        <p className="mt-3 text-[11px] text-muted-foreground">An admin or auditor will review and edit the entry for you. Your current times stay recorded until they approve the change.</p>
+        <p className="mt-3 text-[11px] text-muted-foreground">An admin or Project Manager will review and edit the entry for you. Your current times stay recorded until they approve the change.</p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div><Label>Correct clock in</Label><Input type="datetime-local" value={reqForm.clock_in} onChange={e => setReqForm({ ...reqForm, clock_in: e.target.value })} /></div>
           <div><Label>Correct clock out</Label><Input type="datetime-local" value={reqForm.clock_out} onChange={e => setReqForm({ ...reqForm, clock_out: e.target.value })} /></div>
@@ -303,7 +303,7 @@ export function TimeClockPage() {
           <p className="text-xs text-muted-foreground">
             {isStaff
               ? "Clock in and out for your own work. Switch to Team to manage VA sessions and revision requests."
-              : "Clock in when you start, clock out when you finish. If a time is wrong, request a revision — admin or auditor will edit it for you."}
+              : "Clock in when you start, clock out when you finish. If a time is wrong, request a revision. An admin or Project Manager will edit it for you."}
           </p>
         </div>
         {staffTabs}

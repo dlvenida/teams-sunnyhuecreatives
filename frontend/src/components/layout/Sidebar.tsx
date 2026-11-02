@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { NavLink } from "react-router-dom"
+import { NavLink, useLocation } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { apiFetch, apiFetchBlob, getAuthUser, logout, setAuthUser } from "@/lib/api"
 import type { UserProfile } from "@/lib/profile"
@@ -15,6 +15,7 @@ function getInitials(name?: string) {
 
 export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem[]; mobileOpen?: boolean; onClose?: () => void }) {
   const user = getAuthUser()
+  const { pathname } = useLocation()
   const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const { data: profile } = useQuery({ queryKey: ["profile"], queryFn: () => apiFetch<UserProfile>("/profile/me"), staleTime: 60_000 })
   const profilePath = user?.role === "va" ? "/va/profile" : "/admin/profile"
@@ -57,7 +58,7 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
         </div>
         <div className="min-w-0 flex-1">
           <p className="gradient-text truncate text-[15px] font-extrabold tracking-tight">Teams.SHC</p>
-          <p className="text-[10px] capitalize text-muted-foreground">{user?.role === "admin" ? "Admin workspace" : user?.role === "auditor" ? "Auditor workspace" : "VA workspace"}</p>
+          <p className="text-[10px] text-muted-foreground">{user?.role === "admin" ? "Admin workspace" : user?.role === "auditor" ? "Project Manager workspace" : "VA workspace"}</p>
         </div>
         {mobileOpen && <button className="lg:hidden" onClick={onClose} aria-label="Close menu"><X className="h-5 w-5" /></button>}
       </div>
@@ -67,22 +68,28 @@ export function Sidebar({ items, mobileOpen = false, onClose }: { items: NavItem
           <div key={section}>
             <p className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted-foreground/80">{section}</p>
             <div className="space-y-0.5">
-              {navItems.map(({ to, label, icon: Icon, color }) => (
+              {navItems.map(({ to, label, icon: Icon, color, activePaths }) => (
                 <NavLink key={to} to={to} onClick={onClose}
-                  className={({ isActive }) => cn(
-                    "group flex items-center gap-2.5 rounded-2xl px-2.5 py-2 text-[13px] font-medium transition-all",
-                    isActive ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:bg-muted hover:text-foreground hover:translate-x-0.5",
-                  )}
+                  className={({ isActive }) => {
+                    const on = isActive || (activePaths?.includes(pathname) ?? false)
+                    return cn(
+                      "group flex items-center gap-2.5 rounded-2xl px-2.5 py-2 text-[13px] font-medium transition-all",
+                      on ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:bg-muted hover:text-foreground hover:translate-x-0.5",
+                    )
+                  }}
                 >
-                  {({ isActive }) => (<>
+                  {({ isActive }) => {
+                    const on = isActive || (activePaths?.includes(pathname) ?? false)
+                    return (<>
                     <span
                       className="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl transition-transform group-hover:scale-110"
-                      style={isActive ? { background: "rgb(255 255 255 / .22)" } : { background: `${color || "#ec4899"}22`, color: color || "var(--primary)" }}
+                      style={on ? { background: "rgb(255 255 255 / .22)" } : { background: `${color || "#ec4899"}22`, color: color || "var(--primary)" }}
                     >
                       <Icon className="h-4 w-4 stroke-[1.75]" />
                     </span>
                     <span className="truncate">{label}</span>
-                  </>)}
+                    </>)
+                  }}
                 </NavLink>
               ))}
             </div>

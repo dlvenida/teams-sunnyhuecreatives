@@ -12,6 +12,7 @@ import { LogsPage } from "@/app/admin/logs/LogsPage"
 import { PayrollPage } from "@/app/admin/payroll/PayrollPage"
 import { ReportsPage } from "@/app/admin/reports/ReportsPage"
 import { InvoicesPage } from "@/app/admin/invoices/InvoicesPage"
+import { FinancePage } from "@/app/admin/finance/FinancePage"
 import { SettingsPage } from "@/app/admin/settings/SettingsPage"
 import { ClientsPage } from "@/app/admin/clients/ClientsPage"
 import { UsersPage } from "@/app/admin/users/UsersPage"
@@ -81,6 +82,7 @@ export default function App() {
               <Route element={<AppShell />}>
                 <Route path="/admin/va-rates" element={<VARatesAdminPage />} />
                 <Route path="/admin/invoices" element={<InvoicesPage />} />
+                <Route path="/admin/finance" element={<FinancePage />} />
                 <Route path="/admin/settings" element={<SettingsPage />} />
                 <Route path="/admin/booking" element={<BookingPage />} />
               </Route>

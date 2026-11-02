@@ -117,8 +117,23 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
     for t in unassigned[:5]:
         attention.append({"type": "unassigned", "severity": "medium", "title": f"Unassigned: {t.title}", "detail": "Assign a VA so work can start", "link": "/admin/tasks"})
     if is_admin:
+        try:
+            from app.services.va_inactivity import notify_daily_inactivity
+            for flag in notify_daily_inactivity(db, today):
+                attention.append({
+                    "type": "va_inactive_day",
+                    "severity": "high",
+                    "title": flag["title"],
+                    "detail": flag["body"],
+                    "link": "/admin/analytics",
+                })
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
         pending = db.query(WorkLog).filter(WorkLog.status == WorkLogStatus.submitted).count()
-        if pending: attention.append({"type": "pending_logs", "severity": "medium", "title": f"{pending} time log(s) waiting for approval", "detail": "Review in All Logs", "link": "/admin/logs"})
+        if pending: attention.append({"type": "pending_logs", "severity": "medium", "title": f"{pending} time log(s) waiting for approval", "detail": "Open Review logs", "link": "/admin/logs"})
         unpaid = db.query(Invoice).filter(Invoice.status == InvoiceStatus.unpaid).count()
         if unpaid and current.role == UserRole.admin:
             attention.append({"type": "unpaid_invoices", "severity": "medium", "title": f"{unpaid} unpaid invoice(s)", "detail": "Follow up on payments", "link": "/admin/invoices"})
@@ -186,12 +201,8 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
 @router.get("/activity")
 def get_team_activity(_: Annotated[CurrentUser, Depends(require_admin_or_auditor)], db: Annotated[Session, Depends(get_db)]):
     """Monday-style team activity: who is working, who is low, and who has assigned
-    clients/tasks but no logs today or this week. Flags them and lightly notifies
-    the admin + assigned reviewer (once per day per VA)."""
-    from datetime import datetime, timedelta, timezone as _tz
-    from app.models import Notification, User
-    from app.services.notifications import admin_user_ids, push
-
+    clients/tasks but no logs today or this week. Flags a VA who logged no time
+    or no tasks for the day and notifies admins and project managers."""
     today = date.today()
     week_start, week_end = get_week_period("this_week")
     vas = (
@@ -244,8 +255,12 @@ def get_team_activity(_: Annotated[CurrentUser, Depends(require_admin_or_auditor
         if logs:
             last_activity = logs[0].work_date
         reasons: list[str] = []
-        if open_tasks and not logs_today:
-            reasons.append("No logs today")
+        pretty_today = f"{today.strftime('%b')} {today.day}, {today.year}"
+        task_logs_today = [l for l in logs_today if l.task_id or (getattr(l, "task_name", None) or "").strip()]
+        if not logs_today and not live:
+            reasons.append(f"No time logged on {pretty_today}")
+        if not task_logs_today and not (live and live.task_id):
+            reasons.append(f"No tasks logged on {pretty_today}")
         if open_tasks and not logs_week:
             reasons.append("No logs this week")
         if idle_clients:
@@ -279,28 +294,10 @@ def get_team_activity(_: Annotated[CurrentUser, Depends(require_admin_or_auditor
             "last_activity": str(last_activity) if last_activity else None,
         })
 
-    # Light daily alert for inactive VAs → admins + that VA's assigned reviewer (deduped per day)
+    # Daily alert: VA logged no time or has no tasks today → admins + project managers (auditors)
     try:
-        day_start = datetime.now(_tz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        for row in out:
-            if row["status"] != "inactive":
-                continue
-            title = f"🚨 {row['name']} has no activity this week"
-            auditor_ids = [str(u.id) for u in db.query(User).filter(User.role == UserRole.auditor, User.is_active.is_(True)).all()]
-            recipients = admin_user_ids(db) + auditor_ids + ([row["reviewer_user_id"]] if row["reviewer_user_id"] else [])
-            from uuid import UUID as _UUID
-            todo_recipients = []
-            for rid in recipients:
-                rid_uuid = _UUID(rid) if isinstance(rid, str) else rid
-                exists = db.query(Notification).filter(
-                    Notification.user_id == rid_uuid, Notification.title == title, Notification.created_at >= day_start,
-                ).first()
-                if not exists:
-                    todo_recipients.append(rid_uuid)
-            if todo_recipients:
-                push(db, todo_recipients, "system", title,
-                     "Assigned work is waiting but no hours were logged today or this week. Check the board and follow up.",
-                     "/admin/dashboard")
+        from app.services.va_inactivity import notify_daily_inactivity
+        notify_daily_inactivity(db, today)
     except Exception:
         try:
             db.rollback()
@@ -335,7 +332,6 @@ def get_dashboard_summary(
             .scalar()
             or Decimal("0")
         )
-        from app.models import ClientApprovalStatus
         active_clients = db.query(Client).filter(
             Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved
         ).count()

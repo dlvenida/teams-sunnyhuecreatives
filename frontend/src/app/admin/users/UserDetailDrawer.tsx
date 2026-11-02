@@ -146,7 +146,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                   <p className="text-muted-foreground">Assigned to <strong className="text-foreground">{s.clients_count} client(s)</strong> and <strong className="text-foreground">{s.projects_count} project(s)</strong> · {s.logs_count} time log(s){p.reviewing.length > 0 && <> · Reviewing: <strong className="text-foreground">{p.reviewing.map((r) => r.name).join(", ")}</strong></>}</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Link to="/admin/tasks"><Button size="sm" variant="outline"><KanbanSquare className="h-3.5 w-3.5" /> Task Board</Button></Link>
-                    <Link to="/admin/logs"><Button size="sm" variant="outline"><Clock className="h-3.5 w-3.5" /> All Logs</Button></Link>
+                    <Link to="/admin/logs"><Button size="sm" variant="outline"><Clock className="h-3.5 w-3.5" /> Review logs</Button></Link>
                     <Link to="/admin/projects"><Button size="sm" variant="outline"><FolderKanban className="h-3.5 w-3.5" /> Projects</Button></Link>
                   </div>
                   <p className="mt-3 text-[11px] text-muted-foreground">Use “Switch to their view” above to see the app exactly as {p.name.split(" ")[0]} sees it — their dashboard, Task Board, clock and logs.</p>
@@ -160,7 +160,7 @@ export function UserDetailDrawer({ userId, onClose }: { userId: string; onClose:
                   <p className="text-xs font-bold">Role per client</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     Job function titles only (not pay). Example: Social Media Manager for Client A, Email Marketing Specialist for Client B.
-                    {canEditRoles ? " Admin and Auditor can add or update anytime; the VA can also set their own." : ""}
+                    {canEditRoles ? " Admin and Project Manager can add or update anytime. The VA can also set their own." : ""}
                   </p>
                 </div>
                 {roleError && <p className="text-[11px] text-red-600">{roleError}</p>}

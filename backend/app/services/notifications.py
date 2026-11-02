@@ -1,9 +1,7 @@
-"""Task/project email + in-app notifications (Monday-style). Best-effort: never breaks the request."""
+"""In-app notifications, plus email only for the important events. Best-effort: never breaks the request."""
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models import Notification, Task, User, UserRole, VA
-from app.services.email import branded_email, detail_rows, render_template, send_email
 
 BASE = "/va/tasks"
 
@@ -128,40 +126,13 @@ def _va_contact(db: Session, va_id) -> tuple[str, str] | None:
     return va.user.email, va.name
 
 
-def _task_rows(task: Task, extra: list[tuple[str, str]] | None = None) -> str:
-    rows = [
-        ("Task", task.title),
-        ("Client", task.client.name if task.client else ""),
-        ("Project", task.project.name if task.project else ""),
-        ("Status", task.status.value.replace("_", " ").title()),
-        ("Priority", task.priority.value.title()),
-        ("Due", str(task.due_date) if task.due_date else ""),
-    ]
-    if extra:
-        rows = extra + rows
-    return detail_rows(rows)
-
-
 def notify_task_assigned(db: Session, task: Task, first_in_project: bool = False) -> None:
+    """In-app only. Assigning a task is routine and does not email."""
     try:
-        contact = _va_contact(db, task.assignee_va_id)
-        if not contact:
+        uid = va_user_id(db, task.assignee_va_id)
+        if not uid:
             return
-        email, name = contact
-        if first_in_project and task.project:
-            title = f"🌸 New project for you: {task.project.name}"
-            body = f"<p>Hi {_name(name)},</p><p>You've been assigned to a new project. Your first task is ready:</p>" + _task_rows(task)
-            subject = f"New project assigned: {task.project.name}"
-        else:
-            title = f"📌 New task: {task.title}"
-            body = f"<p>Hi {_name(name)},</p><p>A new task was assigned to you:</p>" + _task_rows(task)
-            subject = f"New task assigned: {task.title}"
-        rendered = render_template(db, "task_assigned", {"name": name, "task_title": task.title, "client": task.client.name if task.client else "", "project": task.project.name if task.project else "", "status": task.status.value.replace("_", " ").title(), "priority": task.priority.value.title(), "due": str(task.due_date or "no date")})
-        if rendered:
-            send_email(email, rendered[0], rendered[1], template_key="task_assigned")
-        else:
-            send_email(email, subject, branded_email(title, subject, body, "Open My Board", f"{settings.app_url}{BASE}"), template_key="task_assigned")
-        push(db, [va_user_id(db, task.assignee_va_id)], "task",
+        push(db, [uid], "task",
              f"🌸 New project: {task.project.name}" if first_in_project and task.project else f"📌 New task assigned: {task.title}",
              f"{task.client.name if task.client else ''}{' · ' + task.project.name if task.project else ''} · due {task.due_date or 'no date'}",
              task_deep_link(task.id))
@@ -170,19 +141,12 @@ def notify_task_assigned(db: Session, task: Task, first_in_project: bool = False
 
 
 def notify_task_updated(db: Session, task: Task, change: str, actor_name: str = "") -> None:
+    """In-app only. Task edits are routine and do not email."""
     try:
-        contact = _va_contact(db, task.assignee_va_id)
-        if not contact:
+        uid = va_user_id(db, task.assignee_va_id)
+        if not uid:
             return
-        email, name = contact
-        title = f"🔔 Task updated: {task.title}"
-        body = f"<p>Hi {_name(name)},</p><p>{_name(change)}</p>" + _task_rows(task, [("Updated by", actor_name)] if actor_name else None)
-        rendered = render_template(db, "task_updated", {"name": name, "task_title": task.title, "client": task.client.name if task.client else "", "project": task.project.name if task.project else "", "change": change, "actor": actor_name})
-        if rendered:
-            send_email(email, rendered[0], rendered[1], template_key="task_updated")
-        else:
-            send_email(email, f"Task updated: {task.title}", branded_email(title, change, body, "View Task", f"{settings.app_url}{BASE}"), template_key="task_updated")
-        push(db, [va_user_id(db, task.assignee_va_id)], "task", f"🔔 Task updated: {task.title}", change, task_deep_link(task.id))
+        push(db, [uid], "task", f"🔔 Task updated: {task.title}", change, task_deep_link(task.id))
     except Exception:
         pass
 
@@ -232,8 +196,10 @@ def notify_involved_comment(
     link: str,
     recipient_ids,
 ) -> None:
-    """In-app only for people who own or are involved. Not a blast to every admin."""
+    """People who own or are involved, in the app and by email. Not a blast to every admin."""
     try:
+        from app.services.notification_mail import actor_first, email_user_ids
+
         ids = []
         for uid in recipient_ids or []:
             if uid and uid != author_user_id and uid not in ids:
@@ -241,20 +207,19 @@ def notify_involved_comment(
         if not ids:
             return
         snippet = comment_snippet(comment_body)
-        push(
-            db,
-            ids,
-            "comment",
-            f"{author_name} commented: {snippet}" if snippet else f"{author_name} commented",
-            f"On {context_title}",
-            link,
-        )
+        first = actor_first(author_name)
+        title = f"{first} commented: {snippet}" if snippet else f"{first} commented"
+        push(db, ids, "comment", title, f"On {context_title}", link)
+        lines = [f"On {context_title}."]
+        if snippet:
+            lines.append(snippet)
+        email_user_ids(db, ids, title=title, paragraphs=lines, link=link, template_key="task_comment", link_label="Open the conversation")
     except Exception:
         pass
 
 
 def notify_task_comment(db: Session, task: Task, comment_body: str, author_name: str, author_user_id=None, author_is_assignee: bool = False) -> None:
-    """Tell people involved in the task. Does not email or ping every admin."""
+    """Tell people involved in the task. Does not ping every admin."""
     try:
         notify_involved_comment(
             db,
@@ -265,46 +230,16 @@ def notify_task_comment(db: Session, task: Task, comment_body: str, author_name:
             link=task_deep_link(task.id),
             recipient_ids=task_involved_user_ids(db, task),
         )
-        if author_is_assignee:
-            return
-        contact = _va_contact(db, task.assignee_va_id)
-        if not contact:
-            return
-        email, name = contact
-        snippet = comment_snippet(comment_body)
-        title = f"{author_name} commented: {snippet}" if snippet else f"{author_name} commented"
-        body = (
-            f"<p>Hi {_name(name)},</p><p><strong>{_name(author_name)}</strong> commented on "
-            f"<em>{_name(task.title)}</em>:</p>"
-            f"<blockquote style='margin:10px 0;padding:10px 14px;background:#fff7fa;border-left:3px solid #ec4899;border-radius:8px;'>{_name(snippet)}</blockquote>"
-        )
-        send_email(email, title, branded_email(title, snippet, body, "Reply on My Board", f"{settings.app_url}{BASE}"), template_key="task_comment")
     except Exception:
         pass
 
 
 def notify_delegation(db: Session, to_va: VA, from_name: str, summary: dict) -> None:
+    """In-app only. Handing work over is routine and does not email."""
     try:
-        if not to_va.user or not to_va.user.email:
+        if not to_va.user_id:
             return
-        rows = [
-            ("From", from_name), ("Tasks transferred", str(summary.get("tasks", 0))),
-            ("Work logs transferred", str(summary.get("work_logs", 0))), ("Clock entries", str(summary.get("clock_entries", 0))),
-            ("Clients covered", ", ".join(summary.get("clients", [])[:6])),
-        ]
-        title = f"🤝 Work delegated to you from {from_name}"
-        body = f"<p>Hi {_name(to_va.name)},</p><p>Tasks and history from <strong>{_name(from_name)}</strong> were delegated to you. Everything is already synced to your board and logs.</p>" + detail_rows(rows)
-        rendered = render_template(db, "delegation", {"name": to_va.name, "from_name": from_name, "tasks": summary.get("tasks", 0), "work_logs": summary.get("work_logs", 0)})
-        if rendered:
-            send_email(to_va.user.email, rendered[0], rendered[1], template_key="delegation")
-        else:
-            send_email(to_va.user.email, f"Work delegated to you from {from_name}", branded_email(title, "New delegated work is on your board", body, "Open My Board", f"{settings.app_url}{BASE}", accent="#a855f7"), template_key="delegation")
         push(db, [to_va.user_id], "delegation", f"🤝 Work delegated to you from {from_name}",
              f"{summary.get('tasks', 0)} tasks · {summary.get('work_logs', 0)} logs · {summary.get('clock_entries', 0)} clock entries now on your board", BASE)
     except Exception:
         pass
-
-
-def _name(v: str) -> str:
-    import html as _h
-    return _h.escape(str(v or ""))

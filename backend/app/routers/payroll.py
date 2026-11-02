@@ -432,6 +432,7 @@ def review_timesheet(
     row.reviewed_by = current.user.id
     db.commit()
     db.refresh(row)
+    _notify_timesheet_va(db, row, current, approved=True, note=None)
     logs = filter_logs_in_pay_period(
         db.query(WorkLog).filter(
             WorkLog.va_id == row.va_id,
@@ -520,22 +521,39 @@ def reject_timesheet(
     row.reviewed_by = current.user.id
     db.commit()
     db.refresh(row)
-    va_name = (
-        (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
-        or (row.va.name if row.va else "VA")
-    )
-    detail = f"{row.period_start} – {row.period_end}"
-    if reason:
-        detail += f" — {reason}"
-    push(
-        db,
-        [va_user_id(db, row.va_id)],
-        "log",
-        f"Timesheet needs changes — {va_name}",
-        f"Your timesheet for {detail}. Update the entries and resubmit.",
-        "/va/payroll",
-    )
+    _notify_timesheet_va(db, row, current, approved=False, note=reason)
     return _sheet_response(db, row)
+
+
+def _notify_timesheet_va(db: Session, row: TimesheetSubmission, current: CurrentUser, *, approved: bool, note: str | None) -> None:
+    """Tell the VA in the app and by email. No pay amounts."""
+    from app.config import settings as app_settings
+    from app.services.notification_mail import send_notification_email
+    from app.services.notifications import first_name_of
+
+    reviewer = first_name_of(current.user)
+    title = f"{reviewer} approved your timesheet" if approved else f"{reviewer} rejected your timesheet"
+    lines = [f"{row.period_start} to {row.period_end}."]
+    if note:
+        lines.append(note)
+    elif not approved:
+        lines.append("Update the entries and resubmit.")
+    user = row.va.user if row.va and getattr(row.va, "user", None) else None
+    uid = user.id if user else va_user_id(db, row.va_id)
+    push(db, [uid], "log", title, " ".join(lines), "/va/payroll")
+    if user and user.email:
+        try:
+            send_notification_email(
+                user.email,
+                title,
+                title,
+                lines,
+                f"{app_settings.app_url.rstrip('/')}/va/payroll",
+                "Open your timesheets",
+                "timesheet_approved" if approved else "timesheet_rejected",
+            )
+        except Exception:
+            pass
 
 
 @router.post("/runs", response_model=PayrollRunResponse, status_code=status.HTTP_201_CREATED)

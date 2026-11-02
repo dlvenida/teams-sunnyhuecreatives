@@ -118,6 +118,16 @@ def notify_daily_inactivity(db: Session, today: date | None = None) -> list[dict
                     flag["body"],
                     flag["link"],
                 )
+                from app.services.notification_mail import email_user_ids
+                email_user_ids(
+                    db,
+                    pending,
+                    title=flag["title"],
+                    paragraphs=[flag["body"]],
+                    link=flag["link"],
+                    template_key="inactive_va",
+                    link_label="Open team activity",
+                )
     except Exception:
         try:
             db.rollback()

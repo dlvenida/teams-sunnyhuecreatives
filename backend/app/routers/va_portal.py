@@ -23,7 +23,6 @@ from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionRe
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
 from app.services.calculations import calculate_hours
-from app.services.email import send_timesheet_submitted_notification
 from app.services.notifications import push
 from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
 from app.services.work_log_overlap import assert_no_time_overlap
@@ -691,38 +690,36 @@ def submit_timesheet(
         body.date_to,
     ).all()
     hours = sum((l.hours for l in logs), Decimal("0"))
-    va_label = (
-        (va.user.display_name.strip() if va and va.user and va.user.display_name else "")
-        or (va.name if va else "VA")
-    )
+    shown = ((va.name if va and va.name else "") or (va.user.display_name if va and va.user and va.user.display_name else "")).strip()
+    va_first = shown.split()[0] if shown else "A VA"
+    from app.config import settings as _settings
     from app.models import User as _User, UserRole as _UserRole
+    from app.services.notification_mail import send_notification_email
     from app.services.notifications import first_name_of, possessive_pronoun
     pronoun = possessive_pronoun(va.user if va else None)
     staff = db.query(_User).filter(
         _User.role.in_([_UserRole.admin, _UserRole.auditor]),
         _User.is_active.is_(True),
     ).all()
+    period_line = f"{body.date_from} to {body.date_to}. {hours} hrs, {len(logs)} entries."
+    review_url = f"{_settings.app_url.rstrip('/')}/admin/payroll"
     for person in staff:
         first = first_name_of(person)
-        push(
-            db,
-            [person.id],
-            "log",
-            f"Hi {first}, {va_label} submitted {pronoun} timesheet",
-            f"{body.date_from} to {body.date_to}. {hours} hrs, {len(logs)} entries.",
-            "/admin/payroll",
-        )
-    try:
-        send_timesheet_submitted_notification(
-            va_label,
-            str(body.date_from),
-            str(body.date_to),
-            str(hours),
-            len(logs),
-            pronoun=pronoun,
-        )
-    except Exception:
-        pass
+        title = f"Hi {first}, {va_first} submitted {pronoun} timesheet"
+        push(db, [person.id], "log", title, period_line, "/admin/payroll")
+        if person.email:
+            try:
+                send_notification_email(
+                    person.email,
+                    title,
+                    title,
+                    [period_line],
+                    review_url,
+                    "Review the timesheet",
+                    "timesheet_submitted",
+                )
+            except Exception:
+                pass
     return TimesheetSubmissionResponse(
         id=row.id,
         va_id=row.va_id,

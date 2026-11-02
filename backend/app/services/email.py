@@ -103,7 +103,23 @@ def _log_email(to_email: str, subject: str, status: str, template_key: str | Non
         pass
 
 
+# Routine activity stays in the app. These keys must not reach Resend, even from a template test.
+ROUTINE_TEMPLATE_KEYS = {
+    "task_assigned",
+    "task_updated",
+    "delegation",
+    "log_submitted",
+    "log_approved",
+    "log_rejected",
+    "payroll_paid",
+    "reaction",
+}
+
+
 def send_email(to_email: str, subject: str, html_body: str, template_key: str | None = None) -> bool:
+    if template_key in ROUTINE_TEMPLATE_KEYS:
+        _log_email(to_email, subject, "skipped", template_key, "Routine updates stay in the app")
+        return False
     api_key, from_email, _ = _resend_config()
     if not api_key or not to_email:
         _log_email(to_email, subject, "skipped", template_key, None if to_email else "No recipient")
@@ -156,15 +172,8 @@ def send_email_verification(to_email: str, code: str, display_name: str) -> tupl
 
 
 def send_va_submission_notification(va_name: str, client_name: str, hours: str, work_date: str, description: str) -> bool:
-    html_body = branded_email(
-        f"New time log from {va_name}",
-        f"{va_name} logged {hours}h for {client_name}",
-        f"<p>A VA just submitted a time log for review.</p>" + detail_rows([
-            ("VA", va_name), ("Client", client_name), ("Date", work_date), ("Hours", hours), ("Work", description),
-        ]),
-        "Review logs", f"{settings.app_url}/admin/logs",
-    )
-    return send_email(_resend_config()[2], f"New submission from {va_name} — {client_name}", html_body, template_key="log_submitted")
+    """Time logs are routine. They stay in the app and never email."""
+    return False
 
 
 def send_timesheet_submitted_notification(
@@ -175,43 +184,5 @@ def send_timesheet_submitted_notification(
     entry_count: int,
     pronoun: str = "their",
 ) -> bool:
-    """Email admins and project managers when a VA submits a timesheet."""
-    from app.models import User, UserRole
-    from app.database import SessionLocal
-    from app.services.notifications import first_name_of
-
-    sent_any = False
-    try:
-        db = SessionLocal()
-        try:
-            staff = db.query(User).filter(
-                User.role.in_([UserRole.admin, UserRole.auditor]),
-                User.is_active.is_(True),
-            ).all()
-            for person in staff:
-                if not person.email:
-                    continue
-                first = first_name_of(person)
-                subject = f"Hi {first}, {va_name} submitted {pronoun} timesheet"
-                html_body = branded_email(
-                    subject,
-                    f"{period_start} to {period_end}",
-                    (
-                        f"<p>Hi {first},</p>"
-                        f"<p><strong>{va_name}</strong> submitted {pronoun} timesheet.</p>"
-                        + detail_rows([
-                            ("Period", f"{period_start} to {period_end}"),
-                            ("Hours", hours),
-                            ("Entries", str(entry_count)),
-                        ])
-                    ),
-                    "Review timesheet",
-                    f"{settings.app_url}/admin/payroll",
-                )
-                if send_email(person.email, subject, html_body, template_key="timesheet_submitted"):
-                    sent_any = True
-        finally:
-            db.close()
-    except Exception:
-        pass
-    return sent_any
+    """Retired. Timesheet emails are sent next to the in-app notice in the VA portal."""
+    return False

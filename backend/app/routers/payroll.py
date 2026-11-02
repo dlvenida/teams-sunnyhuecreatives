@@ -105,9 +105,15 @@ def calculate_payroll(
     for log in pending:
         va_map.setdefault(log.va_id, {"va": log.va, "entries": [], "total_hours": Decimal("0"), "total_pay": Decimal("0")})
 
-    runs = {
-        r.va_id: r for r in db.query(PayrollRun).filter(PayrollRun.period_start == period_start, PayrollRun.period_end == period_end).all()
-    }
+    window_runs = db.query(PayrollRun).filter(
+        PayrollRun.period_start <= period_end,
+        PayrollRun.period_end >= period_start,
+    ).all()
+    runs = {}
+    for r in window_runs:
+        prev = runs.get(r.va_id)
+        if not prev or (r.period_start == period_start and r.period_end == period_end):
+            runs[r.va_id] = r
     # Match timesheets that overlap the selected payroll window (not only exact dates),
     # so a VA submit for Oct 1–15 still appears when admin views a nearby custom range.
     overlapping_sheets = (
@@ -240,6 +246,8 @@ def calculate_payroll(
             timesheet_submitted=sheet is not None,
             timesheet_status=(sheet.status.value if sheet and hasattr(sheet.status, "value") else (str(sheet.status) if sheet else None)),
             timesheet_id=sheet.id if sheet else None,
+            timesheet_period_start=sheet.period_start if sheet else None,
+            timesheet_period_end=sheet.period_end if sheet else None,
         ))
         if not redact:
             if va.currency == Currency.PHP:
@@ -571,6 +579,18 @@ def mark_paid(
         )
         .first()
     )
+    if not sheet:
+        sheet = (
+            db.query(TimesheetSubmission)
+            .filter(
+                TimesheetSubmission.va_id == body.va_id,
+                TimesheetSubmission.period_start <= body.period_end,
+                TimesheetSubmission.period_end >= body.period_start,
+                TimesheetSubmission.status == TimesheetStatus.reviewed,
+            )
+            .order_by(TimesheetSubmission.reviewed_at.desc())
+            .first()
+        )
     if not sheet:
         raise HTTPException(
             400,

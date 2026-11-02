@@ -578,8 +578,8 @@ export function PayrollPage() {
                   const slip = buildPayslip(payReview, payroll.period_start, payroll.period_end, settings)
                   markPaid.mutate({
                     va_id: payReview.va_id,
-                    period_start: payroll.period_start,
-                    period_end: payroll.period_end,
+                    period_start: payReview.timesheet_period_start || payroll.period_start,
+                    period_end: payReview.timesheet_period_end || payroll.period_end,
                     total_hours: slip.totalHours,
                     total_pay: slip.totalPay,
                     currency: payReview.currency,

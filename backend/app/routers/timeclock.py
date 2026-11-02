@@ -212,14 +212,9 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
         va = db.query(VA).filter(VA.id == current.va_id).first()
         db.add(TaskComment(task_id=entry.task_id, author_user_id=current.user.id, author_name=va.name if va else current.user.email, body=body.comment.strip()))
 
-    # Record as a WorkLog (times converted to the VA's local timezone)
-    if body.create_work_log:
-        if not entry.client_id:
-            db.commit()
-            raise HTTPException(400, "This session has no client, so no work log could be created. Clock entry was saved; add a manual log instead.")
-        if duration <= 0:
-            db.commit()
-            raise HTTPException(400, "Session was too short to log. Clock entry was saved.")
+    # Record as a WorkLog when the session has a client and some time.
+    # A header Clock In has no client. Clock out still succeeds; the VA can log that time by hand.
+    if body.create_work_log and entry.client_id and duration > 0:
         hours = (Decimal(duration) / Decimal(3600)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if hours == 0:
             hours = Decimal("0.01")

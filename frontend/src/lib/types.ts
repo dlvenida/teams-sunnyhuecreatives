@@ -179,6 +179,8 @@ export interface PayrollVA {
   timesheet_submitted?: boolean
   timesheet_status?: string | null
   timesheet_id?: string | null
+  timesheet_period_start?: string | null
+  timesheet_period_end?: string | null
   entry_count: number
   entries: {
     id: string

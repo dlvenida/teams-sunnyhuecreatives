@@ -1,15 +1,18 @@
 """Timesheet rejection note + work-log task name
 
-Revision ID: 024
-Revises: 023
+Revision ID: 027
+Revises: 026
+
+Renumbered from 024: production already applied designer-notes
+revisions 024-026 (legal name, assignee role, work-log duration).
 """
 from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "024"
-down_revision: Union[str, None] = "023"
+revision: str = "027"
+down_revision: Union[str, None] = "026"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

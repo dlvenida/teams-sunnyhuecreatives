@@ -105,8 +105,6 @@ def _log_email(to_email: str, subject: str, status: str, template_key: str | Non
 
 # Routine activity stays in the app. These keys must not reach Resend, even from a template test.
 ROUTINE_TEMPLATE_KEYS = {
-    "task_assigned",
-    "task_updated",
     "delegation",
     "log_submitted",
     "log_approved",

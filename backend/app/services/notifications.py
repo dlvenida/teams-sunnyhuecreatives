@@ -41,11 +41,13 @@ def _link_for_role(link: str | None, role: UserRole | str | None) -> str | None:
     return link
 
 
-def push(db: Session, user_ids, type: str, title: str, body: str = "", link: str = "", exclude_user_id=None) -> None:
+def push(db: Session, user_ids, type: str, title: str, body: str = "", link: str = "", exclude_user_id=None, event_key: str | None = None) -> None:
     """Create in-app notification(s). Best-effort — never breaks the request.
 
     Links starting with /tasks or /projects are rewritten per recipient role so
-    admins land on /admin/... and VAs on /va/....
+    admins land on /admin/... and VAs on /va/.... The bell always keeps the notice.
+    A VA who turned the pop-up off for this event still gets the bell item; the
+    corner toast reads event_key and stays quiet.
     """
     try:
         ids = [u for u in dict.fromkeys(user_ids or []) if u and u != exclude_user_id]
@@ -55,7 +57,9 @@ def push(db: Session, user_ids, type: str, title: str, body: str = "", link: str
         for uid in ids:
             user = users.get(uid)
             resolved = _link_for_role(link, user.role if user else None)
-            db.add(Notification(user_id=uid, type=type, title=title, body=body or None, link=resolved))
+            db.add(Notification(
+                user_id=uid, type=type, title=title, body=body or None, link=resolved, event_key=event_key,
+            ))
         db.commit()
     except Exception:
         try:
@@ -126,27 +130,113 @@ def _va_contact(db: Session, va_id) -> tuple[str, str] | None:
     return va.user.email, va.name
 
 
-def notify_task_assigned(db: Session, task: Task, first_in_project: bool = False) -> None:
-    """In-app only. Assigning a task is routine and does not email."""
+def _deliver_va(
+    db: Session,
+    uid,
+    *,
+    event_key: str,
+    type: str,
+    title: str,
+    body: str,
+    link: str,
+    template_key: str,
+    paragraphs: list[str],
+    link_label: str,
+    actor_user_id=None,
+) -> None:
+    """Bell plus email for the VA who owns the work. Never the person who just did it."""
+    if not uid or (actor_user_id and uid == actor_user_id):
+        return
+    from app.services.notification_mail import email_user_ids
+
+    push(db, [uid], type, title, body, link, event_key=event_key)
+    email_user_ids(
+        db, [uid], title=title, paragraphs=paragraphs, link=link,
+        template_key=template_key, link_label=link_label, event_key=event_key,
+    )
+
+
+def notify_task_assigned(db: Session, task: Task, first_in_project: bool = False, actor_name: str = "", actor_user_id=None) -> None:
+    """The assigned VA gets the bell and an email. Admin and Project Manager are not copied."""
     try:
         uid = va_user_id(db, task.assignee_va_id)
-        if not uid:
+        if not uid or (actor_user_id and uid == actor_user_id):
             return
-        push(db, [uid], "task",
-             f"🌸 New project: {task.project.name}" if first_in_project and task.project else f"📌 New task assigned: {task.title}",
-             f"{task.client.name if task.client else ''}{' · ' + task.project.name if task.project else ''} · due {task.due_date or 'no date'}",
-             task_deep_link(task.id))
+        who = first_name_of_name(actor_name)
+        client = task.client.name if getattr(task, "client", None) else ""
+        detail = client or "Open it on your board."
+        _deliver_va(
+            db, uid,
+            event_key="task_assigned", type="task",
+            title=f"{who} assigned you a task: {task.title}",
+            body=detail, link=task_deep_link(task.id),
+            template_key="task_assigned",
+            paragraphs=[f"{who} assigned you a task: {task.title}", detail],
+            link_label="Open the task",
+            actor_user_id=actor_user_id,
+        )
+        if first_in_project and getattr(task, "project", None):
+            project_title = f"{who} assigned you a project: {task.project.name}"
+            _deliver_va(
+                db, uid,
+                event_key="project_assigned", type="task",
+                title=project_title,
+                body=detail, link=project_deep_link(task.project.id),
+                template_key="project_assigned",
+                paragraphs=[project_title, detail],
+                link_label="Open the project",
+                actor_user_id=actor_user_id,
+            )
     except Exception:
         pass
 
 
-def notify_task_updated(db: Session, task: Task, change: str, actor_name: str = "") -> None:
-    """In-app only. Task edits are routine and do not email."""
+def first_name_of_name(name: str) -> str:
+    raw = (name or "").strip()
+    if not raw:
+        return "Someone"
+    return raw.split()[0]
+
+
+def notify_task_updated(db: Session, task: Task, change: str, actor_name: str = "", actor_user_id=None, actor_is_staff: bool = False) -> None:
+    """Admin or Project Manager edits email the owning VA. Her own edits stay quiet."""
+    try:
+        if not actor_is_staff:
+            return
+        uid = va_user_id(db, task.assignee_va_id)
+        who = first_name_of_name(actor_name)
+        title = f"{who} updated {task.title}"
+        _deliver_va(
+            db, uid,
+            event_key="task_updated", type="task",
+            title=title, body=change or "The task details changed.",
+            link=task_deep_link(task.id),
+            template_key="task_updated",
+            paragraphs=[title, change or "The task details changed."],
+            link_label="Open the task",
+            actor_user_id=actor_user_id,
+        )
+    except Exception:
+        pass
+
+
+def notify_task_decision(db: Session, task: Task, *, approved: bool, actor_name: str = "", actor_user_id=None) -> None:
+    """Admin or Project Manager marked the task done, or sent it back from review."""
     try:
         uid = va_user_id(db, task.assignee_va_id)
-        if not uid:
-            return
-        push(db, [uid], "task", f"🔔 Task updated: {task.title}", change, task_deep_link(task.id))
+        who = first_name_of_name(actor_name)
+        verb = "approved" if approved else "rejected"
+        title = f"{who} {verb} {task.title}"
+        event = "task_approved" if approved else "task_rejected"
+        _deliver_va(
+            db, uid,
+            event_key=event, type="task",
+            title=title, body=title, link=task_deep_link(task.id),
+            template_key=event,
+            paragraphs=[title],
+            link_label="Open the task",
+            actor_user_id=actor_user_id,
+        )
     except Exception:
         pass
 
@@ -209,11 +299,14 @@ def notify_involved_comment(
         snippet = comment_snippet(comment_body)
         first = actor_first(author_name)
         title = f"{first} commented: {snippet}" if snippet else f"{first} commented"
-        push(db, ids, "comment", title, f"On {context_title}", link)
+        push(db, ids, "comment", title, f"On {context_title}", link, event_key="task_comment")
         lines = [f"On {context_title}."]
         if snippet:
             lines.append(snippet)
-        email_user_ids(db, ids, title=title, paragraphs=lines, link=link, template_key="task_comment", link_label="Open the conversation")
+        email_user_ids(
+            db, ids, title=title, paragraphs=lines, link=link,
+            template_key="task_comment", link_label="Open the conversation", event_key="task_comment",
+        )
     except Exception:
         pass
 

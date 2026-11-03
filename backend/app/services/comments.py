@@ -253,9 +253,12 @@ def notify_mentions(db: Session, mentions, *, scope_label: str, title: str, body
     where = f"In {title}" if title else scope_label
     notice = f"{who} {verb} you"
     detail = f"{where}. {context}".strip() if context else where
-    push(db, ids, "comment", notice, detail, link, exclude_user_id=exclude_user_id)
+    push(db, ids, "comment", notice, detail, link, exclude_user_id=exclude_user_id, event_key="task_mention")
     recipients = [uid for uid in ids if not (exclude_user_id and uid == exclude_user_id)]
     lines = [where]
     if context:
         lines.append(context)
-    email_user_ids(db, recipients, title=notice, paragraphs=lines, link=link, template_key="mention", link_label="Open in Teams.SHC")
+    email_user_ids(
+        db, recipients, title=notice, paragraphs=lines, link=link,
+        template_key="mention", link_label="Open in Teams.SHC", event_key="task_mention",
+    )

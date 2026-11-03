@@ -599,7 +599,21 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(String(500))
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # task_assigned, deadline_soon, and the other VA preference rows. Null on older notices.
+    event_key: Mapped[str | None] = mapped_column(String(40), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TaskDeadlineAlert(Base):
+    """One row per task, per deadline, per kind, so a reminder is not sent twice."""
+    __tablename__ = "task_deadline_alerts"
+    __table_args__ = (UniqueConstraint("task_id", "kind", "due_date", name="uq_task_deadline_alert"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    due_date: Mapped[date] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

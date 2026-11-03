@@ -47,6 +47,14 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
     from sqlalchemy import func as _func, or_
 
     today = date.today()
+    try:
+        from app.services.task_deadlines import notify_task_deadlines
+        notify_task_deadlines(db)
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
     week_start = today - timedelta(days=today.weekday())
     week_end = week_start + timedelta(days=6)
     is_admin = current.role in (UserRole.admin, UserRole.auditor)
@@ -296,7 +304,9 @@ def get_team_activity(_: Annotated[CurrentUser, Depends(require_admin_or_auditor
 
     # Daily alert: VA logged no time or has no tasks today → admins + project managers (auditors)
     try:
+        from app.services.task_deadlines import notify_task_deadlines
         from app.services.va_inactivity import notify_daily_inactivity
+        notify_task_deadlines(db)
         notify_daily_inactivity(db, today)
     except Exception:
         try:

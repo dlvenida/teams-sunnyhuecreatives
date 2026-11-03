@@ -105,6 +105,8 @@ def _prefs(user: User) -> NotificationPreferences:
             for k in merged["popup_types"]:
                 if k in raw["popup_types"]:
                     merged["popup_types"][k] = bool(raw["popup_types"][k])
+        if isinstance(raw.get("events"), dict):
+            merged["events"] = raw["events"]
     return NotificationPreferences(**merged)
 
 
@@ -152,7 +154,7 @@ def update_my_profile(
 
     prefs = data.pop("notification_preferences", None)
     if prefs is not None:
-        user.notification_preferences = prefs if isinstance(prefs, dict) else dict(prefs)
+        user.notification_preferences = prefs.model_dump() if hasattr(prefs, "model_dump") else dict(prefs)
 
     for key, value in data.items():
         setattr(user, key, value)

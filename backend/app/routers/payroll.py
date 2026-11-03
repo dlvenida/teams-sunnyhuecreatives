@@ -550,18 +550,23 @@ def _notify_timesheet_va(db: Session, row: TimesheetSubmission, current: Current
         lines.append("Update the entries and resubmit.")
     user = row.va.user if row.va and getattr(row.va, "user", None) else None
     uid = user.id if user else va_user_id(db, row.va_id)
-    push(db, [uid], "log", title, " ".join(lines), "/va/payroll")
+    if uid and uid == current.user.id:
+        return
+    event = "timesheet_approved" if approved else "timesheet_rejected"
+    push(db, [uid], "log", title, " ".join(lines), "/va/payroll", event_key=event)
     if user and user.email:
         try:
-            send_notification_email(
-                user.email,
-                title,
-                title,
-                lines,
-                f"{app_settings.app_url.rstrip('/')}/va/payroll",
-                "Open your timesheets",
-                "timesheet_approved" if approved else "timesheet_rejected",
-            )
+            from app.services.notification_prefs import va_channel_enabled
+            if va_channel_enabled(user, event, "email"):
+                send_notification_email(
+                    user.email,
+                    title,
+                    title,
+                    lines,
+                    f"{app_settings.app_url.rstrip('/')}/va/payroll",
+                    "Open your timesheets",
+                    event,
+                )
         except Exception:
             pass
 

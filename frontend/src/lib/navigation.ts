@@ -60,6 +60,7 @@ export const VA_NAV: NavItem[] = [
   { to: "/va/clients", label: "Clients", icon: Building2, keywords: ["assigned clients", "my clients", "client list"], section: "More", color: "#d8b4fe" },
   { to: "/va/reports", label: "My Reports", icon: Flag, keywords: ["report", "flag", "issue", "report to admin"], section: "More", color: "#f9a8d4" },
   { to: "/notifications", label: "Notifications", icon: BellRing, keywords: ["alerts", "comments", "updates", "unread"], section: "More", color: "#f9a8d4" },
+  { to: "/va/notification-preferences", label: "Alert preferences", icon: BellRing, keywords: ["email", "popup", "deadline", "notification preferences"], section: "More", color: "#f9a8d4" },
   { to: "/va/profile", label: "Profile", icon: CircleUserRound, keywords: ["account", "theme", "password"], section: "More", color: "#94a3b8" },
 ]
 

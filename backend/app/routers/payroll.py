@@ -35,7 +35,7 @@ from app.schemas import (
     TimesheetSubmissionResponse,
     WorkLogAttachmentResponse,
 )
-from app.services.log_display import log_task_name
+from app.services.log_display import approval_task_label, log_task_name
 from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
 from app.services.payroll_calendar import filter_logs_in_pay_period
@@ -344,7 +344,7 @@ def _review_entry(log: WorkLog, include_money: bool = False) -> dict:
         "client_name": project_client or (log.client.name if log.client else None),
         "project_name": project.name if project is not None else None,
         "task_title": log.task.title if log.task else None,
-        "task_name": log_task_name(log),
+        "task_name": approval_task_label(log),
         "description": log.description_plain or "",
         "notes": log.notes or "",
         "start_time": log.start_time.strftime("%H:%M") if log.start_time else None,
@@ -388,7 +388,7 @@ def timesheet_entries(
         )
         .filter(
             WorkLog.va_id == row.va_id,
-            WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
+            WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted, WorkLogStatus.rejected]),
         ),
         row.period_start,
         row.period_end,

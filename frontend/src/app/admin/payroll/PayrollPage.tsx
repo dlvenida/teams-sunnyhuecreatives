@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import type { PayrollResponse, PayrollRun, PayrollVA, Settings, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -44,6 +44,7 @@ export function PayrollPage() {
   const [editing, setEditing] = useState<{ id: string; description: string; start_time: string; end_time: string; va_rate: string; va_name: string; work_date: string } | null>(null)
   const [markPaidError, setMarkPaidError] = useState("")
   const [pdfError, setPdfError] = useState("")
+  const [searchParams] = useSearchParams()
   const [reviewTimesheetId, setReviewTimesheetId] = useState<string | null>(null)
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
   const [usdPhpRate, setUsdPhpRate] = useState("")
@@ -73,6 +74,18 @@ export function PayrollPage() {
     queryFn: () => apiFetch<PendingSheet[]>("/payroll/timesheets?status_filter=submitted"),
     refetchInterval: 30_000,
   })
+
+  useEffect(() => {
+    const id = searchParams.get("timesheet")
+    if (!id) return
+    const inline = pendingSheets.some((s) => s.id === id)
+    if (inline) {
+      setReviewTimesheetId(null)
+      document.getElementById(`timesheet-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })
+    } else {
+      setReviewTimesheetId(id)
+    }
+  }, [searchParams, pendingSheets])
 
   // Auto-computes whenever a filter changes — no Calculate button needed
   const { data: payroll, isLoading } = useQuery({
@@ -200,38 +213,12 @@ export function PayrollPage() {
               <h2 className="font-display text-base font-bold text-amber-950">
                 {pendingSheets.length} timesheet{pendingSheets.length === 1 ? "" : "s"} waiting for review
               </h2>
-              <p className="text-xs text-amber-900/80">Open a timesheet to read every entry on this screen, then approve or reject. The payslip stays locked until approved.</p>
+              <p className="text-xs text-amber-900/80">Every log is listed here, before Approve. Nothing to open or download. The payslip stays locked until approved.</p>
             </div>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="space-y-4">
             {pendingSheets.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => {
-                  setReviewTimesheetId(s.id)
-                  setVaId(s.va_id)
-                  setPeriod("custom")
-                  setDateFrom(s.period_start)
-                  setDateTo(s.period_end)
-                }}
-                className="rounded-xl border border-amber-200 bg-white p-3 text-left transition hover:border-amber-400 hover:shadow-md"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <p className="text-sm font-bold text-foreground">{s.va_name || "VA"}</p>
-                  <span className="shrink-0 rounded-full bg-amber-200 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide text-amber-900">
-                    Pending Approval
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {formatDate(s.period_start)} – {formatDate(s.period_end)}
-                </p>
-                <p className="mt-1 text-xs font-semibold text-amber-900">
-                  {s.total_hours} hrs · {s.entry_count} entries
-                  {s.submitted_at ? ` · submitted ${formatDate(s.submitted_at.slice(0, 10))}` : ""}
-                </p>
-                <p className="mt-2 text-[11px] font-bold text-primary">Review &amp; approve →</p>
-              </button>
+              <TimesheetReviewPanel key={s.id} timesheetId={s.id} variant="inline" />
             ))}
           </div>
         </div>

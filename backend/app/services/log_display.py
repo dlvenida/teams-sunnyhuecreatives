@@ -10,3 +10,16 @@ def log_task_name(log) -> str | None:
     if title and str(title).strip():
         return str(title).strip()
     return None
+
+
+def approval_task_label(log) -> str:
+    """Name shown on the approval screen. Old and clock entries often have no task_name."""
+    named = log_task_name(log)
+    if named:
+        return named
+    desc = (getattr(log, "description_plain", None) or "").strip()
+    if desc:
+        line = desc.splitlines()[0].strip()
+        if line:
+            return line[:140]
+    return "Untitled task"

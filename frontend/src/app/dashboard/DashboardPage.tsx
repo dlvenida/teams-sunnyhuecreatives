@@ -6,6 +6,7 @@ import type { DashboardOverview, DashboardSummary, TaskItem } from "@/lib/types"
 import type { UserProfile } from "@/lib/profile"
 import { formatCurrency, formatDate, cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { LogApprovalCard } from "@/components/payroll/LogApprovalCard"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TASK_STATUSES, PRIORITY_META, formatDuration } from "@/components/tasks/task-utils"
 import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, DollarSign, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, TrendingUp, Volume2, Wallet, X } from "lucide-react"
@@ -423,9 +424,22 @@ export function DashboardPage() {
       </div>
 
       {isStaff && data && data.pending_logs.length > 0 && (
-          <Card><CardHeader className="pb-2"><CardTitle>Pending Approval ({data.pending_logs.length})</CardTitle></CardHeader><CardContent className="overflow-x-auto p-0"><table className="w-full text-xs">
-            <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Date</th><th className="p-3">VA</th><th className="p-3">Client</th><th className="p-3">Hours</th><th className="p-3">Actions</th></tr></thead>
-            <tbody>{data.pending_logs.map(log => <tr key={log.id} className="border-b"><td className="p-3">{log.work_date}</td><td className="p-3">{log.va_name}</td><td className="p-3">{log.client_name}</td><td className="p-3">{log.hours}</td><td className="p-3"><div className="flex gap-1"><Button size="sm" variant="success" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></div></td></tr>)}</tbody></table></CardContent></Card>
+        <Card>
+          <CardHeader className="pb-2"><CardTitle>Pending Approval ({data.pending_logs.length})</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">Each log is listed here before you approve or reject it.</p>
+            {data.pending_logs.map(log => (
+              <div key={log.id} className="space-y-2">
+                <p className="text-xs font-bold text-muted-foreground">{log.va_name}</p>
+                <LogApprovalCard entry={{ ...log, description: log.description_plain }} />
+                <div className="flex gap-2">
+                  <Button size="sm" variant="success" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /> Approve</Button>
+                  <Button size="sm" variant="danger" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /> Reject</Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
 
       {isStaff && data && (

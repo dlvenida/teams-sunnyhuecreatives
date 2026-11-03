@@ -14,6 +14,7 @@ interface VARate {
   client_id: string
   client_name?: string
   pay_type: "hourly" | "package"
+  payment_frequency?: "monthly" | "biweekly" | null
   currency: "PHP" | "USD"
   amount: string
   status: "pending" | "approved" | "rejected"
@@ -24,7 +25,7 @@ interface VARate {
 
 export function VARatesPage() {
   const qc = useQueryClient()
-  const [form, setForm] = useState({ client_id: "", pay_type: "hourly" as "hourly" | "package", currency: "PHP" as "PHP" | "USD", amount: "" })
+  const [form, setForm] = useState({ client_id: "", pay_type: "hourly" as "hourly" | "package", payment_frequency: "biweekly" as "monthly" | "biweekly", currency: "PHP" as "PHP" | "USD", amount: "" })
   const [error, setError] = useState("")
 
   const { data: clients = [] } = useQuery({ queryKey: ["va-clients"], queryFn: () => apiFetch<Client[]>("/va/clients") })
@@ -34,11 +35,17 @@ export function VARatesPage() {
     mutationFn: () =>
       apiFetch("/va-rates/mine", {
         method: "POST",
-        body: JSON.stringify({ ...form, amount: parseFloat(form.amount) }),
+        body: JSON.stringify({
+          client_id: form.client_id,
+          pay_type: form.pay_type,
+          currency: form.currency,
+          amount: parseFloat(form.amount),
+          payment_frequency: form.pay_type === "package" ? form.payment_frequency : null,
+        }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["va-rates-mine"] })
-      setForm({ client_id: "", pay_type: "hourly", currency: "PHP", amount: "" })
+      setForm({ client_id: "", pay_type: "hourly", payment_frequency: "biweekly", currency: "PHP", amount: "" })
       setError("")
     },
     onError: (e) => setError(e instanceof Error ? e.message : "Submit failed"),
@@ -83,8 +90,18 @@ export function VARatesPage() {
           </div>
           <div>
             <Label>Amount</Label>
-            <Input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder={form.pay_type === "hourly" ? "e.g. 185" : "e.g. 3000"} />
+            <Input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder={form.pay_type === "hourly" ? "e.g. 185" : "Monthly amount, e.g. 2000"} />
           </div>
+          {form.pay_type === "package" && (
+            <div className="sm:col-span-2 lg:col-span-5">
+              <Label>Payment frequency</Label>
+              <Select value={form.payment_frequency} onChange={(e) => setForm({ ...form, payment_frequency: e.target.value as "monthly" | "biweekly" })}>
+                <option value="biweekly">Bi-weekly</option>
+                <option value="monthly">Monthly</option>
+              </Select>
+              <p className="mt-1 text-[11px] text-muted-foreground">Bi-weekly pays half of this monthly amount on the 1st–15th and half on the 16th–end. Monthly pays the full amount once, on the 1st–15th. Older package rates with no frequency stay Monthly.</p>
+            </div>
+          )}
           <div className="flex items-end">
             <Button variant="gold" disabled={!form.client_id || !form.amount || submit.isPending} onClick={() => submit.mutate()}>
               Submit for approval
@@ -102,6 +119,7 @@ export function VARatesPage() {
               <tr className="border-b bg-muted/40 text-left text-muted-foreground">
                 <th className="p-3">Client</th>
                 <th className="p-3">Type</th>
+                <th className="p-3">Frequency</th>
                 <th className="p-3">Amount</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Active</th>
@@ -112,12 +130,13 @@ export function VARatesPage() {
                 <tr key={r.id} className="border-b">
                   <td className="p-3 font-semibold">{r.client_name}</td>
                   <td className="p-3 capitalize">{r.pay_type}</td>
-                  <td className="p-3">{formatCurrency(r.amount, r.currency)}{r.pay_type === "hourly" ? "/hr" : " flat"}</td>
+                  <td className="p-3">{r.pay_type === "package" ? (r.payment_frequency === "biweekly" ? "Bi-weekly" : "Monthly") : "—"}</td>
+                  <td className="p-3">{formatCurrency(r.amount, r.currency)}{r.pay_type === "hourly" ? "/hr" : "/month"}</td>
                   <td className="p-3"><StatusBadge status={r.status} /></td>
                   <td className="p-3">{r.is_active_approved ? "Yes" : "—"}</td>
                 </tr>
               ))}
-              {rates.length === 0 && <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">No rates yet. Submit one above.</td></tr>}
+              {rates.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No rates yet. Submit one above.</td></tr>}
             </tbody>
           </table>
         </CardContent>

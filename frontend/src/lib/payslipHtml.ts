@@ -235,15 +235,18 @@ function shortDate(iso: string) {
 }
 
 function rateText(client: PayslipClient, currency: string) {
+  if (client.payType === "package") return "Fixed Package"
   if (client.rate == null) return ""
-  if (client.payType === "package") return `${money(client.rate, currency)} flat`
   return `${money(client.rate, currency)}/hr`
 }
 
 function subtotalLine(client: PayslipClient, currency: string) {
   const hrs = `${hours(client.hours)} hrs`
   const amt = money(client.amount, currency)
-  if (client.payType === "package" || client.rate == null) {
+  if (client.payType === "package") {
+    return `${client.name} subtotal · ${hrs} · Fixed Package · ${amt}`
+  }
+  if (client.rate == null) {
     return `${client.name} subtotal · ${hrs} · ${amt}`
   }
   return `${client.name} subtotal · ${hrs} × ${money(client.rate, currency)}/hr · ${amt}`

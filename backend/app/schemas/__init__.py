@@ -728,6 +728,8 @@ class VARateCreate(BaseModel):
     pay_type: PayType
     currency: Currency
     amount: Decimal
+    # Package only. Omitted package rates are saved as bi-weekly. Hourly ignores this.
+    payment_frequency: str | None = None
     notes: str | None = None
 
 
@@ -737,6 +739,7 @@ class VARateAdminCreate(BaseModel):
     pay_type: PayType
     currency: Currency
     amount: Decimal
+    payment_frequency: str | None = None
     notes: str | None = None
 
 
@@ -749,6 +752,8 @@ class VARateResponse(BaseModel):
     pay_type: PayType
     currency: Currency
     amount: Decimal
+    # Null on a package rate means Monthly (rates saved before this field).
+    payment_frequency: str | None = None
     status: RateStatus
     set_by_admin: bool
     notes: str | None = None

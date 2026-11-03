@@ -760,6 +760,9 @@ class VARate(Base):
     va_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"), index=True)
     client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), index=True)
     pay_type: Mapped[PayType] = mapped_column(Enum(PayType, name="pay_type"))
+    # Package only. "biweekly" splits the monthly amount across the 1st–15th and 16th–end.
+    # Null means Monthly, so rates saved before this field keep the full monthly amount.
+    payment_frequency: Mapped[str | None] = mapped_column(String(20), nullable=True)
     currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency", create_constraint=False))
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     status: Mapped[RateStatus] = mapped_column(Enum(RateStatus, name="rate_status"), default=RateStatus.pending, index=True)

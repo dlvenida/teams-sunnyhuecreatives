@@ -16,6 +16,7 @@ interface VARate {
   client_id: string
   client_name?: string
   pay_type: "hourly" | "package"
+  payment_frequency?: "monthly" | "biweekly" | null
   currency: "PHP" | "USD"
   amount: string
   status: "pending" | "approved" | "rejected"
@@ -28,7 +29,7 @@ export function VARatesAdminPage() {
   const qc = useQueryClient()
   const [filter, setFilter] = useState("pending")
   const [form, setForm] = useState({
-    va_id: "", client_id: "", pay_type: "hourly" as "hourly" | "package", currency: "PHP" as "PHP" | "USD", amount: "",
+    va_id: "", client_id: "", pay_type: "hourly" as "hourly" | "package", payment_frequency: "biweekly" as "monthly" | "biweekly", currency: "PHP" as "PHP" | "USD", amount: "",
   })
 
   const { data: rates = [] } = useQuery({
@@ -50,11 +51,18 @@ export function VARatesAdminPage() {
     mutationFn: () =>
       apiFetch("/va-rates", {
         method: "POST",
-        body: JSON.stringify({ ...form, amount: parseFloat(form.amount) }),
+        body: JSON.stringify({
+          va_id: form.va_id,
+          client_id: form.client_id,
+          pay_type: form.pay_type,
+          currency: form.currency,
+          amount: parseFloat(form.amount),
+          payment_frequency: form.pay_type === "package" ? form.payment_frequency : null,
+        }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["va-rates-admin"] })
-      setForm({ va_id: "", client_id: "", pay_type: "hourly", currency: "PHP", amount: "" })
+      setForm({ va_id: "", client_id: "", pay_type: "hourly", payment_frequency: "biweekly", currency: "PHP", amount: "" })
     },
   })
 
@@ -98,8 +106,18 @@ export function VARatesAdminPage() {
           </div>
           <div>
             <Label>Amount</Label>
-            <Input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+            <Input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder={form.pay_type === "package" ? "Monthly amount, e.g. 2000" : "e.g. 250"} />
           </div>
+          {form.pay_type === "package" && (
+            <div className="sm:col-span-2 lg:col-span-6">
+              <Label>Payment frequency</Label>
+              <Select value={form.payment_frequency} onChange={(e) => setForm({ ...form, payment_frequency: e.target.value as "monthly" | "biweekly" })}>
+                <option value="biweekly">Bi-weekly</option>
+                <option value="monthly">Monthly</option>
+              </Select>
+              <p className="mt-1 text-[11px] text-muted-foreground">Bi-weekly is the Sunny Hue standard. A PHP 2,000 package pays PHP 1,000 on the 1st–15th and PHP 1,000 on the 16th–end. Monthly pays the full amount once, on the 1st–15th payslip. Package rates saved before this field are treated as Monthly.</p>
+            </div>
+          )}
           <div className="flex items-end">
             <Button variant="gold" disabled={!form.va_id || !form.client_id || !form.amount || override.isPending} onClick={() => override.mutate()}>
               Set rate
@@ -122,6 +140,7 @@ export function VARatesAdminPage() {
                 <th className="p-3">VA</th>
                 <th className="p-3">Client</th>
                 <th className="p-3">Type</th>
+                <th className="p-3">Frequency</th>
                 <th className="p-3">Amount</th>
                 <th className="p-3">Status</th>
                 <th className="p-3">Actions</th>
@@ -133,7 +152,8 @@ export function VARatesAdminPage() {
                   <td className="p-3 font-semibold">{r.va_name}</td>
                   <td className="p-3">{r.client_name}</td>
                   <td className="p-3 capitalize">{r.pay_type}{r.set_by_admin ? " · admin" : ""}</td>
-                  <td className="p-3">{formatCurrency(r.amount, r.currency)}</td>
+                  <td className="p-3">{r.pay_type === "package" ? (r.payment_frequency === "biweekly" ? "Bi-weekly" : "Monthly") : "—"}</td>
+                  <td className="p-3">{formatCurrency(r.amount, r.currency)}{r.pay_type === "package" ? "/month" : "/hr"}</td>
                   <td className="p-3"><StatusBadge status={r.status} /></td>
                   <td className="p-3">
                     {r.status === "pending" && (
@@ -146,7 +166,7 @@ export function VARatesAdminPage() {
                   </td>
                 </tr>
               ))}
-              {rates.length === 0 && <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">No rates in this filter.</td></tr>}
+              {rates.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-muted-foreground">No rates in this filter.</td></tr>}
             </tbody>
           </table>
         </CardContent>

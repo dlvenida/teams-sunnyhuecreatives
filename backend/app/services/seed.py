@@ -44,6 +44,9 @@ def seed_database(db: Session) -> None:
         _u.username = unique_username(db, _u.email)
     db.commit()
 
+    if not settings.seed_demo_data:
+        return
+
     # Demo Auditor — monitors VA activity, no destructive access (auditor@sunnyhue.local / auditor2024)
     if not db.query(User).filter(User.email == "auditor@sunnyhue.local").first():
         db.add(User(

@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
 import { cn, formatCurrency, formatDate } from "@/lib/utils"
+import { approvalTaskLabel, formatHoursMinutes } from "@/lib/approvalEntry"
 import { Check, X, Pencil, Trash2, Download, Search, Clock3, Hand, Paperclip } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
@@ -214,15 +215,15 @@ export function LogsPage() {
                     <td className="p-3"><span className="flex items-center gap-2"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-extrabold text-primary">{initials(log.va_name ?? "?")}</span><span className="whitespace-nowrap text-xs font-semibold">{log.va_name}</span></span></td>
                     <td className="p-3 text-xs"><span className="font-medium">{log.client_name}</span>{log.sub_client_name && <span className="text-muted-foreground"> / {log.sub_client_name}</span>}{log.project_name && <span className="block text-[11px] text-muted-foreground">{log.project_name}</span>}</td>
                     <td className="max-w-xs p-3 text-xs">
-                      <span className="line-clamp-2">{log.description_plain}</span>
-                      {log.notes && <span className="mt-1 block line-clamp-2 text-[11px] text-amber-800">💬 {log.notes}</span>}
-                      {log.task_title && <span className="block text-[11px] text-muted-foreground">Task: {log.task_title}</span>}
+                      <span className="block font-bold text-[#B8325F]">{approvalTaskLabel({ ...log, description: log.description_plain })}</span>
+                      <span className="line-clamp-3">{log.description_plain}</span>
+                      {log.notes && <span className="mt-1 block line-clamp-2 text-[11px] text-amber-800">Note: {log.notes}</span>}
                     </td>
                     <td className="whitespace-nowrap p-3 text-xs text-muted-foreground">
                       {log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} → ${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}
                       <span className={cn("ml-1.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", log.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{log.source === "clock" ? <><Clock3 className="h-2.5 w-2.5" /> Clock</> : <><Hand className="h-2.5 w-2.5" /> Manual</>}</span>
                     </td>
-                    <td className="p-3 text-xs font-extrabold">{Number(log.hours).toFixed(2)}</td>
+                    <td className="whitespace-nowrap p-3 text-xs font-extrabold">{formatHoursMinutes(log.hours)}</td>
                     {showPricing && <td className="whitespace-nowrap p-3 text-xs">{formatCurrency(log.va_pay)}</td>}
                     <td className="p-3"><span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-bold", STATUS_META[log.status]?.pill)}>{STATUS_META[log.status]?.label ?? log.status}</span></td>
                     <td className="p-3"><div className="flex justify-end gap-1">

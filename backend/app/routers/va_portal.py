@@ -702,11 +702,12 @@ def submit_timesheet(
         _User.is_active.is_(True),
     ).all()
     period_line = f"{body.date_from} to {body.date_to}. {hours} hrs, {len(logs)} entries."
-    review_url = f"{_settings.app_url.rstrip('/')}/admin/payroll"
+    review_path = f"/admin/payroll?timesheet={row.id}"
+    review_url = f"{_settings.app_url.rstrip('/')}{review_path}"
     for person in staff:
         first = first_name_of(person)
         title = f"Hi {first}, {va_first} submitted {pronoun} timesheet"
-        push(db, [person.id], "log", title, period_line, "/admin/payroll")
+        push(db, [person.id], "log", title, period_line, review_path)
         if person.email:
             try:
                 send_notification_email(

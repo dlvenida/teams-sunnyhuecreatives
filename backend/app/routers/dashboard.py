@@ -343,7 +343,7 @@ def get_dashboard_summary(
         )
         pending_logs = (
             db.query(WorkLog)
-            .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.attachments))
+            .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments))
             .filter(WorkLog.status == WorkLogStatus.submitted)
             .order_by(WorkLog.created_at.desc())
             .limit(10)
@@ -441,7 +441,7 @@ def get_dashboard_summary(
 
     pending_logs = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.attachments))
+        .options(joinedload(WorkLog.va), joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments))
         .filter(WorkLog.status == WorkLogStatus.submitted)
         .order_by(WorkLog.created_at.desc())
         .limit(10)

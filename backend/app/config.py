@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     jwt_refresh_expire_days: int = 7
     admin_email: str = "janelaurine@gmail.com"
     admin_password: str = "admin123"
+    # Demo users, clients, and VAs. Off unless explicitly enabled. Production must leave this unset.
+    seed_demo_data: bool = False
     resend_api_key: str = ""
     resend_from_email: str = "onboarding@resend.dev"
     admin_notify_email: str = "janelaurine@gmail.com"

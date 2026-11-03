@@ -5,6 +5,7 @@ export interface NotificationPreferences {
   sound_enabled: boolean
   sound_id: NotificationSoundId
   popup_types: Record<string, boolean>
+  events?: Record<string, { popup?: boolean; email?: boolean }>
 }
 
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPreferences = {

@@ -124,7 +124,7 @@ def _spawn_and_notify(db: Session, done_task: Task) -> Task | None:
     child_full = _base_query(db).filter(Task.id == child.id).first() or child
     if child_full.assignee_va_id:
         try:
-            notify_task_assigned(db, child_full, first_in_project=False)
+            notify_task_assigned(db, child_full, first_in_project=False, actor_name="Sunny Hue")
         except Exception:
             pass
     if done_task.created_by:
@@ -162,7 +162,7 @@ def list_tasks(
                     full = _base_query(db).filter(Task.id == child.id).first()
                     if full:
                         try:
-                            notify_task_assigned(db, full, first_in_project=False)
+                            notify_task_assigned(db, full, first_in_project=False, actor_name="Sunny Hue")
                         except Exception:
                             pass
     except Exception:
@@ -228,7 +228,11 @@ def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_cu
         first_in_project = False
         if t.project_id:
             first_in_project = db.query(Task).filter(Task.project_id == t.project_id, Task.assignee_va_id == t.assignee_va_id).count() <= 1
-        notify_task_assigned(db, t, first_in_project=first_in_project)
+        notify_task_assigned(
+            db, t, first_in_project=first_in_project,
+            actor_name=current.user.display_name or current.user.email,
+            actor_user_id=current.user.id,
+        )
     return _serialize(db, t)
 
 
@@ -261,32 +265,31 @@ def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser,
     if t.recurrence and t.recurrence != TaskRecurrence.none and not t.series_id:
         t.series_id = t.id
     just_completed = t.status == TaskStatus.done and old_status != TaskStatus.done
-    spawned = None
     if just_completed:
         t.completed_at = datetime.now(timezone.utc)
-        spawned = _spawn_and_notify(db, t)
+        _spawn_and_notify(db, t)
     if t.status != TaskStatus.done:
         t.completed_at = None
     db.commit()
     db.refresh(t)
     t = _base_query(db).filter(Task.id == t.id).first()
     actor = current.user.display_name or current.user.email
-    if spawned and just_completed:
-        # Surface a friendly update so the VA knows the next cycle is on the board
-        try:
-            notify_task_updated(
-                db, t,
-                f"Marked done — next repeat is due {spawned.due_date}",
-                actor,
-            )
-        except Exception:
-            pass
+    staff = current.role in (UserRole.admin, UserRole.auditor)
     if t.assignee_va_id and t.assignee_va_id != old_assignee:
         first_in_project = False
         if t.project_id:
             first_in_project = db.query(Task).filter(Task.project_id == t.project_id, Task.assignee_va_id == t.assignee_va_id).count() <= 1
-        notify_task_assigned(db, t, first_in_project=first_in_project)
-    elif t.assignee_va_id and (t.status != old_status or "priority" in data or "due_date" in data):
+        notify_task_assigned(
+            db, t, first_in_project=first_in_project,
+            actor_name=actor, actor_user_id=current.user.id,
+        )
+    elif staff and t.assignee_va_id and t.status == TaskStatus.done and old_status != TaskStatus.done:
+        from app.services.notifications import notify_task_decision
+        notify_task_decision(db, t, approved=True, actor_name=actor, actor_user_id=current.user.id)
+    elif staff and t.assignee_va_id and old_status == TaskStatus.in_review and t.status != TaskStatus.done:
+        from app.services.notifications import notify_task_decision
+        notify_task_decision(db, t, approved=False, actor_name=actor, actor_user_id=current.user.id)
+    elif staff and t.assignee_va_id and any(key in data for key in ("title", "description", "priority", "due_date", "status", "project_id")):
         changes = []
         if t.status != old_status:
             changes.append(f"Status moved to {t.status.value.replace('_', ' ')}")
@@ -294,7 +297,12 @@ def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser,
             changes.append(f"Priority set to {t.priority.value}")
         if "due_date" in data:
             changes.append(f"Deadline set to {t.due_date or 'none'}")
-        notify_task_updated(db, t, "; ".join(changes) or "Task details updated", actor)
+        if "title" in data:
+            changes.append("The task name changed")
+        notify_task_updated(
+            db, t, "; ".join(changes) or "Task details updated", actor,
+            actor_user_id=current.user.id, actor_is_staff=True,
+        )
     return _serialize(db, t)
 
 

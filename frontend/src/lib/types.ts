@@ -561,6 +561,7 @@ export interface NotificationItem {
   title: string
   body?: string | null
   link?: string | null
+  event_key?: string | null
   is_read: boolean
   created_at: string
 }

@@ -27,6 +27,7 @@ import { ProjectsPage } from "@/app/projects/ProjectsPage"
 import { TimeClockPage } from "@/app/timeclock/TimeClockPage"
 import { AnalyticsPage } from "@/app/admin/analytics/AnalyticsPage"
 import { NotificationsPage } from "@/app/notifications/NotificationsPage"
+import { VANotificationPreferencesPage } from "@/app/va/notifications/VANotificationPreferencesPage"
 import { NotFoundPage } from "@/app/not-found/NotFoundPage"
 import { VAClientsPage } from "@/app/va/clients/VAClientsPage"
 import { UserReportsPage } from "@/app/reports/UserReportsPage"
@@ -100,6 +101,7 @@ export default function App() {
                 <Route path="/va/clients" element={<VAClientsPage />} />
                 <Route path="/va/reports" element={<UserReportsPage />} />
                 <Route path="/va/profile" element={<ProfilePage />} />
+                <Route path="/va/notification-preferences" element={<VANotificationPreferencesPage />} />
                 <Route path="/va/booking" element={<BookingPage />} />
               </Route>
             </Route>

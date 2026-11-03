@@ -215,6 +215,8 @@ class NotificationPreferences(BaseModel):
         "invoice": True,
         "system": True,
     })
+    # VA rows: {"task_assigned": {"popup": true, "email": true}}. Missing means both on.
+    events: dict[str, dict[str, bool]] = Field(default_factory=dict)
 
 
 class ProfileUpdate(BaseModel):
@@ -1185,6 +1187,7 @@ class NotificationResponse(BaseModel):
     title: str
     body: str | None = None
     link: str | None = None
+    event_key: str | None = None
     is_read: bool
     created_at: datetime
 

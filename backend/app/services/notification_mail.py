@@ -14,6 +14,13 @@ from app.services.email import send_email
 IMPORTANT_TEMPLATE_KEYS = {
     "mention",
     "task_comment",
+    "task_assigned",
+    "project_assigned",
+    "task_updated",
+    "task_approved",
+    "task_rejected",
+    "deadline_soon",
+    "deadline_overdue",
     "timesheet_submitted",
     "timesheet_approved",
     "timesheet_rejected",
@@ -118,9 +125,11 @@ def email_user_ids(
     link: str,
     template_key: str,
     link_label: str = "Open in Teams.SHC",
+    event_key: str | None = None,
 ) -> int:
-    """Email each recipient of an in-app notification. VA, Project Manager, and Admin."""
+    """Email each recipient. A VA who turned this event's email off is skipped. Admin and PM are not."""
     from app.models import User
+    from app.services.notification_prefs import va_channel_enabled
 
     ids = []
     for uid in user_ids or []:
@@ -132,6 +141,8 @@ def email_user_ids(
     sent = 0
     for user in users:
         if not getattr(user, "email", None):
+            continue
+        if not va_channel_enabled(user, event_key, "email"):
             continue
         url = absolute_link(link, getattr(user, "role", None))
         if send_notification_email(user.email, title, title, paragraphs, url, link_label, template_key):

@@ -68,7 +68,8 @@ class NotificationEmailTests(unittest.TestCase):
         self.assertNotIn("$", html)
         self.assertNotIn("₱", html)
 
-    def test_creating_an_in_app_task_notice_sends_no_email(self):
+    def test_assigning_a_task_emails_only_the_owning_va(self):
+        va = _user("myra@example.com", "Myra Santos", "va")
         task = SimpleNamespace(
             assignee_va_id=uuid.uuid4(),
             title="Inbox triage",
@@ -77,13 +78,35 @@ class NotificationEmailTests(unittest.TestCase):
             due_date=None,
             id=uuid.uuid4(),
         )
-        with patch("app.services.notifications.va_user_id", return_value=uuid.uuid4()):
-            notify_task_assigned(FakeDB([]), task)
-            notify_task_updated(FakeDB([]), task, "Moved to In Progress", "Jane")
+        with patch("app.services.notifications.va_user_id", return_value=va.id):
+            notify_task_assigned(FakeDB([va]), task, actor_name="Jane Laurine Venida", actor_user_id=uuid.uuid4())
+        self.send.assert_called_once()
+        payload = self.send.call_args.args[0]
+        self.assertEqual(payload["to"], ["myra@example.com"])
+        self.assertEqual(payload["subject"], "Jane assigned you a task: Inbox triage")
+        self.assertIn(f"/va/tasks?task={task.id}", payload["html"])
+        self.assertGreaterEqual(payload["html"].count(f"/va/tasks?task={task.id}"), 2)
+
+    def test_a_va_edit_does_not_email_her_and_staff_edits_do(self):
+        va = _user("myra@example.com", "Myra Santos", "va")
+        task = SimpleNamespace(
+            assignee_va_id=uuid.uuid4(),
+            title="Inbox triage",
+            client=SimpleNamespace(name="Acme"),
+            project=None,
+            due_date=None,
+            id=uuid.uuid4(),
+        )
+        with patch("app.services.notifications.va_user_id", return_value=va.id):
+            notify_task_updated(FakeDB([va]), task, "Moved to In Progress", "Myra", actor_user_id=va.id, actor_is_staff=False)
         self.send.assert_not_called()
+        with patch("app.services.notifications.va_user_id", return_value=va.id):
+            notify_task_updated(FakeDB([va]), task, "Deadline set to 2026-11-05", "Audrey Reyes", actor_user_id=uuid.uuid4(), actor_is_staff=True)
+        self.assertEqual(self.send.call_args.args[0]["subject"], "Audrey updated Inbox triage")
+        self.assertEqual(self.send.call_args.args[0]["to"], ["myra@example.com"])
 
     def test_routine_template_keys_never_reach_resend(self):
-        for key in ("task_assigned", "task_updated", "log_submitted", "delegation", "reaction", "payroll_paid"):
+        for key in ("log_submitted", "delegation", "reaction", "payroll_paid"):
             self.assertFalse(send_email("va@example.com", "Update", "<p>hi</p>", template_key=key))
         self.send.assert_not_called()
         self.assertFalse(send_va_submission_notification("Myra", "Acme", "2", "2026-11-01", "Drafts"))
@@ -185,7 +208,7 @@ class NotificationEmailTests(unittest.TestCase):
 
     def test_unknown_event_does_not_email(self):
         self.assertFalse(send_notification_email(
-            "va@example.com", "New task", "New task", ["Assigned"], "http://localhost:5190/va/tasks", "Open", "task_assigned",
+            "va@example.com", "New task", "New task", ["Assigned"], "http://localhost:5190/va/tasks", "Open", "log_submitted",
         ))
         self.send.assert_not_called()
 

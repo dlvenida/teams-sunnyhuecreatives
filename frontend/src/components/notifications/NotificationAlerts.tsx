@@ -70,13 +70,14 @@ export function NotificationAlerts() {
     let playedSound = false
     for (const n of fresh.slice(0, 4).reverse()) {
       const typeOk = prefs.popup_types[n.type] !== false
-      if (prefs.popup_enabled && typeOk) {
+      const eventOk = !n.event_key || prefs.events?.[n.event_key]?.popup !== false
+      if (prefs.popup_enabled && typeOk && eventOk) {
         setToasts((prev) => {
           if (prev.some((t) => t.id === n.id)) return prev
           return [...prev, { id: n.id, type: n.type, title: n.title, body: n.body, link: n.link }].slice(-5)
         })
       }
-      if (prefs.sound_enabled && typeOk && !playedSound) {
+      if (prefs.sound_enabled && typeOk && eventOk && !playedSound) {
         playNotificationSound(prefs.sound_id)
         playedSound = true
       }

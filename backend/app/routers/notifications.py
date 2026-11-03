@@ -17,6 +17,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 def _serialize(n: Notification) -> NotificationResponse:
     return NotificationResponse(
         id=n.id, type=n.type, title=n.title, body=n.body, link=n.link,
+        event_key=getattr(n, "event_key", None),
         is_read=bool(n.is_read), created_at=n.created_at,
     )
 

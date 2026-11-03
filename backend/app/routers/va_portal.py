@@ -305,7 +305,13 @@ def my_earnings(
         # Hourly pay from logs + package flats once per client in range
         hourly_pay = sum((l.va_pay for l in subset), Decimal("0"))
         client_ids = {l.client_id for l in subset}
-        flats = package_flats_for_period(db, current.va_id, client_ids)
+        if start is None or end is None:
+            dates_by_client: dict = {}
+            for log in subset:
+                dates_by_client.setdefault(log.client_id, []).append(log.work_date)
+            flats = package_flats_for_period(db, current.va_id, client_ids, dates_by_client=dates_by_client)
+        else:
+            flats = package_flats_for_period(db, current.va_id, client_ids, period_start=start, period_end=end)
         package_pay = sum(flats.values(), Decimal("0"))
         return {
             "hours": str(hours),
@@ -326,7 +332,16 @@ def my_earnings(
         )
         row["hours"] += l.hours
         row["earned"] += l.va_pay
-    for cid, flat in package_flats_for_period(db, current.va_id, {UUID(k) for k in by_client_map}).items():
+    if range_start is None or range_end is None:
+        range_dates: dict = {}
+        for log in range_logs:
+            range_dates.setdefault(log.client_id, []).append(log.work_date)
+        range_flats = package_flats_for_period(db, current.va_id, {UUID(k) for k in by_client_map}, dates_by_client=range_dates)
+    else:
+        range_flats = package_flats_for_period(
+            db, current.va_id, {UUID(k) for k in by_client_map}, period_start=range_start, period_end=range_end,
+        )
+    for cid, flat in range_flats.items():
         key = str(cid)
         if key in by_client_map:
             by_client_map[key]["earned"] = flat

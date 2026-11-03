@@ -11,7 +11,7 @@ from app.deps import CurrentUser, require_admin, require_va
 from app.models import Client, RateStatus, VA, VARate
 from app.schemas import VARateAdminCreate, VARateCreate, VARateResponse
 from app.services.notifications import admin_user_ids, push, va_user_id
-from app.services.va_rates import get_approved_rate
+from app.services.va_rates import frequency_for_save, get_approved_rate
 
 router = APIRouter(prefix="/va-rates", tags=["va-rates"])
 
@@ -26,6 +26,7 @@ def _serialize(rate: VARate, active_id: UUID | None = None) -> VARateResponse:
         pay_type=rate.pay_type,
         currency=rate.currency,
         amount=rate.amount,
+        payment_frequency=rate.payment_frequency,
         status=rate.status,
         set_by_admin=rate.set_by_admin,
         notes=rate.notes,
@@ -117,6 +118,7 @@ def submit_rate(
         pay_type=body.pay_type,
         currency=body.currency,
         amount=body.amount,
+        payment_frequency=frequency_for_save(body.pay_type, body.payment_frequency),
         status=RateStatus.pending,
         set_by_admin=False,
         notes=body.notes,
@@ -185,6 +187,7 @@ def admin_set_rate(
         pay_type=body.pay_type,
         currency=body.currency,
         amount=body.amount,
+        payment_frequency=frequency_for_save(body.pay_type, body.payment_frequency),
         status=RateStatus.approved,
         set_by_admin=True,
         notes=body.notes,

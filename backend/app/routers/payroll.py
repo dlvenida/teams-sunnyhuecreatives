@@ -150,7 +150,7 @@ def calculate_payroll(
         va = data["va"]
         # Add package flat amounts once per client that has approved package rate + hours in period
         client_ids = {e.client_id for e in data["entries"]}
-        flats = package_flats_for_period(db, va_id, client_ids)
+        flats = package_flats_for_period(db, va_id, client_ids, period_start=period_start, period_end=period_end)
         package_total = sum(flats.values(), Decimal("0"))
         data["total_pay"] = data["total_pay"] + package_total
 
@@ -207,7 +207,7 @@ def calculate_payroll(
         sheet = sheets.get(va_id)
         change = float((data["total_hours"] - prev_hours) / prev_hours * 100) if prev_hours > 0 else None
         prev_client_ids = {l.client_id for l in va_prev}
-        prev_flats = package_flats_for_period(db, va_id, prev_client_ids)
+        prev_flats = package_flats_for_period(db, va_id, prev_client_ids, period_start=prev_start, period_end=prev_end)
         prev_pay = sum((l.va_pay for l in va_prev), Decimal("0")) + sum(prev_flats.values(), Decimal("0"))
         full_name = (
             (va.user.display_name.strip() if va.user and va.user.display_name else "")

@@ -24,6 +24,20 @@ export function approvalTaskLabel(entry: {
   return named || "Untitled task"
 }
 
+export function isDurationEntry(entry: { entry_mode?: string | null; start_time?: string | null; end_time?: string | null }): boolean {
+  if (entry.entry_mode === "duration") return true
+  if (entry.entry_mode === "range") return false
+  return !entry.start_time && !entry.end_time
+}
+
+/** Compact label for a duration log, for example "2h 15m, entered as duration". */
+export function formatEnteredDuration(hours: number | string | null | undefined): string {
+  const totalMins = Math.round(Number(hours || 0) * 60)
+  const whole = Math.floor(Math.abs(totalMins) / 60)
+  const mins = Math.abs(totalMins) % 60
+  return `${whole}h ${mins}m, entered as duration`
+}
+
 export function formatClock(value?: string | null): string {
   if (!value) return ""
   const [hRaw, mRaw] = value.slice(0, 5).split(":")

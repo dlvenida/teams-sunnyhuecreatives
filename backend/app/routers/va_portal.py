@@ -22,9 +22,9 @@ from app.models import (
 from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionResponse, TimesheetSubmitRequest, VAWorkLogUpdate
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
-from app.services.calculations import calculate_hours
 from app.services.notifications import push
 from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
+from app.services.work_log_entry import apply_work_log_timing, resolve_timing
 from app.services.work_log_overlap import assert_no_time_overlap
 
 router = APIRouter(prefix="/va", tags=["va"])
@@ -44,6 +44,7 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         sub_client_name=log.sub_client.name if log.sub_client else None,
         description_lexical=log.description_lexical,
         description_plain=log.description_plain,
+        entry_mode=getattr(log, "entry_mode", None) or "range",
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
@@ -232,25 +233,15 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
             detail="This entry is in an approved timesheet and is locked. Add a new late entry instead — it will roll to the next payroll.",
         )
     data = body.model_dump(exclude_unset=True)
+    for key in ("entry_mode", "duration_hours", "duration_minutes", "start_time", "end_time"):
+        data.pop(key, None)
     for k, v in data.items():
         setattr(log, k, v)
-    if body.start_time or body.end_time or body.work_date:
-        start = body.start_time or log.start_time
-        end = body.end_time or log.end_time
-        work_date = body.work_date or log.work_date
-        assert_no_time_overlap(
-            db,
-            va_id=current.va_id,
-            work_date=work_date,
-            start_time=start,
-            end_time=end,
-            exclude_id=log.id,
-        )
-        log.hours = calculate_hours(start, end)
+    if apply_work_log_timing(db, log, body):
         rate, pay, _ = resolve_log_pay(db, current.va_id, log.client_id, log.hours)
         log.va_rate = rate
         log.va_pay = pay
-        log.payable_on = resolve_payable_on(db, current.va_id, work_date)
+        log.payable_on = resolve_payable_on(db, current.va_id, log.work_date)
         if log.status == WorkLogStatus.rejected:
             log.status = WorkLogStatus.submitted  # editing a rejected log resubmits it
     db.commit()
@@ -523,14 +514,21 @@ def submit_work_log(
 ):
     from app.services.payroll_calendar import resolve_payable_on
 
-    hours = calculate_hours(body.start_time, body.end_time)
-    assert_no_time_overlap(
-        db,
-        va_id=current.va_id,
-        work_date=body.work_date,
+    entry_mode, hours, start_time, end_time = resolve_timing(
+        entry_mode=body.entry_mode,
         start_time=body.start_time,
         end_time=body.end_time,
+        duration_hours=body.duration_hours,
+        duration_minutes=body.duration_minutes,
     )
+    if entry_mode == "range":
+        assert_no_time_overlap(
+            db,
+            va_id=current.va_id,
+            work_date=body.work_date,
+            start_time=start_time,
+            end_time=end_time,
+        )
     rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
     payable_on = resolve_payable_on(db, current.va_id, body.work_date)
     task_name = (body.task_name or "").strip() or None
@@ -550,8 +548,9 @@ def submit_work_log(
         task_name=task_name,
         description_lexical=body.description_lexical,
         description_plain=body.description_plain,
-        start_time=body.start_time,
-        end_time=body.end_time,
+        entry_mode=entry_mode,
+        start_time=start_time,
+        end_time=end_time,
         hours=hours,
         va_rate=rate,
         va_pay=pay,

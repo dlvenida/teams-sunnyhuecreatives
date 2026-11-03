@@ -1,5 +1,5 @@
 import { formatDate } from "@/lib/utils"
-import { approvalTaskLabel, formatClock, formatHoursMinutes } from "@/lib/approvalEntry"
+import { approvalTaskLabel, formatClock, formatEnteredDuration, formatHoursMinutes, isDurationEntry } from "@/lib/approvalEntry"
 
 export interface ApprovalEntryView {
   id: string
@@ -15,6 +15,7 @@ export interface ApprovalEntryView {
   end_time?: string | null
   hours: string | number
   source?: string | null
+  entry_mode?: string | null
 }
 
 function Field({ label, value }: { label: string; value: string }) {
@@ -28,11 +29,12 @@ function Field({ label, value }: { label: string; value: string }) {
 
 function loggedWhen(entry: ApprovalEntryView): string {
   const day = formatDate(entry.work_date)
+  if (isDurationEntry(entry)) return `${day}, ${formatEnteredDuration(entry.hours)}`
   const start = entry.start_time ? formatClock(entry.start_time) : ""
   const end = entry.end_time ? formatClock(entry.end_time) : ""
   if (start && end) return `${day}, ${start} to ${end}`
   if (start) return `${day}, from ${start}`
-  return `${day}. No start and end time.`
+  return day
 }
 
 export function LogApprovalCard({ entry }: { entry: ApprovalEntryView }) {
@@ -53,7 +55,7 @@ export function LogApprovalCard({ entry }: { entry: ApprovalEntryView }) {
       <dl className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field label="Project" value={entry.project_name || "No project"} />
         <Field label="Client" value={entry.client_name || "No client"} />
-        <Field label="Duration" value={formatHoursMinutes(entry.hours)} />
+        <Field label="Duration" value={isDurationEntry(entry) ? formatEnteredDuration(entry.hours) : formatHoursMinutes(entry.hours)} />
         <Field label="Logged" value={loggedWhen(entry)} />
       </dl>
       <div className="mt-3 rounded-xl bg-[#FDF2F5] px-3 py-2">

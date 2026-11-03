@@ -16,7 +16,8 @@ from app.models import UserRole, VA, WorkLog, WorkLogAttachment, WorkLogStatus
 from app.schemas import WorkLogAttachmentResponse, WorkLogResponse, WorkLogUpdate
 from app.services import storage
 from app.services.log_display import log_task_name
-from app.services.calculations import calculate_hours, calculate_pay
+from app.services.calculations import calculate_pay
+from app.services.work_log_entry import apply_work_log_timing
 from app.services.images import ALLOWED_CONTENT_TYPES, optimize_image
 from app.services.notifications import push, va_user_id
 
@@ -45,6 +46,7 @@ def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
         sub_client_name=log.sub_client.name if log.sub_client else None,
         description_lexical=log.description_lexical,
         description_plain=log.description_plain,
+        entry_mode=getattr(log, "entry_mode", None) or "range",
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
@@ -164,24 +166,17 @@ def update_work_log(
         if "status" in data and data["status"] not in (WorkLogStatus.approved, WorkLogStatus.rejected, WorkLogStatus.submitted):
             raise HTTPException(403, "Auditor cannot set that status")
 
+    for key in ("entry_mode", "duration_hours", "duration_minutes", "start_time", "end_time"):
+        data.pop(key, None)
     for k, v in data.items():
         setattr(log, k, v)
 
-    if body.start_time or body.end_time or body.work_date or (body.va_rate is not None and current.role == UserRole.admin):
-        start = body.start_time or log.start_time
-        end = body.end_time or log.end_time
-        work_date = body.work_date or log.work_date
-        from app.services.work_log_overlap import assert_no_time_overlap
-        assert_no_time_overlap(
-            db,
-            va_id=log.va_id,
-            work_date=work_date,
-            start_time=start,
-            end_time=end,
-            exclude_id=log.id,
-        )
-        rate = body.va_rate if (body.va_rate is not None and current.role == UserRole.admin) else log.va_rate
-        log.hours = calculate_hours(start, end)
+    timing_changed = apply_work_log_timing(db, log, body)
+    rate_changed = body.va_rate is not None and current.role == UserRole.admin
+    if timing_changed or rate_changed:
+        rate = body.va_rate if rate_changed else log.va_rate
+        if rate_changed:
+            log.va_rate = rate
         log.va_pay = calculate_pay(log.hours, rate)
 
     db.commit()

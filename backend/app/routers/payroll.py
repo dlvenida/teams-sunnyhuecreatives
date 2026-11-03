@@ -165,6 +165,7 @@ def calculate_payroll(
                 task_title=e.task.title if e.task else None,
                 task_name=log_task_name(e),
                 source=e.source or "manual", status=str(e.status.value if hasattr(e.status, "value") else e.status),
+                entry_mode=getattr(e, "entry_mode", None) or ("duration" if not e.start_time or not e.end_time else "range"),
                 start_time=e.start_time.strftime("%H:%M") if e.start_time else None,
                 end_time=e.end_time.strftime("%H:%M") if e.end_time else None,
             ) for e in data["entries"]
@@ -347,6 +348,7 @@ def _review_entry(log: WorkLog, include_money: bool = False) -> dict:
         "task_name": approval_task_label(log),
         "description": log.description_plain or "",
         "notes": log.notes or "",
+        "entry_mode": getattr(log, "entry_mode", None) or ("duration" if not log.start_time or not log.end_time else "range"),
         "start_time": log.start_time.strftime("%H:%M") if log.start_time else None,
         "end_time": log.end_time.strftime("%H:%M") if log.end_time else None,
         "hours": str(log.hours),

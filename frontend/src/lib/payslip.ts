@@ -73,7 +73,11 @@ export function buildPayslip(
           ? stored
           : round2(hours * lineRate)
       const task = (e.task_name || e.task_title || "").trim() || "Logged work"
-      const description = (e.description || "").trim()
+      const durationNote = e.entry_mode === "duration" || (!e.start_time && !e.end_time)
+      let description = (e.description || "").trim()
+      if (durationNote && !/entered as duration/i.test(description)) {
+        description = description ? `${description} (entered as duration)` : "Entered as duration."
+      }
       return {
         date: e.work_date,
         task,

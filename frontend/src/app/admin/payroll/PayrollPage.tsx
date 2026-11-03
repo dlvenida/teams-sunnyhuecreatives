@@ -13,6 +13,7 @@ import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { PayslipPaperModal } from "@/components/payroll/PayslipPaperModal"
 import { TimesheetReviewPanel } from "@/components/payroll/TimesheetReviewPanel"
 import { buildPayslip } from "@/lib/payslip"
+import { TimeEntryModeFields, durationError, splitStoredHours, timingBody, type EntryMode } from "@/components/logs/TimeEntryModeFields"
 import { renderPayslipHtml } from "@/lib/payslipHtml"
 import { generatePdfBlob } from "@/lib/pdf"
 import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
@@ -41,7 +42,7 @@ export function PayrollPage() {
   const [pdfBlob, setPdfBlob] = useState<Blob | null>(null)
   const [pdfFilename, setPdfFilename] = useState("va-payroll.pdf")
   const [payslipHtml, setPayslipHtml] = useState<string | null>(null)
-  const [editing, setEditing] = useState<{ id: string; description: string; start_time: string; end_time: string; va_rate: string; va_name: string; work_date: string } | null>(null)
+  const [editing, setEditing] = useState<{ id: string; description: string; start_time: string; end_time: string; va_rate: string; va_name: string; work_date: string; mode: EntryMode; durationHours: number; durationMinutes: number } | null>(null)
   const [markPaidError, setMarkPaidError] = useState("")
   const [pdfError, setPdfError] = useState("")
   const [searchParams] = useSearchParams()
@@ -119,8 +120,7 @@ export function PayrollPage() {
         method: "PATCH",
         body: JSON.stringify({
           description_plain: editing!.description,
-          start_time: editing!.start_time,
-          end_time: editing!.end_time,
+          ...timingBody(editing!.mode, editing!.start_time, editing!.end_time, editing!.durationHours, editing!.durationMinutes),
           ...(showPricing ? { va_rate: parseFloat(editing!.va_rate) } : {}),
         }),
       }),
@@ -444,15 +444,22 @@ export function PayrollPage() {
                             {showPricing && <td className="p-2 font-semibold">{client.payType === "package" ? "—" : formatCurrency(task.amount, va.currency)}</td>}
                             <td className="p-2 text-right">
                               {entry && (
-                                <Button size="sm" variant="ghost" onClick={() => setEditing({
-                                  id: entry.id,
-                                  description: entry.description || "",
-                                  start_time: entry.start_time?.slice(0, 5) || "09:00",
-                                  end_time: entry.end_time?.slice(0, 5) || "17:00",
-                                  va_rate: String(entry.rate ?? ""),
-                                  va_name: va.va_name,
-                                  work_date: entry.work_date,
-                                })}>Edit</Button>
+                                <Button size="sm" variant="ghost" onClick={() => {
+                                  const split = splitStoredHours(entry.hours)
+                                  const duration = entry.entry_mode === "duration" || (!entry.start_time && !entry.end_time)
+                                  setEditing({
+                                    id: entry.id,
+                                    description: entry.description || "",
+                                    start_time: entry.start_time?.slice(0, 5) || "09:00",
+                                    end_time: entry.end_time?.slice(0, 5) || "17:00",
+                                    va_rate: String(entry.rate ?? ""),
+                                    va_name: va.va_name,
+                                    work_date: entry.work_date,
+                                    mode: duration ? "duration" : "range",
+                                    durationHours: split.hours,
+                                    durationMinutes: split.minutes,
+                                  })
+                                }}>Edit</Button>
                               )}
                             </td>
                           </tr>
@@ -520,14 +527,22 @@ export function PayrollPage() {
             <p className="mb-3 text-[11px] text-muted-foreground">{editing.va_name} · {formatDate(editing.work_date)}</p>
             <div className="space-y-3">
               <div><Label>Description</Label><Input value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><Label>Start</Label><Input type="time" value={editing.start_time} onChange={(e) => setEditing({ ...editing, start_time: e.target.value })} /></div>
-                <div><Label>End</Label><Input type="time" value={editing.end_time} onChange={(e) => setEditing({ ...editing, end_time: e.target.value })} /></div>
-              </div>
+              <TimeEntryModeFields
+                mode={editing.mode}
+                onMode={(mode) => setEditing({ ...editing, mode })}
+                start={editing.start_time}
+                end={editing.end_time}
+                onStart={(start_time) => setEditing({ ...editing, start_time })}
+                onEnd={(end_time) => setEditing({ ...editing, end_time })}
+                hours={editing.durationHours}
+                minutes={editing.durationMinutes}
+                onHours={(durationHours) => setEditing({ ...editing, durationHours })}
+                onMinutes={(durationMinutes) => setEditing({ ...editing, durationMinutes })}
+              />
               {showPricing && <div><Label>VA Rate</Label><Input type="number" step="0.01" value={editing.va_rate} onChange={(e) => setEditing({ ...editing, va_rate: e.target.value })} /></div>}
-              <p className="text-[11px] text-muted-foreground">{showPricing ? "Hours and pay recalculate from start/end and rate." : "Hours recalculate from start and end. Rates stay hidden."}</p>
+              <p className="text-[11px] text-muted-foreground">{showPricing ? "Hours and pay follow the time method above and the rate." : "Hours follow the time method above. Rates stay hidden."}</p>
               <div className="flex gap-2">
-                <Button variant="gold" className="flex-1" disabled={saveEntry.isPending || !editing.description} onClick={() => saveEntry.mutate()}>Save</Button>
+                <Button variant="gold" className="flex-1" disabled={saveEntry.isPending || !editing.description || (editing.mode === "duration" && !!durationError(editing.durationHours, editing.durationMinutes))} onClick={() => saveEntry.mutate()}>Save</Button>
                 <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
               </div>
             </div>

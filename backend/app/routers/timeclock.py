@@ -243,7 +243,7 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
             sub_client_id=entry.task.sub_client_id if entry.task else None,
             project_id=entry.project_id, task_id=entry.task_id,
             task_name=entry.task.title if entry.task else None,
-            description_plain=desc, start_time=start_t, end_time=end_t,
+            description_plain=desc, entry_mode="range", start_time=start_t, end_time=end_t,
             hours=hours, va_rate=rate, va_pay=pay,
             notes=entry.notes, status=WorkLogStatus.submitted, clock_in_at=entry.clock_in, clock_out_at=now, source="clock",
             payable_on=payable_on,
@@ -513,6 +513,7 @@ def adjust_entry(
             hours = Decimal("0.01")
         was_approved = linked_log.status == WorkLogStatus.approved
         linked_log.work_date = local_in.date()
+        linked_log.entry_mode = "range"
         linked_log.start_time = local_in.time().replace(microsecond=0)
         linked_log.end_time = local_out.time().replace(microsecond=0)
         linked_log.clock_in_at = entry.clock_in

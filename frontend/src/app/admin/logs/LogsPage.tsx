@@ -7,7 +7,8 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
 import { cn, formatCurrency, formatDate } from "@/lib/utils"
-import { approvalTaskLabel, formatHoursMinutes } from "@/lib/approvalEntry"
+import { approvalTaskLabel, formatEnteredDuration, formatHoursMinutes, isDurationEntry } from "@/lib/approvalEntry"
+import { TimeEntryModeFields, durationError, splitStoredHours, timingBody, type EntryMode } from "@/components/logs/TimeEntryModeFields"
 import { Check, X, Pencil, Trash2, Download, Search, Clock3, Hand, Paperclip } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
@@ -56,7 +57,7 @@ export function LogsPage() {
   const [sort, setSort] = useState("newest")
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [editing, setEditing] = useState<WorkLog | null>(null)
-  const [editForm, setEditForm] = useState({ description_plain: "", hours: "", va_rate: "", status: "", start_time: "", end_time: "" })
+  const [editForm, setEditForm] = useState({ description_plain: "", hours: "", va_rate: "", status: "", start_time: "", end_time: "", mode: "range" as EntryMode, durationHours: 1, durationMinutes: 0 })
   const [viewingAtts, setViewingAtts] = useState<string | null>(null)
 
   const params = new URLSearchParams()
@@ -120,6 +121,7 @@ export function LogsPage() {
 
   const openEdit = (log: WorkLog) => {
     setEditing(log)
+    const split = splitStoredHours(log.hours)
     setEditForm({
       description_plain: log.description_plain,
       hours: log.hours,
@@ -127,6 +129,9 @@ export function LogsPage() {
       status: log.status,
       start_time: log.start_time?.slice(0, 5) || "09:00",
       end_time: log.end_time?.slice(0, 5) || "17:00",
+      mode: isDurationEntry(log) ? "duration" : "range",
+      durationHours: split.hours,
+      durationMinutes: split.minutes,
     })
   }
 
@@ -220,7 +225,7 @@ export function LogsPage() {
                       {log.notes && <span className="mt-1 block line-clamp-2 text-[11px] text-amber-800">Note: {log.notes}</span>}
                     </td>
                     <td className="whitespace-nowrap p-3 text-xs text-muted-foreground">
-                      {log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} → ${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "…"}` : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}
+                      {log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} → ${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "…"}` : isDurationEntry(log) ? formatEnteredDuration(log.hours) : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}
                       <span className={cn("ml-1.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", log.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{log.source === "clock" ? <><Clock3 className="h-2.5 w-2.5" /> Clock</> : <><Hand className="h-2.5 w-2.5" /> Manual</>}</span>
                     </td>
                     <td className="whitespace-nowrap p-3 text-xs font-extrabold">{formatHoursMinutes(log.hours)}</td>
@@ -262,24 +267,33 @@ export function LogsPage() {
                   <span className="font-bold">VA comments: </span>{editing.notes}
                 </div>
               )}
+              <TimeEntryModeFields
+                mode={editForm.mode}
+                onMode={(mode) => setEditForm({ ...editForm, mode })}
+                start={editForm.start_time}
+                end={editForm.end_time}
+                onStart={(start_time) => setEditForm({ ...editForm, start_time })}
+                onEnd={(end_time) => setEditForm({ ...editForm, end_time })}
+                hours={editForm.durationHours}
+                minutes={editForm.durationMinutes}
+                onHours={(durationHours) => setEditForm({ ...editForm, durationHours })}
+                onMinutes={(durationMinutes) => setEditForm({ ...editForm, durationMinutes })}
+              />
               <div className="grid grid-cols-2 gap-3">
-                <div><Label>Start</Label><Input type="time" value={editForm.start_time} onChange={(e) => setEditForm({ ...editForm, start_time: e.target.value })} /></div>
-                <div><Label>End</Label><Input type="time" value={editForm.end_time} onChange={(e) => setEditForm({ ...editForm, end_time: e.target.value })} /></div>
                 {showPricing && <div><Label>VA Rate</Label><Input type="number" step="0.01" value={editForm.va_rate} onChange={(e) => setEditForm({ ...editForm, va_rate: e.target.value })} /></div>}
                 <div><Label>Status</Label><Select value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}><option value="submitted">Submitted</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="invoiced">Invoiced</option></Select></div>
               </div>
-              <p className="text-[11px] text-muted-foreground">Hours and pay recalculate from start/end and rate.</p>
+              <p className="text-[11px] text-muted-foreground">Hours and pay follow the time method above and the rate.</p>
               <Button variant="outline" size="sm" onClick={() => setViewingAtts(editing.id)}>
                 View attachments ({editing.attachment_count ?? 0})
               </Button>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-                <Button variant="gold" onClick={() => update.mutate({
+                <Button variant="gold" disabled={editForm.mode === "duration" && !!durationError(editForm.durationHours, editForm.durationMinutes)} onClick={() => update.mutate({
                   id: editing.id,
                   body: {
                     description_plain: editForm.description_plain,
-                    start_time: editForm.start_time,
-                    end_time: editForm.end_time,
+                    ...timingBody(editForm.mode, editForm.start_time, editForm.end_time, editForm.durationHours, editForm.durationMinutes),
                     ...(showPricing ? { va_rate: parseFloat(editForm.va_rate) } : {}),
                     status: editForm.status,
                   },

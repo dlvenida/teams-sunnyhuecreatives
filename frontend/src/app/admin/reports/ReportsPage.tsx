@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
 import { cn, formatCurrency, formatDate } from "@/lib/utils"
+import { formatEnteredDuration } from "@/lib/approvalEntry"
 import { ReportDocument } from "@/components/pdf/ReportDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { generatePdfBlob } from "@/lib/pdf"
@@ -218,7 +219,7 @@ export function ReportsPage() {
                       <td className="whitespace-nowrap p-3 font-medium">{l.va_name ?? "—"}</td>
                       <td className="p-3"><span className="font-medium">{l.project_name || l.task_title || "General"}</span>{l.sub_client_name && <span className="block text-[11px] text-muted-foreground">{l.sub_client_name}</span>}</td>
                       <td className="max-w-xs p-3"><span className="line-clamp-2">{l.description}</span>{l.task_title && l.project_name && <span className="block text-[11px] text-muted-foreground">{l.task_title}</span>}</td>
-                      <td className="whitespace-nowrap p-3 text-muted-foreground">{l.start_time && l.end_time ? `${l.start_time}–${l.end_time}` : "—"}<span className={cn("ml-1.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", l.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{l.source === "clock" ? "Clock" : "Manual"}</span></td>
+                      <td className="whitespace-nowrap p-3 text-muted-foreground">{l.start_time && l.end_time ? `${l.start_time}–${l.end_time}` : formatEnteredDuration(l.hours)}<span className={cn("ml-1.5 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", l.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{l.source === "clock" ? "Clock" : l.start_time && l.end_time ? "Manual" : "Duration"}</span></td>
                       <td className="p-3 font-semibold">{l.hours}</td>
                       {report.show_rate && <><td className="p-3">{l.rate != null ? formatCurrency(l.rate) : "—"}</td><td className="p-3">{formatCurrency(l.amount || 0)}</td></>}
                     </tr>))}

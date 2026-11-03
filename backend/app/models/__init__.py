@@ -445,8 +445,11 @@ class WorkLog(Base):
     description_plain: Mapped[str] = mapped_column(Text)
     # Free-text task name the VA types on the log (payslip "Task" line). Falls back to the linked board task.
     task_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    start_time: Mapped[time] = mapped_column(Time)
-    end_time: Mapped[time] = mapped_column(Time)
+    # "range" stores start_time and end_time. "duration" stores hours only; both times stay null.
+    # Nullable times come from migration 026.
+    entry_mode: Mapped[str] = mapped_column(String(20), default="range", server_default="range")
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     hours: Mapped[Decimal] = mapped_column(Numeric(8, 2))
     va_rate: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     va_pay: Mapped[Decimal] = mapped_column(Numeric(12, 2))

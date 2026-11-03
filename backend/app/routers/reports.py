@@ -213,6 +213,7 @@ def generate_report(
             project_name=log.project.name if log.project else None,
             task_title=log.task.title if log.task else None,
             source=log.source or "manual",
+            entry_mode=getattr(log, "entry_mode", None) or ("duration" if not log.start_time or not log.end_time else "range"),
             start_time=log.start_time.strftime("%H:%M") if log.start_time else None,
             end_time=log.end_time.strftime("%H:%M") if log.end_time else None,
         )

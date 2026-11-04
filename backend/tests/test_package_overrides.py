@@ -44,6 +44,45 @@ class EffectiveTests(unittest.TestCase):
         effective, skipped, adjusted = effective_package_amount(Decimal("83.33"))
         self.assertEqual((effective, skipped, adjusted), (Decimal("83.33"), False, False))
 
+    def test_deduction_comes_off_the_package_and_needs_a_reason(self):
+        effective, skipped, adjusted = effective_package_amount(
+            Decimal("1000.00"), deduction=Decimal("300.00"),
+        )
+        self.assertEqual((effective, skipped, adjusted), (Decimal("700.00"), False, False))
+        planned = plan_override(
+            Decimal("1000.00"), skipped=False, amount=None, deduction=Decimal("300"), note="days off",
+        )
+        self.assertEqual(planned.action, "save")
+        self.assertEqual(planned.deduction, Decimal("300.00"))
+        self.assertIsNone(planned.amount)
+
+    def test_deduction_cannot_exceed_the_package(self):
+        with self.assertRaises(ValueError) as caught:
+            plan_override(Decimal("1000.00"), skipped=False, amount=None, deduction=Decimal("1000.01"), note="too much")
+        self.assertIn("more than the package", str(caught.exception))
+        with self.assertRaises(ValueError):
+            effective_package_amount(Decimal("1000.00"), deduction=Decimal("-5"))
+
+    def test_deduction_without_a_reason_is_rejected(self):
+        with self.assertRaises(ValueError) as caught:
+            plan_override(Decimal("1000.00"), skipped=False, amount=None, deduction=Decimal("300"), note="  ")
+        self.assertIn("reason", str(caught.exception))
+
+    def test_a_new_amount_and_a_deduction_cannot_both_be_stored(self):
+        with self.assertRaises(ValueError):
+            plan_override(
+                Decimal("1000.00"), skipped=False, amount=Decimal("800"), deduction=Decimal("300"), note="days off",
+            )
+
+    def test_deduction_does_not_change_the_next_period(self):
+        first = (date(2027, 3, 1), date(2027, 3, 15))
+        second = (date(2027, 3, 16), date(2027, 3, 31))
+        stored = {first: (False, None, Decimal("300.00"))}
+        this_period = apply_for_period(Decimal("1000.00"), stored, first)
+        next_period = apply_for_period(Decimal("1000.00"), stored, second)
+        self.assertEqual(this_period, (Decimal("700.00"), False, False))
+        self.assertEqual(next_period, (Decimal("1000.00"), False, False))
+
     def test_skip_is_stored_even_when_the_amount_matches(self):
         planned = plan_override(Decimal("1000.00"), skipped=True, amount=None, note="No work this period")
         self.assertEqual(planned.action, "save")
@@ -79,6 +118,14 @@ class ReviewScreenTests(unittest.TestCase):
         self.assertTrue(shown["pay_this_period"])
         self.assertEqual(shown["reason"], "days off")
         self.assertTrue(shown["adjusted"])
+
+    def test_review_shows_a_deduction_under_the_package(self):
+        shown = describe_package_review(Decimal("1000.00"), deduction=Decimal("300"), note="days off")
+        self.assertEqual(shown["calculated_amount"], Decimal("1000.00"))
+        self.assertEqual(shown["deduction"], Decimal("300.00"))
+        self.assertEqual(shown["amount"], Decimal("700.00"))
+        self.assertEqual(shown["reason"], "days off")
+        self.assertFalse(shown["adjusted"])
 
     def test_turning_pay_off_shows_zero(self):
         shown = describe_package_review(Decimal("1000.00"), skipped=True)

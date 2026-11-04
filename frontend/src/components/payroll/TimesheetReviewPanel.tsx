@@ -38,6 +38,7 @@ interface PackagePayClient {
   client_name: string
   calculated_amount: string
   amount: string
+  deduction?: string | null
   pay_this_period: boolean
   reason?: string | null
   adjusted?: boolean
@@ -74,7 +75,7 @@ function EditPackagePay({
   packagePay: PackagePay
   onSaved: () => void
 }) {
-  const [drafts, setDrafts] = useState<Record<string, { pay: boolean; amount: string; reason: string }>>({})
+  const [drafts, setDrafts] = useState<Record<string, { pay: boolean; mode: "amount" | "deduction"; amount: string; deduction: string; reason: string }>>({})
   const [error, setError] = useState("")
   const locked = packagePay.locked
   const currency = packagePay.currency === "USD" ? "USD" : "PHP"
@@ -83,7 +84,9 @@ function EditPackagePay({
     const draft = drafts[client.client_id]
     return {
       pay: draft ? draft.pay : client.pay_this_period,
+      mode: draft ? draft.mode : (client.deduction ? "deduction" as const : "amount" as const),
       amount: draft ? draft.amount : client.amount,
+      deduction: draft ? draft.deduction : (client.deduction || ""),
       reason: draft ? draft.reason : (client.reason || ""),
     }
   }
@@ -91,24 +94,53 @@ function EditPackagePay({
   const displayed = packagePay.clients.map((client) => {
     const state = rowState(client)
     const calculated = Number(client.calculated_amount)
-    const typed = Number(state.amount)
-    const amount = state.pay && Number.isFinite(typed) && typed >= 0 ? Math.round(typed * 100) / 100 : 0
-    return { client, state, calculated, amount }
+    let amount = 0
+    let deduction = 0
+    if (state.pay && state.mode === "deduction") {
+      const parsed = Number(state.deduction)
+      if (Number.isFinite(parsed) && parsed >= 0 && parsed <= calculated + 0.001) {
+        deduction = Math.round(parsed * 100) / 100
+        amount = Math.round((calculated - deduction) * 100) / 100
+      }
+    } else if (state.pay) {
+      const typed = Number(state.amount)
+      amount = Number.isFinite(typed) && typed >= 0 ? Math.round(typed * 100) / 100 : 0
+    }
+    return { client, state, calculated, amount, deduction }
   })
   const total = displayed.reduce((sum, row) => sum + row.amount, 0)
 
-  const save = async (client: PackagePayClient, state: { pay: boolean; amount: string; reason: string }) => {
+  const save = async (client: PackagePayClient, state: { pay: boolean; mode: "amount" | "deduction"; amount: string; deduction: string; reason: string }) => {
     if (locked) return
     const calculated = Number(client.calculated_amount)
-    const parsed = Number(state.amount)
-    if (state.pay && (!Number.isFinite(parsed) || parsed < 0)) {
-      setError("Amount cannot be negative.")
-      return
-    }
     let amount: number | null = null
-    if (state.pay && state.amount.trim() !== "") {
-      amount = Math.round(parsed * 100) / 100
-      if (amount === Math.round(calculated * 100) / 100) amount = null
+    let deduction: number | null = null
+    if (state.pay && state.mode === "deduction") {
+      const parsed = Number(state.deduction)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setError("Deduction cannot be negative.")
+        return
+      }
+      if (parsed > calculated + 0.001) {
+        setError("Deduction cannot be more than the package amount.")
+        return
+      }
+      if (parsed > 0 && !state.reason.trim()) {
+        setError("Add a reason for the deduction.")
+        return
+      }
+      deduction = Math.round(parsed * 100) / 100
+      if (deduction === 0) deduction = null
+    } else if (state.pay) {
+      const parsed = Number(state.amount)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setError("Amount cannot be negative.")
+        return
+      }
+      if (state.amount.trim() !== "") {
+        amount = Math.round(parsed * 100) / 100
+        if (amount === Math.round(calculated * 100) / 100) amount = null
+      }
     }
     try {
       await apiFetch("/payroll/package-overrides", {
@@ -120,6 +152,7 @@ function EditPackagePay({
           period_end: sheet.period_end,
           skipped: !state.pay,
           amount,
+          deduction,
           note: state.reason.trim() || null,
         }),
       })
@@ -142,7 +175,7 @@ function EditPackagePay({
         Each Fixed Package is listed with this period's amount. A change here updates Timesheets & pay and the payslip.
       </p>
       <div className="mt-3 space-y-3">
-        {displayed.map(({ client, state, calculated, amount }) => (
+        {displayed.map(({ client, state, calculated, amount, deduction }) => (
           <div key={client.client_id} className="rounded-xl border bg-muted/20 p-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
@@ -166,21 +199,47 @@ function EditPackagePay({
               />
               Pay this period
             </label>
+            {state.pay && (
+              <div className="mt-2 flex gap-3 text-[11px] font-semibold">
+                <label className="flex items-center gap-1">
+                  <input type="radio" name={`${client.client_id}-mode`} checked={state.mode === "amount"} disabled={locked} onChange={() => { const next = { ...state, mode: "amount" as const }; setDrafts((prev) => ({ ...prev, [client.client_id]: next })); void save(client, next) }} />
+                  New amount
+                </label>
+                <label className="flex items-center gap-1">
+                  <input type="radio" name={`${client.client_id}-mode`} checked={state.mode === "deduction"} disabled={locked} onChange={() => setDrafts((prev) => ({ ...prev, [client.client_id]: { ...state, mode: "deduction" } }))} />
+                  Deduction
+                </label>
+              </div>
+            )}
             <div className="mt-2 grid gap-2 sm:grid-cols-[8rem_1fr]">
+              {state.mode === "deduction" && state.pay ? (
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="h-8"
+                  aria-label={`${client.client_name} deduction this period`}
+                  disabled={locked}
+                  value={state.deduction}
+                  onChange={(e) => setDrafts((prev) => ({ ...prev, [client.client_id]: { ...state, deduction: e.target.value } }))}
+                  onBlur={(e) => void save(client, { ...state, deduction: e.target.value })}
+                />
+              ) : (
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="h-8"
+                  aria-label={`${client.client_name} amount this period`}
+                  disabled={locked || !state.pay}
+                  value={state.amount}
+                  onChange={(e) => setDrafts((prev) => ({ ...prev, [client.client_id]: { ...state, amount: e.target.value } }))}
+                  onBlur={(e) => void save(client, { ...state, amount: e.target.value })}
+                />
+              )}
               <Input
-                type="number"
-                min="0"
-                step="0.01"
                 className="h-8"
-                aria-label={`${client.client_name} amount this period`}
-                disabled={locked || !state.pay}
-                value={state.amount}
-                onChange={(e) => setDrafts((prev) => ({ ...prev, [client.client_id]: { ...state, amount: e.target.value } }))}
-                onBlur={(e) => void save(client, { ...state, amount: e.target.value })}
-              />
-              <Input
-                className="h-8"
-                placeholder="Reason (optional)"
+                placeholder={state.mode === "deduction" ? "Reason, such as days off" : "Reason (optional)"}
                 aria-label={`${client.client_name} reason`}
                 disabled={locked}
                 value={state.reason}
@@ -188,6 +247,13 @@ function EditPackagePay({
                 onBlur={(e) => void save(client, { ...state, reason: e.target.value })}
               />
             </div>
+            {state.pay && state.mode === "deduction" && deduction > 0 && (
+              <div className="mt-2 text-[11px] leading-5">
+                <p>Fixed Package {formatCurrency(calculated, currency)}</p>
+                <p>Deduction{state.reason.trim() ? ` (${state.reason.trim()})` : ""} -{formatCurrency(deduction, currency)}</p>
+                <p className="font-semibold">Pay {formatCurrency(amount, currency)}</p>
+              </div>
+            )}
           </div>
         ))}
       </div>

@@ -197,6 +197,7 @@ def calculate_payroll(
                 calculated,
                 skipped=bool(saved.skipped) if saved else False,
                 amount=saved.amount if saved else None,
+                deduction=saved.deduction if saved else None,
             )
             package_dues[cid] = effective
             package_lines.append({
@@ -205,6 +206,7 @@ def calculate_payroll(
                 "calculated": calculated,
                 "effective": effective,
                 "override_amount": saved.amount if saved else None,
+                "deduction": saved.deduction if saved else None,
                 "skipped": skipped,
                 "adjusted": adjusted,
                 "note": (saved.note or "").strip() or None if saved else None,
@@ -251,7 +253,7 @@ def calculate_payroll(
             b = by_client.setdefault(line["name"], {
                 "hours": Decimal("0"), "pay": Decimal("0"), "client_id": line["client_id"],
                 "rate": line["calculated"], "pay_type": "package",
-                "calculated_pay": line["calculated"], "override_amount": None, "skipped": False, "adjusted": False, "note": None,
+                "calculated_pay": line["calculated"], "override_amount": None, "deduction": None, "skipped": False, "adjusted": False, "note": None,
             })
             b["pay"] = line["effective"]
             b["rate"] = line["effective"] if not line["skipped"] else line["calculated"]
@@ -259,6 +261,7 @@ def calculate_payroll(
             b["client_id"] = line["client_id"]
             b["calculated_pay"] = line["calculated"]
             b["override_amount"] = line["override_amount"]
+            b["deduction"] = line["deduction"]
             b["skipped"] = line["skipped"]
             b["adjusted"] = line["adjusted"]
             b["note"] = line["note"]
@@ -284,6 +287,7 @@ def calculate_payroll(
                 calculated,
                 skipped=bool(saved.skipped) if saved else False,
                 amount=saved.amount if saved else None,
+                deduction=saved.deduction if saved else None,
             )
             prev_dues[cid] = effective
         prev_log_pay: dict = {}
@@ -305,6 +309,7 @@ def calculate_payroll(
                     client_id=None if redact else v.get("client_id"),
                     calculated_pay=None if redact else v.get("calculated_pay"),
                     override_amount=None if redact else v.get("override_amount"),
+                    deduction=None if redact else v.get("deduction"),
                     skipped=None if redact else (v.get("skipped") if v.get("pay_type") == "package" else None),
                     adjusted=None if redact else (v.get("adjusted") if v.get("pay_type") == "package" else None),
                     note=None if redact else v.get("note"),
@@ -494,12 +499,14 @@ def timesheet_entries(
                 skipped=bool(override.skipped) if override else False,
                 amount=override.amount if override else None,
                 note=override.note if override else None,
+                deduction=override.deduction if override else None,
             )
             clients.append({
                 "client_id": str(cid),
                 "client_name": name,
                 "calculated_amount": str(described["calculated_amount"]),
                 "amount": str(described["amount"]),
+                "deduction": str(described["deduction"]) if described["deduction"] is not None else None,
                 "pay_this_period": described["pay_this_period"],
                 "reason": described["reason"],
                 "adjusted": described["adjusted"],
@@ -706,7 +713,9 @@ def upsert_package_override(
         raise HTTPException(status_code=400, detail="This client does not have an approved Fixed Package for this VA")
     calculated = package_amount_for_window(rate.amount, resolved_frequency(rate), body.period_start, body.period_end)
     try:
-        plan = plan_override(calculated, skipped=body.skipped, amount=body.amount, note=body.note)
+        plan = plan_override(
+            calculated, skipped=body.skipped, amount=body.amount, note=body.note, deduction=body.deduction,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     existing = (
@@ -731,6 +740,7 @@ def upsert_package_override(
             period_end=body.period_end,
             skipped=skipped,
             amount=None,
+            deduction=None,
             calculated_amount=calculated,
             effective_amount=effective,
             adjusted=adjusted,
@@ -740,6 +750,7 @@ def upsert_package_override(
     if existing:
         existing.skipped = plan.skipped
         existing.amount = plan.amount
+        existing.deduction = plan.deduction
         existing.note = plan.note
         row = existing
     else:
@@ -750,13 +761,16 @@ def upsert_package_override(
             period_end=body.period_end,
             skipped=plan.skipped,
             amount=plan.amount,
+            deduction=plan.deduction,
             note=plan.note,
             created_by=current.user.id,
         )
         db.add(row)
     db.commit()
     db.refresh(row)
-    effective, skipped, adjusted = effective_package_amount(calculated, skipped=row.skipped, amount=row.amount)
+    effective, skipped, adjusted = effective_package_amount(
+        calculated, skipped=row.skipped, amount=row.amount, deduction=row.deduction,
+    )
     return PackageOverrideResponse(
         va_id=row.va_id,
         client_id=row.client_id,
@@ -764,6 +778,7 @@ def upsert_package_override(
         period_end=row.period_end,
         skipped=skipped,
         amount=row.amount,
+        deduction=row.deduction,
         calculated_amount=calculated,
         effective_amount=effective,
         adjusted=adjusted,

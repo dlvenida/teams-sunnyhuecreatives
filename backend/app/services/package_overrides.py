@@ -101,6 +101,30 @@ def load_overrides(
     return {(row.va_id, row.client_id): row for row in rows}
 
 
+def describe_package_review(
+    calculated: Decimal,
+    *,
+    skipped: bool = False,
+    amount: Decimal | None = None,
+    note: str | None = None,
+) -> dict:
+    """Fields the timesheet review screen shows for one Fixed Package client."""
+    effective, is_skipped, adjusted = effective_package_amount(calculated, skipped=skipped, amount=amount)
+    reason = (note or "").strip() or None
+    return {
+        "calculated_amount": quantize_money(calculated),
+        "amount": effective,
+        "pay_this_period": not is_skipped,
+        "reason": reason,
+        "adjusted": adjusted,
+    }
+
+
+def include_package_pay(role: str) -> bool:
+    """Project Managers never receive package amounts or edit controls."""
+    return role == "admin"
+
+
 def period_is_paid(db: Session, va_id: UUID, period_start: date, period_end: date) -> bool:
     from app.models import PayrollRun
 

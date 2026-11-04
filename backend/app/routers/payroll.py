@@ -46,7 +46,9 @@ from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
 from app.services.payroll_calendar import filter_logs_in_pay_period
 from app.services.package_overrides import (
+    describe_package_review,
     effective_package_amount,
+    include_package_pay,
     load_overrides,
     period_is_paid,
     plan_override,
@@ -481,6 +483,34 @@ def timesheet_entries(
         row.period_end,
     ).order_by(WorkLog.work_date, WorkLog.start_time).all()
     redact = current.role == UserRole.auditor
+    package_pay = None
+    if include_package_pay(current.role.value):
+        saved = load_overrides(db, {row.va_id}, row.period_start, row.period_end)
+        clients = []
+        for cid, name, calculated in package_period_amounts(db, row.va_id, row.period_start, row.period_end):
+            override = saved.get((row.va_id, cid))
+            described = describe_package_review(
+                calculated,
+                skipped=bool(override.skipped) if override else False,
+                amount=override.amount if override else None,
+                note=override.note if override else None,
+            )
+            clients.append({
+                "client_id": str(cid),
+                "client_name": name,
+                "calculated_amount": str(described["calculated_amount"]),
+                "amount": str(described["amount"]),
+                "pay_this_period": described["pay_this_period"],
+                "reason": described["reason"],
+                "adjusted": described["adjusted"],
+            })
+        if clients:
+            currency = row.va.currency.value if row.va and hasattr(row.va.currency, "value") else "PHP"
+            package_pay = {
+                "locked": period_is_paid(db, row.va_id, row.period_start, row.period_end),
+                "currency": currency,
+                "clients": clients,
+            }
     full_name = (
         (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
         or (row.va.name if row.va else None)
@@ -504,6 +534,7 @@ def timesheet_entries(
             _review_entry(l, include_money=not redact)
             for l in logs
         ],
+        **({"package_pay": package_pay} if package_pay else {}),
     }
 
 

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from app.deps import CurrentUser, require_admin
 from app.models import UserRole
-from app.services.package_overrides import apply_for_period, effective_package_amount, plan_override
+from app.services.package_overrides import apply_for_period, describe_package_review, effective_package_amount, include_package_pay, plan_override
 
 
 class EffectiveTests(unittest.TestCase):
@@ -69,6 +69,26 @@ class EffectiveTests(unittest.TestCase):
         self.assertEqual(skipped[0], Decimal("0.00"))
         self.assertTrue(skipped[1])
         self.assertEqual(later, (Decimal("83.34"), False, False))
+
+
+class ReviewScreenTests(unittest.TestCase):
+    def test_review_lists_the_period_amount_and_an_edit(self):
+        shown = describe_package_review(Decimal("1000.00"), amount=Decimal("700"), note="days off")
+        self.assertEqual(shown["calculated_amount"], Decimal("1000.00"))
+        self.assertEqual(shown["amount"], Decimal("700.00"))
+        self.assertTrue(shown["pay_this_period"])
+        self.assertEqual(shown["reason"], "days off")
+        self.assertTrue(shown["adjusted"])
+
+    def test_turning_pay_off_shows_zero(self):
+        shown = describe_package_review(Decimal("1000.00"), skipped=True)
+        self.assertFalse(shown["pay_this_period"])
+        self.assertEqual(shown["amount"], Decimal("0.00"))
+
+    def test_project_manager_does_not_receive_package_pay(self):
+        self.assertTrue(include_package_pay("admin"))
+        self.assertFalse(include_package_pay("auditor"))
+        self.assertFalse(include_package_pay("va"))
 
 
 class PermissionTests(unittest.TestCase):

@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models import PayType, RateStatus, SystemSetting, VARate
 from app.services.calculations import calculate_pay
@@ -118,6 +118,47 @@ def package_amount_for_dates(monthly: Decimal, frequency: str | None, dates: lis
             if "second" in halves:
                 total += second_share
     return total.quantize(Decimal("0.01"))
+
+
+def approved_package_rates(db: Session, va_id: UUID) -> list[VARate]:
+    """One approved package rate per client: the latest reviewed rate."""
+    rows = (
+        db.query(VARate)
+        .options(joinedload(VARate.client))
+        .filter(VARate.va_id == va_id, VARate.status == RateStatus.approved, VARate.pay_type == PayType.package)
+        .order_by(VARate.reviewed_at.desc().nullslast(), VARate.created_at.desc())
+        .all()
+    )
+    chosen: dict[UUID, VARate] = {}
+    for rate in rows:
+        chosen.setdefault(rate.client_id, rate)
+    return list(chosen.values())
+
+
+def package_period_amounts(
+    db: Session,
+    va_id: UUID,
+    period_start: date,
+    period_end: date,
+) -> list[tuple[UUID, str, Decimal]]:
+    """Period package pay for every approved client. Logged hours are not an input."""
+    out: list[tuple[UUID, str, Decimal]] = []
+    for rate in approved_package_rates(db, va_id):
+        due = package_amount_for_window(rate.amount, resolved_frequency(rate), period_start, period_end)
+        if due <= 0:
+            continue
+        name = rate.client.name if rate.client else "Client"
+        out.append((rate.client_id, name, due))
+    return out
+
+
+def combine_period_pay(package_dues: dict[UUID, Decimal], log_pay_by_client: dict[UUID, Decimal]) -> Decimal:
+    """Package clients are paid the period amount. Hourly clients keep the sum of their logs."""
+    hourly = sum(
+        (pay for cid, pay in log_pay_by_client.items() if cid not in package_dues),
+        Decimal("0"),
+    )
+    return (hourly + sum(package_dues.values(), Decimal("0"))).quantize(Decimal("0.01"))
 
 
 def package_flats_for_period(

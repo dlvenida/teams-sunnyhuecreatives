@@ -352,7 +352,7 @@ export function PayrollPage() {
                       {va.timesheet_status === "reviewed" ? "View timesheet" : "Review"}
                     </Button>
                   )}
-                  {isAdmin && !va.is_paid && n(va.total_hours) > 0 && (
+                  {isAdmin && !va.is_paid && (n(va.total_hours) > 0 || n(va.total_pay) > 0) && (
                     <Button
                       size="sm"
                       variant="success"
@@ -444,7 +444,7 @@ export function PayrollPage() {
                               {task.description && <span className="mt-0.5 block text-[11px] text-muted-foreground">{task.description}</span>}
                             </td>
                             <td className="p-2 font-bold">{task.hours.toFixed(2)}</td>
-                            {showPricing && <td className="p-2 font-semibold">{client.payType === "package" ? "—" : formatCurrency(task.amount, va.currency)}</td>}
+                            {showPricing && <td className="p-2 font-semibold">{client.payType === "package" ? "" : formatCurrency(task.amount, va.currency)}</td>}
                             <td className="p-2 text-right">
                               {entry && (
                                 <Button size="sm" variant="ghost" onClick={() => {

@@ -56,6 +56,12 @@ export function buildPayslip(
     list.push(entry)
     groups.set(name, list)
   }
+  // A Fixed Package is owed for the period even when that client has no time logs.
+  for (const row of va.by_client ?? []) {
+    if (row.pay_type === "package" && row.label && !groups.has(row.label)) {
+      groups.set(row.label, [])
+    }
+  }
 
   const clients: PayslipClient[] = [...groups.entries()].map(([name, entries]) => {
     const sorted = entries.slice().sort((a, b) => a.work_date.localeCompare(b.work_date))
@@ -88,12 +94,13 @@ export function buildPayslip(
     })
     const hours = round2(tasks.reduce((s, t) => s + t.hours, 0))
     const taskAmount = round2(tasks.reduce((s, t) => s + t.amount, 0))
-    const amount = breakdown?.pay != null ? round2(num(breakdown.pay)) : taskAmount
-    if (payType === "package" && amount > 0 && tasks.length) {
-      // Package flat is the client amount; keep task rows as hours with the flat on the subtotal only.
-    }
+    const amount = payType === "package"
+      ? round2(num(breakdown?.pay))
+      : breakdown?.pay != null
+        ? round2(num(breakdown.pay))
+        : taskAmount
     return { name, hours, rate: rate && rate > 0 ? rate : null, payType, amount, tasks }
-  }).sort((a, b) => b.hours - a.hours)
+  }).sort((a, b) => b.amount - a.amount || b.hours - a.hours)
 
   const totalHours = round2(clients.reduce((s, c) => s + c.hours, 0)) || num(va.total_hours)
   const totalPay = round2(clients.reduce((s, c) => s + c.amount, 0)) || num(va.total_pay)

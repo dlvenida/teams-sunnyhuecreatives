@@ -18,7 +18,10 @@ from app.models import (
     TimesheetStatus,
     TimesheetSubmission,
     UserRole,
+    PayType,
+    RateStatus,
     VA,
+    VARate,
     WorkLog,
     WorkLogStatus,
 )
@@ -39,7 +42,7 @@ from app.services.log_display import approval_task_label, log_task_name
 from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
 from app.services.payroll_calendar import filter_logs_in_pay_period
-from app.services.va_rates import package_flats_for_period
+from app.services.va_rates import combine_period_pay, package_period_amounts
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
@@ -142,17 +145,41 @@ def calculate_payroll(
     for t in sheets.values():
         if t.va_id not in va_map and t.va:
             va_map[t.va_id] = {"va": t.va, "entries": [], "total_hours": Decimal("0"), "total_pay": Decimal("0")}
+    # A Fixed Package is due for the period even when the VA logged nothing.
+    package_va_ids = {
+        row[0]
+        for row in db.query(VARate.va_id)
+        .filter(VARate.status == RateStatus.approved, VARate.pay_type == PayType.package)
+        .distinct()
+        .all()
+    }
+    if body.va_id:
+        package_va_ids = {vid for vid in package_va_ids if vid == body.va_id}
+    package_rows_by_va: dict = {}
+    for vid in package_va_ids:
+        rows = package_period_amounts(db, vid, period_start, period_end)
+        if not rows:
+            continue
+        package_rows_by_va[vid] = rows
+        if vid not in va_map:
+            va = db.query(VA).options(joinedload(VA.user)).filter(VA.id == vid, VA.is_active.is_(True)).first()
+            if va:
+                va_map[va.id] = {"va": va, "entries": [], "total_hours": Decimal("0"), "total_pay": Decimal("0")}
 
     results = []
     total_php = Decimal("0")
     total_usd = Decimal("0")
     for va_id, data in va_map.items():
         va = data["va"]
-        # Add package flat amounts once per client that has approved package rate + hours in period
-        client_ids = {e.client_id for e in data["entries"]}
-        flats = package_flats_for_period(db, va_id, client_ids, period_start=period_start, period_end=period_end)
-        package_total = sum(flats.values(), Decimal("0"))
-        data["total_pay"] = data["total_pay"] + package_total
+        # Package pay comes from the approved rate for this period, never from logged hours.
+        package_rows = package_rows_by_va.get(va_id)
+        if package_rows is None:
+            package_rows = package_period_amounts(db, va_id, period_start, period_end)
+        package_dues = {cid: amount for cid, _name, amount in package_rows}
+        log_pay_by_client: dict = {}
+        for entry in data["entries"]:
+            log_pay_by_client[entry.client_id] = log_pay_by_client.get(entry.client_id, Decimal("0")) + entry.va_pay
+        data["total_pay"] = combine_period_pay(package_dues, log_pay_by_client)
 
         redact = current.role == UserRole.auditor
         entries = [
@@ -186,12 +213,14 @@ def calculate_payroll(
             if l.va_rate is not None:
                 b["rate"] = l.va_rate
             daily_map[l.work_date] = daily_map.get(l.work_date, Decimal("0")) + l.hours
-        for cid, flat in flats.items():
-            for b in by_client.values():
-                if b.get("client_id") == cid:
-                    b["pay"] = flat
-                    b["rate"] = flat
-                    b["pay_type"] = "package"
+        for cid, name, flat in package_rows:
+            b = by_client.setdefault(name, {
+                "hours": Decimal("0"), "pay": Decimal("0"), "client_id": cid,
+                "rate": flat, "pay_type": "package",
+            })
+            b["pay"] = flat
+            b["rate"] = flat
+            b["pay_type"] = "package"
         daily = []
         d = period_start
         while d <= period_end:
@@ -206,9 +235,12 @@ def calculate_payroll(
         run = runs.get(va_id)
         sheet = sheets.get(va_id)
         change = float((data["total_hours"] - prev_hours) / prev_hours * 100) if prev_hours > 0 else None
-        prev_client_ids = {l.client_id for l in va_prev}
-        prev_flats = package_flats_for_period(db, va_id, prev_client_ids, period_start=prev_start, period_end=prev_end)
-        prev_pay = sum((l.va_pay for l in va_prev), Decimal("0")) + sum(prev_flats.values(), Decimal("0"))
+        prev_rows = package_period_amounts(db, va_id, prev_start, prev_end)
+        prev_dues = {cid: amount for cid, _name, amount in prev_rows}
+        prev_log_pay: dict = {}
+        for entry in va_prev:
+            prev_log_pay[entry.client_id] = prev_log_pay.get(entry.client_id, Decimal("0")) + entry.va_pay
+        prev_pay = combine_period_pay(prev_dues, prev_log_pay)
         full_name = (
             (va.user.display_name.strip() if va.user and va.user.display_name else "")
             or va.name

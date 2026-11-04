@@ -23,7 +23,7 @@ from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionRe
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
 from app.services.notifications import push
-from app.services.va_rates import get_approved_rate, package_flats_for_period, resolve_log_pay
+from app.services.va_rates import combine_period_pay, get_approved_rate, package_flats_for_period, package_period_amounts, resolve_log_pay
 from app.services.work_log_entry import apply_work_log_timing, resolve_timing
 from app.services.work_log_overlap import assert_no_time_overlap
 
@@ -302,20 +302,21 @@ def my_earnings(
     def period_stats(start: date | None, end: date | None):
         subset = [l for l in logs if (start is None or l.work_date >= start) and (end is None or l.work_date <= end)]
         hours = sum((l.hours for l in subset), Decimal("0"))
-        # Hourly pay from logs + package flats once per client in range
-        hourly_pay = sum((l.va_pay for l in subset), Decimal("0"))
-        client_ids = {l.client_id for l in subset}
+        log_pay: dict = {}
+        for log in subset:
+            log_pay[log.client_id] = log_pay.get(log.client_id, Decimal("0")) + log.va_pay
         if start is None or end is None:
             dates_by_client: dict = {}
             for log in subset:
                 dates_by_client.setdefault(log.client_id, []).append(log.work_date)
-            flats = package_flats_for_period(db, current.va_id, client_ids, dates_by_client=dates_by_client)
+            flats = package_flats_for_period(db, current.va_id, set(log_pay), dates_by_client=dates_by_client)
+            earned = combine_period_pay(flats, log_pay)
         else:
-            flats = package_flats_for_period(db, current.va_id, client_ids, period_start=start, period_end=end)
-        package_pay = sum(flats.values(), Decimal("0"))
+            dues = {cid: amount for cid, _name, amount in package_period_amounts(db, current.va_id, start, end)}
+            earned = combine_period_pay(dues, log_pay)
         return {
             "hours": str(hours),
-            "earned": str(hourly_pay + package_pay),
+            "earned": str(earned),
             "entries": len(subset),
             "currency": currency,
         }
@@ -337,18 +338,27 @@ def my_earnings(
         for log in range_logs:
             range_dates.setdefault(log.client_id, []).append(log.work_date)
         range_flats = package_flats_for_period(db, current.va_id, {UUID(k) for k in by_client_map}, dates_by_client=range_dates)
+        for cid, flat in range_flats.items():
+            key = str(cid)
+            if key in by_client_map:
+                by_client_map[key]["earned"] = flat
+                by_client_map[key]["pay_type"] = "package"
+                rate = get_approved_rate(db, current.va_id, cid)
+                if rate:
+                    by_client_map[key]["currency"] = rate.currency.value
     else:
-        range_flats = package_flats_for_period(
-            db, current.va_id, {UUID(k) for k in by_client_map}, period_start=range_start, period_end=range_end,
-        )
-    for cid, flat in range_flats.items():
-        key = str(cid)
-        if key in by_client_map:
-            by_client_map[key]["earned"] = flat
-            by_client_map[key]["pay_type"] = "package"
+        for cid, name, flat in package_period_amounts(db, current.va_id, range_start, range_end):
+            key = str(cid)
+            row = by_client_map.setdefault(
+                key,
+                {"client_id": key, "client_name": name, "hours": Decimal("0"), "earned": Decimal("0"), "pay_type": "package", "currency": currency, "status": "Approved"},
+            )
+            row["client_name"] = name
+            row["earned"] = flat
+            row["pay_type"] = "package"
             rate = get_approved_rate(db, current.va_id, cid)
             if rate:
-                by_client_map[key]["currency"] = rate.currency.value
+                row["currency"] = rate.currency.value
 
     by_client = [
         {**r, "hours": str(r["hours"]), "earned": str(r["earned"])}

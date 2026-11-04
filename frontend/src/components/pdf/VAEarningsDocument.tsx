@@ -123,7 +123,7 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
   const lines =
     data.by_client.length > 0
       ? data.by_client.map((c) => ({
-          title: `${c.client_name} · ${c.pay_type === "package" ? "Package" : "VA services"}`,
+          title: `${c.client_name} · ${c.pay_type === "package" ? "Fixed Package" : "VA services"}`,
           sub: period,
           rate: c.pay_type === "hourly" ? `${formatCurrency(Number(c.earned) / Math.max(Number(c.hours) || 1, 0.01), (c.currency || currency) as "PHP" | "USD")}/hr` : formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD"),
           amount: formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD"),

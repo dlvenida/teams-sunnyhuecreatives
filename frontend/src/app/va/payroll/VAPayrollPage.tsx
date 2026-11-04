@@ -475,7 +475,7 @@ export function VAPayrollPage() {
                     {earnings.by_client.map((r) => (
                       <tr key={r.client_id} className="border-b last:border-0">
                         <td className="p-3 font-semibold">{r.client_name}</td>
-                        <td className="p-3 capitalize">{r.pay_type}</td>
+                        <td className="p-3">{r.pay_type === "package" ? "Fixed Package" : "Hourly"}</td>
                         <td className="p-3">{r.hours}</td>
                         <td className="p-3 font-semibold">{formatCurrency(r.earned, r.currency)}</td>
                         <td className="p-3">{r.status}</td>

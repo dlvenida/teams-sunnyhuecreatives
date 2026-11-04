@@ -3,7 +3,9 @@ import unittest
 from datetime import date
 from decimal import Decimal
 
-from app.services.va_rates import package_amount_for_dates, package_amount_for_window, split_biweekly
+from uuid import uuid4
+
+from app.services.va_rates import combine_period_pay, package_amount_for_dates, package_amount_for_window, split_biweekly
 
 
 class SplitTests(unittest.TestCase):
@@ -19,9 +21,16 @@ class SplitTests(unittest.TestCase):
         self.assertEqual(first + second, Decimal("2001.00"))
 
     def test_leftover_centavo_goes_on_the_second_half(self):
+        """The 1st-15th gets the lower half. The 16th-end gets the rest, so the two periods sum to the month."""
         first, second = split_biweekly(Decimal("2000.01"))
         self.assertEqual(first + second, Decimal("2000.01"))
         self.assertEqual(second - first, Decimal("0.01"))
+
+    def test_166_67_splits_as_83_33_then_83_34(self):
+        first, second = split_biweekly(Decimal("166.67"))
+        self.assertEqual(first, Decimal("83.33"))
+        self.assertEqual(second, Decimal("83.34"))
+        self.assertEqual(first + second, Decimal("166.67"))
 
 
 class WindowTests(unittest.TestCase):
@@ -67,6 +76,52 @@ class WindowTests(unittest.TestCase):
         hourly = (Decimal("3.00") * Decimal("250")).quantize(Decimal("0.01"))
         # Package time logs store va_pay of 0, so they do not add to the hourly total.
         self.assertEqual(package_due + hourly + Decimal("0.00"), Decimal("1750.00"))
+
+
+class CombineTests(unittest.TestCase):
+    def test_biweekly_with_no_logs_uses_only_the_package(self):
+        joshua = uuid4()
+        other = uuid4()
+        dues = {
+            joshua: package_amount_for_window(Decimal("2000"), "biweekly", date(2026, 11, 1), date(2026, 11, 15)),
+            other: package_amount_for_window(Decimal("166.67"), "biweekly", date(2026, 11, 1), date(2026, 11, 15)),
+        }
+        self.assertEqual(combine_period_pay(dues, {}), Decimal("1083.33"))
+
+    def test_logs_on_a_package_client_do_not_change_the_pay(self):
+        joshua = uuid4()
+        dues = {joshua: Decimal("1000.00")}
+        logged = {joshua: Decimal("500.00")}
+        self.assertEqual(combine_period_pay(dues, logged), Decimal("1000.00"))
+
+    def test_two_biweekly_periods_sum_to_each_monthly_amount(self):
+        joshua = uuid4()
+        small = uuid4()
+        first = {
+            joshua: package_amount_for_window(Decimal("2000"), "biweekly", date(2026, 11, 1), date(2026, 11, 15)),
+            small: package_amount_for_window(Decimal("166.67"), "biweekly", date(2026, 11, 1), date(2026, 11, 15)),
+        }
+        second = {
+            joshua: package_amount_for_window(Decimal("2000"), "biweekly", date(2026, 11, 16), date(2026, 11, 30)),
+            small: package_amount_for_window(Decimal("166.67"), "biweekly", date(2026, 11, 16), date(2026, 11, 30)),
+        }
+        self.assertEqual(first[small], Decimal("83.33"))
+        self.assertEqual(second[small], Decimal("83.34"))
+        self.assertEqual(combine_period_pay(first, {}) + combine_period_pay(second, {}), Decimal("2166.67"))
+
+    def test_monthly_is_the_full_amount_once_even_with_logs(self):
+        client = uuid4()
+        first = {client: package_amount_for_window(Decimal("2000"), "monthly", date(2026, 11, 1), date(2026, 11, 15))}
+        second = package_amount_for_window(Decimal("2000"), "monthly", date(2026, 11, 16), date(2026, 11, 30))
+        self.assertEqual(combine_period_pay(first, {client: Decimal("80")}), Decimal("2000.00"))
+        self.assertEqual(second, Decimal("0.00"))
+
+    def test_mixed_package_and_hourly(self):
+        package = uuid4()
+        hourly = uuid4()
+        dues = {package: Decimal("1000.00")}
+        logs = {package: Decimal("0.00"), hourly: Decimal("250.00")}
+        self.assertEqual(combine_period_pay(dues, logs), Decimal("1250.00"))
 
 
 class DatesTests(unittest.TestCase):

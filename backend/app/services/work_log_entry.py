@@ -29,7 +29,8 @@ def resolve_timing(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Minutes must be a whole number from 0 to 59.")
         total_minutes = duration_hours * 60 + duration_minutes
         if total_minutes <= 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Duration must be greater than 0.")
+            from app.services.task_board import ZERO_DURATION_MESSAGE
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ZERO_DURATION_MESSAGE)
         if total_minutes > MAX_ENTRY_MINUTES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="A single entry cannot be more than 24 hours.")
         hours = (Decimal(total_minutes) / Decimal(60)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

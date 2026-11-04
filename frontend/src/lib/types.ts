@@ -278,7 +278,7 @@ export interface ReportClientsResponse {
 
 export type ProjectStatus = "active" | "on_hold" | "completed" | "archived"
 export type Cadence = "weekly" | "biweekly" | "monthly"
-export type TaskStatus = "todo" | "in_progress" | "in_review" | "done" | "blocked"
+export type TaskStatus = "todo" | "in_progress" | "in_review" | "approved" | "done" | "blocked"
 export type TaskPriority = "low" | "medium" | "high" | "urgent"
 export type ClockStatus = "running" | "paused" | "completed"
 
@@ -584,7 +584,7 @@ export interface DashboardOverview {
   today: string
   week_start: string
   week_end: string
-  counts: { total_tasks: number; todo: number; in_progress: number; in_review: number; done: number; blocked: number; overdue: number; due_today: number; unassigned: number; done_this_week: number }
+  counts: { total_tasks: number; todo: number; in_progress: number; in_review: number; approved: number; done: number; blocked: number; overdue: number; due_today: number; unassigned: number; done_this_week: number }
   hours_today: string
   hours_this_week: string
   today_tasks: TaskItem[]

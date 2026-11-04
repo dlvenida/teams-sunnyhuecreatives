@@ -4,6 +4,7 @@ export const TASK_STATUSES: { id: TaskStatus; label: string; color: string; bg: 
   { id: "todo", label: "To Do", color: "#64748b", bg: "#f1f5f9" },
   { id: "in_progress", label: "In Progress", color: "#2563eb", bg: "#dbeafe" },
   { id: "in_review", label: "In Review", color: "#9333ea", bg: "#f3e8ff" },
+  { id: "approved", label: "Approved", color: "#0f766e", bg: "#ccfbf1" },
   { id: "done", label: "Done", color: "#16a34a", bg: "#dcfce7" },
   { id: "blocked", label: "Blocked", color: "#dc2626", bg: "#fee2e2" },
 ]

@@ -8,7 +8,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user
 from app.models import CommentAttachment, Task, User, UserRole, VA
-from app.schemas import TeamMemberResponse
+from app.schemas import LinkLabelUpdate, TeamMemberResponse
+from app.services import comments as comment_svc
+from app.services.task_board import clean_link_label
 from app.services import storage
 from app.services.images import AVIF_QUALITY, MAX_EDGE, MAX_UPLOAD_BYTES
 
@@ -67,6 +69,30 @@ def attachment_content(attachment_id: UUID, current: Annotated[CurrentUser, Depe
     disposition = f'inline; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(raw_name)}'
     return Response(content=data, media_type=MEDIA.get(a.format, "image/avif"),
                     headers={"Cache-Control": "private, max-age=3600", "Content-Disposition": disposition})
+
+
+@router.patch("/comments/attachments/{attachment_id}")
+def rename_link_attachment(
+    attachment_id: UUID,
+    body: LinkLabelUpdate,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Change a link's label without replacing the link."""
+    row = db.query(CommentAttachment).filter(CommentAttachment.id == attachment_id).first()
+    if not row:
+        raise HTTPException(404, "Attachment not found")
+    if not row.link_url:
+        raise HTTPException(400, "Only link labels can be edited")
+    if current.role not in (UserRole.admin, UserRole.auditor) and row.uploaded_by != current.user.id:
+        raise HTTPException(403, "You can only rename your own links")
+    try:
+        row.original_name = clean_link_label(body.label, row.provider or "")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    db.commit()
+    db.refresh(row)
+    return comment_svc.serialize_attachment(row)
 
 
 @router.delete("/comments/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT)

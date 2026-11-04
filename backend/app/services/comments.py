@@ -48,12 +48,16 @@ def serialize_comment(db: Session, c, scope: str, me_id) -> dict:
 def serialize_attachment(a: CommentAttachment) -> dict:
     if a.link_url:
         kind = "link"
+        from app.services.task_board import display_link_label
+        shown_name = display_link_label(a.provider, a.original_name)
     elif a.width or (a.format or "").lower() in ("avif", "webp", "jpg", "jpeg", "png", "gif"):
         kind = "image"
+        shown_name = a.original_name
     else:
         kind = "file"
+        shown_name = a.original_name
     return {
-        "id": a.id, "comment_id": a.comment_id, "original_name": a.original_name,
+        "id": a.id, "comment_id": a.comment_id, "original_name": shown_name,
         "link_url": a.link_url, "provider": a.provider, "kind": kind,
         "size_bytes": a.size_bytes, "original_size": a.original_size,
         "width": a.width, "height": a.height, "original_width": a.original_width, "original_height": a.original_height,
@@ -126,7 +130,7 @@ async def store_attachment(db: Session, *, scope: str, scope_id, current, file: 
     return a
 
 
-def create_link_attachment(db: Session, *, scope: str, scope_id, current, url: str) -> CommentAttachment:
+def create_link_attachment(db: Session, *, scope: str, scope_id, current, url: str, label: str | None = None) -> CommentAttachment:
     """Attach a Google Drive / Dropbox share link (no file is copied — the link itself is the attachment)."""
     import re
     from urllib.parse import urlparse
@@ -139,14 +143,19 @@ def create_link_attachment(db: Session, *, scope: str, scope_id, current, url: s
         provider = "google_drive"
         m = re.search(r"/file/d/([\w-]+)", u) or re.search(r"[?&]id=([\w-]+)", u)
         open_url = f"https://drive.google.com/file/d/{m.group(1)}/view" if m else u
-        name = "Google Drive file"
+        name = None
     elif host in ("www.dropbox.com", "dropbox.com", "dl.dropboxusercontent.com"):
         provider = "dropbox"
         # dl=1 makes Dropbox serve the file directly instead of its preview page
         open_url = re.sub(r"([?&])dl=\d", r"\1dl=1", u) if "dl=" in u else (u + ("&dl=1" if "?" in u else "?dl=1"))
-        name = "Dropbox file"
+        name = None
     else:
         raise HTTPException(400, "Only Google Drive or Dropbox links are supported here.")
+    from app.services.task_board import clean_link_label
+    try:
+        name = clean_link_label(label if label is not None else name, provider)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     a = CommentAttachment(
         scope=scope, scope_id=scope_id, uploaded_by=current.user.id, uploader_name=display_name(db, current),
         storage_key="", storage_backend="link", link_url=open_url, provider=provider,

@@ -98,6 +98,7 @@ class TaskStatus(str, enum.Enum):
     todo = "todo"
     in_progress = "in_progress"
     in_review = "in_review"
+    approved = "approved"
     done = "done"
     blocked = "blocked"
 
@@ -289,6 +290,12 @@ class Task(Base):
         UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    staff_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    staff_notes_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    staff_notes_updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    staff_notes_updated_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -297,6 +304,24 @@ class Task(Base):
     project: Mapped["Project | None"] = relationship(back_populates="tasks")
     assignee: Mapped["VA | None"] = relationship()
     comments: Mapped[list["TaskComment"]] = relationship(back_populates="task", cascade="all, delete-orphan")
+    note_revisions: Mapped[list["TaskNoteRevision"]] = relationship(back_populates="task", cascade="all, delete-orphan")
+
+
+class TaskNoteRevision(Base):
+    """One save of the staff notes. The task row keeps the latest text."""
+
+    __tablename__ = "task_note_revisions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    body: Mapped[str] = mapped_column(Text, default="")
+    editor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    editor_name: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    task: Mapped["Task"] = relationship(back_populates="note_revisions")
 
 
 class TaskComment(Base):

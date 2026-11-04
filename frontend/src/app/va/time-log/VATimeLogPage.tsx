@@ -64,8 +64,8 @@ export function VATimeLogPage() {
     notes: "",
   })
   const [entryMode, setEntryMode] = useState<EntryMode>("range")
-  const [durationHours, setDurationHours] = useState(2)
-  const [durationMinutes, setDurationMinutes] = useState(15)
+  const [durationHours, setDurationHours] = useState(0)
+  const [durationMinutes, setDurationMinutes] = useState(0)
   const [descriptionLexical, setDescriptionLexical] = useState<Record<string, unknown> | null>(null)
   const [descriptionPlain, setDescriptionPlain] = useState("")
   const [pendingFiles, setPendingFiles] = useState<File[]>([])

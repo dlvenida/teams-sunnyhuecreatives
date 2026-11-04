@@ -76,6 +76,7 @@ DEFAULTS = {
     "booking_url": "",
     "booking_hide_pricing": True,
     "default_va_hourly_rate": "75.00",
+    "timezone": "Asia/Manila",
     "resend_api_key": "",
     "resend_from_email": "onboarding@resend.dev",
     "admin_notify_email": "janelaurine@gmail.com",

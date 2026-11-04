@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, getAuthUser } from "@/lib/api"
 import type { Client } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
@@ -25,10 +25,14 @@ interface VARate {
 
 export function VARatesPage() {
   const qc = useQueryClient()
+  const isManager = getAuthUser()?.role === "auditor"
   const [form, setForm] = useState({ client_id: "", pay_type: "hourly" as "hourly" | "package", payment_frequency: "biweekly" as "monthly" | "biweekly", currency: "PHP" as "PHP" | "USD", amount: "" })
   const [error, setError] = useState("")
 
-  const { data: clients = [] } = useQuery({ queryKey: ["va-clients"], queryFn: () => apiFetch<Client[]>("/va/clients") })
+  const { data: clients = [] } = useQuery({
+    queryKey: ["va-clients", isManager],
+    queryFn: () => apiFetch<Client[]>(isManager ? "/clients?active_only=true" : "/va/clients"),
+  })
   const { data: rates = [] } = useQuery({ queryKey: ["va-rates-mine"], queryFn: () => apiFetch<VARate[]>("/va-rates/mine") })
 
   const submit = useMutation({

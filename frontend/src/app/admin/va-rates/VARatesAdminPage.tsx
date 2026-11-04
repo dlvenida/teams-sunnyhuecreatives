@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
-import type { Client, VA } from "@/lib/types"
+import type { Client } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -9,10 +9,18 @@ import { StatusBadge } from "@/components/ui/badge"
 import { formatCurrency } from "@/lib/utils"
 import { Check, X } from "lucide-react"
 
+interface PayablePerson {
+  va_id: string
+  name: string
+  role: string
+  role_label: string
+}
+
 interface VARate {
   id: string
   va_id: string
   va_name?: string
+  person_role?: string | null
   client_id: string
   client_name?: string
   pay_type: "hourly" | "package"
@@ -36,7 +44,7 @@ export function VARatesAdminPage() {
     queryKey: ["va-rates-admin", filter],
     queryFn: () => apiFetch<VARate[]>(`/va-rates${filter === "all" ? "" : `?status_filter=${filter}`}`),
   })
-  const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
+  const { data: people = [] } = useQuery({ queryKey: ["team-rate-people"], queryFn: () => apiFetch<PayablePerson[]>("/va-rates/people") })
   const { data: clients = [] } = useQuery({ queryKey: ["clients"], queryFn: () => apiFetch<Client[]>("/clients") })
 
   const approve = useMutation({
@@ -69,18 +77,18 @@ export function VARatesAdminPage() {
   return (
     <div className="space-y-5 animate-fade-in">
       <div>
-        <h1 className="text-2xl font-extrabold tracking-tight">VA Rates</h1>
-        <p className="text-sm text-muted-foreground">One approved rate per VA per client. Approving or overriding replaces any previous approved rate for that pair.</p>
+        <h1 className="text-2xl font-extrabold tracking-tight">Team Rates</h1>
+        <p className="text-sm text-muted-foreground">One approved rate per person per client. Project Managers use this same form as VAs: hourly or package, PHP or USD, and monthly or bi-weekly. Approving or overriding replaces any previous approved rate for that pair.</p>
       </div>
 
       <Card>
         <CardHeader className="pb-2"><CardTitle>Admin override (auto-approved)</CardTitle></CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           <div>
-            <Label>VA</Label>
+            <Label>Person</Label>
             <Select value={form.va_id} onChange={(e) => setForm({ ...form, va_id: e.target.value })}>
               <option value="">Select…</option>
-              {vas.filter((v) => v.is_active).map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+              {people.map((person) => <option key={person.va_id} value={person.va_id}>{person.name} · {person.role_label}</option>)}
             </Select>
           </div>
           <div>
@@ -137,7 +145,7 @@ export function VARatesAdminPage() {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b bg-muted/40 text-left text-muted-foreground">
-                <th className="p-3">VA</th>
+                <th className="p-3">Person</th>
                 <th className="p-3">Client</th>
                 <th className="p-3">Type</th>
                 <th className="p-3">Frequency</th>
@@ -149,7 +157,7 @@ export function VARatesAdminPage() {
             <tbody>
               {rates.map((r) => (
                 <tr key={r.id} className="border-b">
-                  <td className="p-3 font-semibold">{r.va_name}</td>
+                  <td className="p-3 font-semibold">{r.va_name}{r.person_role === "Project Manager" ? " · Project Manager" : ""}</td>
                   <td className="p-3">{r.client_name}</td>
                   <td className="p-3 capitalize">{r.pay_type}{r.set_by_admin ? " · admin" : ""}</td>
                   <td className="p-3">{r.pay_type === "package" ? (r.payment_frequency === "biweekly" ? "Bi-weekly" : "Monthly") : "—"}</td>

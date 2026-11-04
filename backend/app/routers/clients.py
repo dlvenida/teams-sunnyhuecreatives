@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
+from app.services.pay_access import hide_team_money
 from app.models import (
     Client,
     ClientApprovalStatus,
@@ -103,7 +104,7 @@ def list_clients(
             q = q.filter(Client.approval_status == ClientApprovalStatus.approved)
     elif current.role != UserRole.admin and not include_pending:
         q = q.filter(Client.approval_status == ClientApprovalStatus.approved)
-    redact = current.role == UserRole.auditor
+    redact = hide_team_money(current.role)
     return [_client_response(c, redact) for c in q.order_by(Client.name).all()]
 
 
@@ -285,7 +286,7 @@ def client_detail(
     from app.routers.tasks import _serialize as serialize_task
     from app.routers.work_logs import _serialize_log
 
-    redact = current.role == UserRole.auditor
+    redact = hide_team_money(current.role)
     client = db.query(Client).options(_jl(Client.sub_clients)).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
@@ -642,7 +643,7 @@ def list_packages(
         .order_by(ClientPackage.is_default.desc(), ClientPackage.name)
         .all()
     )
-    if current.role == UserRole.auditor:
+    if hide_team_money(current.role):
         return [
             ClientPackageResponse(
                 id=p.id, client_id=p.client_id, name=p.name, billing_type=p.billing_type,

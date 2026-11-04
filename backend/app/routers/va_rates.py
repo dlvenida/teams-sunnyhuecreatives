@@ -8,19 +8,22 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_va
-from app.models import Client, RateStatus, VA, VARate
-from app.schemas import VARateAdminCreate, VARateCreate, VARateResponse
+from app.models import Client, RateStatus, User, UserRole, VA, VARate
+from app.schemas import PayablePerson, VARateAdminCreate, VARateCreate, VARateResponse
 from app.services.notifications import admin_user_ids, push, va_user_id
+from app.services.pay_access import person_role_label, rates_notice_path
 from app.services.va_rates import frequency_for_save, get_approved_rate
 
 router = APIRouter(prefix="/va-rates", tags=["va-rates"])
 
 
 def _serialize(rate: VARate, active_id: UUID | None = None) -> VARateResponse:
+    owner = rate.va.user if rate.va and getattr(rate.va, "user", None) else None
     return VARateResponse(
         id=rate.id,
         va_id=rate.va_id,
         va_name=rate.va.name if rate.va else None,
+        person_role=person_role_label(owner.role) if owner else None,
         client_id=rate.client_id,
         client_name=rate.client.name if rate.client else None,
         pay_type=rate.pay_type,
@@ -40,13 +43,18 @@ def _serialize(rate: VARate, active_id: UUID | None = None) -> VARateResponse:
 def _load(db: Session, rate_id: UUID) -> VARate:
     rate = (
         db.query(VARate)
-        .options(joinedload(VARate.va), joinedload(VARate.client))
+        .options(joinedload(VARate.va).joinedload(VA.user), joinedload(VARate.client))
         .filter(VARate.id == rate_id)
         .first()
     )
     if not rate:
         raise HTTPException(status_code=404, detail="Rate not found")
     return rate
+
+
+def _owner_role(rate: VARate):
+    owner = rate.va.user if rate.va and getattr(rate.va, "user", None) else None
+    return owner.role if owner else "va"
 
 
 def _supersede_approved(db: Session, va_id: UUID, client_id: UUID, *, except_id: UUID | None, reviewer_id: UUID | None) -> None:
@@ -72,7 +80,7 @@ def _supersede_approved(db: Session, va_id: UUID, client_id: UUID, *, except_id:
 def my_rates(current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
     rows = (
         db.query(VARate)
-        .options(joinedload(VARate.va), joinedload(VARate.client))
+        .options(joinedload(VARate.va).joinedload(VA.user), joinedload(VARate.client))
         .filter(VARate.va_id == current.va_id)
         .order_by(VARate.created_at.desc())
         .all()
@@ -138,7 +146,7 @@ def submit_rate(
     push(db, admins, "system", title, detail, "/admin/va-rates")
     email_user_ids(db, admins, title=title, paragraphs=[detail], link="/admin/va-rates", template_key="rate_request", link_label="Open rate requests")
     from app.services.notifications import admin_and_auditor_user_ids
-    pm_ids = [uid for uid in admin_and_auditor_user_ids(db) if uid not in set(admins)]
+    pm_ids = [uid for uid in admin_and_auditor_user_ids(db) if uid not in set(admins) and uid != current.user.id]
     push(db, pm_ids, "system", title, detail, "/admin/users")
     email_user_ids(db, pm_ids, title=title, paragraphs=[detail], link="/admin/users", template_key="rate_request", link_label="Open the team")
     return _serialize(rate)
@@ -151,7 +159,7 @@ def list_rates(
     status_filter: str | None = None,
     va_id: UUID | None = None,
 ):
-    q = db.query(VARate).options(joinedload(VARate.va), joinedload(VARate.client))
+    q = db.query(VARate).options(joinedload(VARate.va).joinedload(VA.user), joinedload(VARate.client))
     if status_filter:
         q = q.filter(VARate.status == status_filter)
     if va_id:
@@ -162,6 +170,36 @@ def list_rates(
         active = get_approved_rate(db, r.va_id, r.client_id)
         out.append(_serialize(r, active.id if active else None))
     return out
+
+
+@router.get("/people", response_model=list[PayablePerson])
+def payable_people(_: Annotated[CurrentUser, Depends(require_admin)], db: Annotated[Session, Depends(get_db)]):
+    """VAs and Project Managers who can have a rate. Same fields, same approval."""
+    from app.routers.auth import _ensure_worker_profile
+
+    for user in db.query(User).filter(User.role == UserRole.auditor, User.is_active.is_(True)).all():
+        _ensure_worker_profile(db, user)
+    rows = (
+        db.query(VA, User)
+        .join(User, VA.user_id == User.id)
+        .filter(
+            User.role.in_([UserRole.va, UserRole.auditor]),
+            User.is_active.is_(True),
+            VA.is_active.is_(True),
+        )
+        .all()
+    )
+    people = [
+        PayablePerson(
+            va_id=va.id,
+            name=(user.display_name or va.name or user.email).strip(),
+            role=user.role.value,
+            role_label=person_role_label(user.role),
+        )
+        for va, user in rows
+    ]
+    people.sort(key=lambda person: (person.role != "auditor", person.name.lower()))
+    return people
 
 
 @router.post("", response_model=VARateResponse, status_code=status.HTTP_201_CREATED)
@@ -204,7 +242,7 @@ def admin_set_rate(
         "system",
         "💵 Your rate was updated",
         f"{rate.client.name if rate.client else 'Client'} · {rate.pay_type.value} · {rate.currency.value} {rate.amount} (set by admin)",
-        "/va/rates",
+        rates_notice_path(_owner_role(rate)),
     )
     return _serialize(rate, rate.id)
 
@@ -233,7 +271,7 @@ def approve_rate(
         "system",
         "✅ Rate approved",
         f"{rate.client.name if rate.client else 'Client'} · {rate.pay_type.value} · {rate.currency.value} {rate.amount}",
-        "/va/rates",
+        rates_notice_path(_owner_role(rate)),
     )
     return _serialize(rate, rate.id)
 
@@ -258,6 +296,6 @@ def reject_rate(
         "system",
         "❌ Rate rejected",
         f"{rate.client.name if rate.client else 'Client'} · please submit a new rate or contact Jane.",
-        "/va/rates",
+        rates_notice_path(_owner_role(rate)),
     )
     return _serialize(rate)

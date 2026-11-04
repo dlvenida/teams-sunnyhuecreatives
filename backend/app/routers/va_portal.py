@@ -752,6 +752,8 @@ def submit_timesheet(
     review_path = f"/admin/payroll?timesheet={row.id}"
     review_url = f"{_settings.app_url.rstrip('/')}{review_path}"
     for person in staff:
+        if person.id == current.user.id:
+            continue
         first = first_name_of(person)
         title = f"Hi {first}, {va_first} submitted {pronoun} timesheet"
         push(db, [person.id], "log", title, period_line, review_path)

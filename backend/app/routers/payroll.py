@@ -17,7 +17,6 @@ from app.models import (
     TaskStatus,
     TimesheetStatus,
     TimesheetSubmission,
-    UserRole,
     PackagePeriodOverride,
     PayType,
     RateStatus,
@@ -53,6 +52,7 @@ from app.services.package_overrides import (
     period_is_paid,
     plan_override,
 )
+from app.services.pay_access import hide_team_money, may_review_timesheet, pay_notice_path, person_role_label, role_value
 from app.services.va_rates import combine_period_pay, get_approved_rate, package_amount_for_window, package_period_amounts, resolved_frequency
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
@@ -180,6 +180,7 @@ def calculate_payroll(
     results = []
     total_php = Decimal("0")
     total_usd = Decimal("0")
+    redact = hide_team_money(current.role)
     period_overrides = load_overrides(db, set(va_map), period_start, period_end)
     prev_overrides = load_overrides(db, set(va_map), prev_start, prev_end)
     for va_id, data in va_map.items():
@@ -216,7 +217,6 @@ def calculate_payroll(
             log_pay_by_client[entry.client_id] = log_pay_by_client.get(entry.client_id, Decimal("0")) + entry.va_pay
         data["total_pay"] = combine_period_pay(package_dues, log_pay_by_client)
 
-        redact = current.role == UserRole.auditor
         entries = [
             PayrollEntry(
                 id=e.id, work_date=e.work_date, client_name=e.client.name, description=e.description_plain,
@@ -319,8 +319,11 @@ def calculate_payroll(
             key=lambda b: b.hours,
             reverse=True,
         )
+        owner = getattr(va, "user", None)
         results.append(PayrollVAResult(
-            va_id=va.id, va_name=full_name, currency=va.currency,
+            va_id=va.id, va_name=full_name,
+            role_label=person_role_label(owner.role) if owner else None,
+            currency=va.currency,
             total_hours=data["total_hours"],
             total_pay=None if redact else data["total_pay"],
             entry_count=len(entries), entries=entries,
@@ -351,8 +354,8 @@ def calculate_payroll(
     results.sort(key=lambda r: r.total_hours, reverse=True)
     return PayrollResponse(
         period_start=period_start, period_end=period_end, vas=results,
-        total_php=None if current.role == UserRole.auditor else total_php,
-        total_usd=None if current.role == UserRole.auditor else total_usd,
+        total_php=None if redact else total_php,
+        total_usd=None if redact else total_usd,
         total_hours=sum((r.total_hours for r in results), Decimal("0")),
         total_pending_hours=sum((r.pending_hours for r in results), Decimal("0")),
     )
@@ -487,7 +490,7 @@ def timesheet_entries(
         row.period_start,
         row.period_end,
     ).order_by(WorkLog.work_date, WorkLog.start_time).all()
-    redact = current.role == UserRole.auditor
+    redact = hide_team_money(current.role)
     package_pay = None
     if include_package_pay(current.role.value):
         saved = load_overrides(db, {row.va_id}, row.period_start, row.period_end)
@@ -559,6 +562,9 @@ def review_timesheet(
     )
     if not row:
         raise HTTPException(404, "Timesheet not found")
+    owner_id = row.va.user_id if row.va else None
+    if not may_review_timesheet(current.role, current.user.id, owner_id):
+        raise HTTPException(403, "A Project Manager cannot approve her own timesheet. An Admin has to do that.")
     row.status = TimesheetStatus.reviewed
     row.review_note = None
     row.reviewed_at = datetime.now(timezone.utc)
@@ -640,6 +646,9 @@ def reject_timesheet(
     )
     if not row:
         raise HTTPException(404, "Timesheet not found")
+    owner_id = row.va.user_id if row.va else None
+    if not may_review_timesheet(current.role, current.user.id, owner_id):
+        raise HTTPException(403, "A Project Manager cannot reject her own timesheet. An Admin has to do that.")
     paid = db.query(PayrollRun).filter(
         PayrollRun.va_id == row.va_id,
         PayrollRun.period_start == row.period_start,
@@ -676,7 +685,8 @@ def _notify_timesheet_va(db: Session, row: TimesheetSubmission, current: Current
     if uid and uid == current.user.id:
         return
     event = "timesheet_approved" if approved else "timesheet_rejected"
-    push(db, [uid], "log", title, " ".join(lines), "/va/payroll", event_key=event)
+    link = pay_notice_path(user.role if user else "va")
+    push(db, [uid], "log", title, " ".join(lines), link, event_key=event)
     if user and user.email:
         try:
             from app.services.notification_prefs import va_channel_enabled
@@ -686,7 +696,7 @@ def _notify_timesheet_va(db: Session, row: TimesheetSubmission, current: Current
                     title,
                     title,
                     lines,
-                    f"{app_settings.app_url.rstrip('/')}/va/payroll",
+                    f"{app_settings.app_url.rstrip('/')}{link}",
                     "Open your timesheets",
                     event,
                 )
@@ -839,8 +849,10 @@ def mark_paid(
     db.commit()
     db.refresh(run)
     va = db.query(VA).options(joinedload(VA.user)).filter(VA.id == body.va_id).first()
+    owner = va.user if va and getattr(va, "user", None) else None
+    paid_link = pay_notice_path(owner.role) if owner and role_value(owner.role) == "auditor" else "/va/time-log"
     push(db, [va_user_id(db, body.va_id)], "log", "💸 Payroll sent for your work",
-         f"{body.period_start} – {body.period_end} · {body.total_hours} hrs{(' via ' + body.method) if body.method else ''}. Thank you!", "/va/time-log")
+         f"{body.period_start} – {body.period_end} · {body.total_hours} hrs{(' via ' + body.method) if body.method else ''}. Thank you!", paid_link)
     return PayrollRunResponse(
         id=run.id, va_id=run.va_id, va_name=va.name if va else None,
         period_start=run.period_start, period_end=run.period_end, total_hours=run.total_hours,

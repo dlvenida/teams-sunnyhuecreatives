@@ -522,7 +522,7 @@ export function PayrollPage() {
 
         {/* VA cards */}
         <div>
-          <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Per VA — click a card for entries</p>
+          <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Per person. Click a card for entries</p>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {payroll.vas.map(va => (
               <div
@@ -537,7 +537,7 @@ export function PayrollPage() {
                   <div className="flex items-start gap-3">
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-extrabold text-primary">{initials(va.va_name)}</span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-bold">{va.va_name}{showPricing ? <span className="text-[11px] font-semibold text-muted-foreground"> ({va.currency})</span> : null}</span>
+                      <span className="block truncate text-sm font-bold">{va.va_name}{va.role_label === "Project Manager" ? <span className="ml-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">Project Manager</span> : null}{showPricing ? <span className="text-[11px] font-semibold text-muted-foreground"> ({va.currency})</span> : null}</span>
                       {showPricing && <span className="block truncate text-[11px] text-muted-foreground">{va.payment_label ?? "No payment details on profile"}</span>}
                     </span>
                     {va.change_pct != null && n(va.prev_hours) > 0 && (

@@ -398,7 +398,9 @@ export function TimesheetReviewPanel({
   })
 
   const sheet = data?.timesheet
-  const isAdmin = getAuthUser()?.role === "admin"
+  const me = getAuthUser()
+  const isAdmin = me?.role === "admin"
+  const ownTimesheet = me?.role === "auditor" && !!sheet?.va_id && me.vaId === sheet.va_id
   const reviewed = sheet?.status === "reviewed"
   const rejected = sheet?.status === "rejected"
   const busy = approve.isPending || reject.isPending
@@ -515,17 +517,19 @@ export function TimesheetReviewPanel({
           )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
-              Approve to unlock the payslip, or reject so the VA can fix and resubmit. Project Managers do not see rates or pay on this screen.
+              {ownTimesheet
+                ? "This is your timesheet. An Admin approves it and edits the pay. You cannot approve your own."
+                : "Approve to unlock the payslip, or reject so the VA can fix and resubmit. Project Managers do not see rates or pay on this screen."}
             </p>
             <div className="flex flex-wrap gap-2">
               {!inline && onClose && <Button variant="outline" onClick={onClose}>Close</Button>}
-              {!reviewed && (
+              {!reviewed && !ownTimesheet && (
                 <Button variant="danger" disabled={busy || isLoading} onClick={() => reject.mutate()}>
                   <XCircle className="h-4 w-4" />
                   {reject.isPending ? "Rejecting…" : "Reject"}
                 </Button>
               )}
-              {!reviewed && (
+              {!reviewed && !ownTimesheet && (
                 <Button variant="success" disabled={busy || isLoading} onClick={() => approve.mutate()}>
                   <CheckCircle2 className="h-4 w-4" />
                   {approve.isPending ? "Approving…" : "Approve timesheet"}
@@ -536,7 +540,7 @@ export function TimesheetReviewPanel({
                   <CheckCircle2 className="h-3.5 w-3.5" /> Approved
                 </span>
               )}
-              {reviewed && (
+              {reviewed && !ownTimesheet && (
                 <Button variant="danger" disabled={busy} onClick={() => reject.mutate()}>
                   <XCircle className="h-4 w-4" /> Reject
                 </Button>

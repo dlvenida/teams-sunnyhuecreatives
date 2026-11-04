@@ -15,6 +15,7 @@ from app.auth import (
 )
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
+from app.services.pay_access import hide_team_money
 from app.models import ActivityLog, Project, Task, TaskStatus, TimeClockEntry, User, UserRole, VA, WorkLog, WorkLogStatus
 from app.schemas import (
     AppUserResponse,
@@ -272,7 +273,7 @@ def user_detail(
     from app.routers.timeclock import _serialize as serialize_clock
     from app.routers.work_logs import _serialize_log
 
-    redact = current.role == UserRole.auditor
+    redact = hide_team_money(current.role)
     u = db.query(User).filter(User.id == user_id).first()
     if not u:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

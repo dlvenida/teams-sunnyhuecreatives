@@ -216,6 +216,7 @@ export interface PayrollVA {
     client_id?: string | null
     calculated_pay?: string | null
     override_amount?: string | null
+    deduction?: string | null
     skipped?: boolean | null
     adjusted?: boolean | null
     note?: string | null

@@ -12,7 +12,7 @@ import { PayrollDocument } from "@/components/pdf/PayrollDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { PayslipPaperModal } from "@/components/payroll/PayslipPaperModal"
 import { TimesheetReviewPanel } from "@/components/payroll/TimesheetReviewPanel"
-import { buildPayslip } from "@/lib/payslip"
+import { buildPayslip, type PayslipClient } from "@/lib/payslip"
 import { TimeEntryModeFields, durationError, splitStoredHours, timingBody, type EntryMode } from "@/components/logs/TimeEntryModeFields"
 import { renderPayslipHtml } from "@/lib/payslipHtml"
 import { generatePdfBlob } from "@/lib/pdf"
@@ -26,6 +26,116 @@ const PERIODS = [
 ]
 function initials(name: string) { return name.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase() }
 const n = (v?: string | number | null) => Number(v ?? 0)
+
+type PackageDraft = { skipped: boolean; amount: string; note: string }
+
+function overlayVa(va: PayrollVA, drafts: Record<string, PackageDraft>): PayrollVA {
+  if (!va.by_client?.length) return va
+  let changed = false
+  const by_client = va.by_client.map((row) => {
+    if (row.pay_type !== "package" || !row.client_id) return row
+    const draft = drafts[`${va.va_id}:${row.client_id}`]
+    if (!draft) return row
+    changed = true
+    const calculated = n(row.calculated_pay ?? row.pay)
+    const skipped = draft.skipped
+    let effective = calculated
+    if (!skipped && draft.amount.trim() !== "") {
+      const parsed = Number(draft.amount)
+      if (Number.isFinite(parsed) && parsed >= 0) effective = Math.round(parsed * 100) / 100
+    }
+    if (skipped) effective = 0
+    const adjusted = !skipped && Math.round(effective * 100) !== Math.round(calculated * 100)
+    return { ...row, pay: effective.toFixed(2), skipped, adjusted, note: draft.note.trim() || null }
+  })
+  if (!changed) return va
+  const total = by_client.reduce((sum, row) => sum + n(row.pay), 0)
+  return { ...va, by_client, total_pay: total.toFixed(2) }
+}
+
+function overlayPayroll<T extends { vas: PayrollVA[]; total_php?: string | null; total_usd?: string | null }>(
+  payroll: T | undefined,
+  drafts: Record<string, PackageDraft>,
+): T | undefined {
+  if (!payroll) return payroll
+  const vas = payroll.vas.map((va) => overlayVa(va, drafts))
+  let php = 0
+  let usd = 0
+  for (const va of vas) {
+    const pay = n(va.total_pay)
+    if (va.currency === "USD") usd += pay
+    else php += pay
+  }
+  return { ...payroll, vas, total_php: php.toFixed(2), total_usd: usd.toFixed(2) }
+}
+
+function PackagePeriodFields({
+  client,
+  currency,
+  locked,
+  draft,
+  onDraft,
+  onCommit,
+}: {
+  client: PayslipClient
+  currency: "PHP" | "USD"
+  locked: boolean
+  draft?: PackageDraft
+  onDraft: (next: PackageDraft) => void
+  onCommit: (next: PackageDraft) => void
+}) {
+  const skipped = draft ? draft.skipped : !!client.skipped
+  const fallback = client.overrideAmount ?? client.originalAmount ?? client.amount
+  const amountValue = draft ? draft.amount : fallback.toFixed(2)
+  const noteValue = draft ? draft.note : (client.note || "")
+  const current = (): PackageDraft => ({ skipped, amount: amountValue, note: noteValue })
+  return (
+    <div className="mt-2 space-y-1.5">
+      <p className="text-[11px] font-semibold text-muted-foreground">Fixed Package</p>
+      <label className="flex items-center gap-2 text-[11px] font-semibold">
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5 accent-primary"
+          checked={!skipped}
+          disabled={locked}
+          onChange={(e) => {
+            const next = { ...current(), skipped: !e.target.checked }
+            onDraft(next)
+            onCommit(next)
+          }}
+        />
+        Pay this period
+      </label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          className="h-8 w-28"
+          aria-label={`${client.name} amount this period`}
+          disabled={locked || skipped}
+          value={amountValue}
+          onChange={(e) => onDraft({ ...current(), amount: e.target.value })}
+          onBlur={() => onCommit(draft ?? current())}
+        />
+        {skipped && <span className="text-[11px] font-semibold text-amber-800">Skipped · {formatCurrency(0, currency)}</span>}
+        {!skipped && client.adjusted && client.originalAmount != null && (
+          <span className="text-[11px] font-semibold text-primary">Adjusted · was {formatCurrency(client.originalAmount, currency)}</span>
+        )}
+      </div>
+      <Input
+        className="h-8"
+        placeholder="Reason (optional)"
+        aria-label={`${client.name} reason`}
+        disabled={locked}
+        value={noteValue}
+        onChange={(e) => onDraft({ ...current(), note: e.target.value })}
+        onBlur={() => onCommit(draft ?? current())}
+      />
+      {locked && <p className="text-[11px] text-muted-foreground">This period is paid. Undo Paid to change it.</p>}
+    </div>
+  )
+}
 
 export function PayrollPage() {
   const qc = useQueryClient()
@@ -89,7 +199,7 @@ export function PayrollPage() {
   }, [searchParams, pendingSheets])
 
   // Auto-computes whenever a filter changes — no Calculate button needed
-  const { data: payroll, isLoading } = useQuery({
+  const { data: payrollSource, isLoading } = useQuery({
     queryKey: ["payroll", vaId, period, dateFrom, dateTo],
     queryFn: () => apiFetch<PayrollResponse>("/payroll/calculate", {
       method: "POST",
@@ -97,6 +207,16 @@ export function PayrollPage() {
     }),
     enabled: period !== "custom" || (!!dateFrom && !!dateTo),
   })
+  const [drafts, setDrafts] = useState<Record<string, PackageDraft>>({})
+  const [overrideError, setOverrideError] = useState("")
+  useEffect(() => {
+    setDrafts({})
+    setOverrideError("")
+  }, [vaId, period, dateFrom, dateTo])
+  const payroll = useMemo(
+    () => overlayPayroll(payrollSource, drafts),
+    [payrollSource, drafts],
+  )
   const { data: runs = [] } = useQuery({
     queryKey: ["payroll-runs"],
     queryFn: () => apiFetch<PayrollRun[]>("/payroll/runs"),
@@ -113,6 +233,46 @@ export function PayrollPage() {
     onSuccess: () => { setMarkPaidError(""); invalidate() },
     onError: (err: Error) => setMarkPaidError(err.message),
   })
+  const saveOverride = async (va: PayrollVA, clientId: string, draft: PackageDraft, calculated: number) => {
+    if (va.is_paid || !payroll?.period_start || !payroll.period_end) return
+    const raw = draft.amount.trim()
+    let amount: number | null = null
+    if (raw !== "") {
+      const parsed = Number(raw)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setOverrideError("Amount cannot be negative.")
+        return
+      }
+      amount = Math.round(parsed * 100) / 100
+      if (amount === Math.round(calculated * 100) / 100) amount = null
+    }
+    const key = `${va.va_id}:${clientId}`
+    try {
+      await apiFetch("/payroll/package-overrides", {
+        method: "PUT",
+        body: JSON.stringify({
+          va_id: va.va_id,
+          client_id: clientId,
+          period_start: payroll.period_start,
+          period_end: payroll.period_end,
+          skipped: draft.skipped,
+          amount,
+          note: draft.note.trim() || null,
+        }),
+      })
+      setOverrideError("")
+      setDrafts((prev) => {
+        const cur = prev[key]
+        if (!cur || cur.amount !== draft.amount || cur.skipped !== draft.skipped || cur.note !== draft.note) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+      invalidate()
+    } catch (err) {
+      setOverrideError(err instanceof Error ? err.message : "Could not save this period")
+    }
+  }
   const voidRun = useMutation({ mutationFn: (id: string) => apiFetch(`/payroll/runs/${id}`, { method: "DELETE" }), onSuccess: invalidate })
   const saveEntry = useMutation({
     mutationFn: () =>
@@ -203,6 +363,7 @@ export function PayrollPage() {
         {payroll && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">{formatDate(payroll.period_start)} – {formatDate(payroll.period_end)}</p>}
       </div>
       {markPaidError && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{markPaidError}</p>}
+      {overrideError && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{overrideError}</p>}
       {pdfError && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{pdfError}</p>}
 
       {pendingSheets.length > 0 && (
@@ -405,12 +566,19 @@ export function PayrollPage() {
             <CardContent className="space-y-4 p-4">
               {slip.clients.length === 0 && <p className="text-sm text-muted-foreground">No approved entries in this period yet.</p>}
               {slip.clients.map((client) => (
-                <div key={client.name} className="overflow-hidden rounded-2xl border">
+                <div key={client.clientId || client.name} className={cn("overflow-hidden rounded-2xl border", client.skipped && "opacity-70")}>
                   <div className="flex flex-wrap items-end justify-between gap-2 bg-primary/5 px-3 py-2">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <p className="font-display text-sm font-bold text-primary">{client.name}</p>
-                      {showPricing && client.payType === "package" && (
-                        <p className="text-[11px] font-semibold text-muted-foreground">Fixed Package</p>
+                      {showPricing && client.payType === "package" && client.clientId && (
+                        <PackagePeriodFields
+                          client={client}
+                          currency={va.currency}
+                          locked={!!va.is_paid}
+                          draft={drafts[`${va.va_id}:${client.clientId}`]}
+                          onDraft={(next) => setDrafts((prev) => ({ ...prev, [`${va.va_id}:${client.clientId}`]: next }))}
+                          onCommit={(next) => saveOverride(va, client.clientId!, next, client.originalAmount ?? client.amount)}
+                        />
                       )}
                       {showPricing && client.payType !== "package" && client.rate != null && (
                         <p className="text-[11px] text-muted-foreground">
@@ -420,7 +588,7 @@ export function PayrollPage() {
                     </div>
                     <p className="text-xs font-semibold">
                       {client.hours.toFixed(2)} hrs
-                      {showPricing ? ` · ${formatCurrency(client.amount, va.currency)}` : ""}
+                      {showPricing ? ` · ${client.skipped ? "Skipped · " : ""}${formatCurrency(client.amount, va.currency)}` : ""}
                     </p>
                   </div>
                   <table className="w-full text-xs">
@@ -473,7 +641,7 @@ export function PayrollPage() {
                   {showPricing && (
                     <p className="px-3 py-2 text-right text-[11px] text-muted-foreground">
                       {client.name} subtotal · {client.hours.toFixed(2)} hrs
-                      {client.payType === "package" ? " · Fixed Package" : client.rate != null ? ` × ${formatCurrency(client.rate, va.currency)}/hr` : ""}
+                      {client.payType === "package" ? (client.skipped ? " · Skipped" : client.adjusted ? " · Fixed Package, Adjusted" : " · Fixed Package") : client.rate != null ? ` × ${formatCurrency(client.rate, va.currency)}/hr` : ""}
                       {" · "}{formatCurrency(client.amount, va.currency)}
                     </p>
                   )}
@@ -563,9 +731,9 @@ export function PayrollPage() {
               <div key={client.name} className="flex items-start justify-between gap-3 border-b py-2 text-xs">
                 <div>
                   <p className="font-bold">{client.name}</p>
-                  <p className="text-[11px] text-muted-foreground">{client.tasks.length} task{client.tasks.length === 1 ? "" : "s"} · {client.hours.toFixed(2)} hrs{client.payType === "package" ? " · Fixed Package" : client.rate != null ? ` × ${formatCurrency(client.rate, payReview.currency)}/hr` : ""}</p>
+                  <p className="text-[11px] text-muted-foreground">{client.tasks.length} task{client.tasks.length === 1 ? "" : "s"} · {client.hours.toFixed(2)} hrs{client.skipped ? " · Skipped" : client.payType === "package" ? (client.adjusted ? " · Fixed Package, Adjusted" : " · Fixed Package") : client.rate != null ? ` × ${formatCurrency(client.rate, payReview.currency)}/hr` : ""}</p>
                 </div>
-                <p className="font-bold">{formatCurrency(client.amount, payReview.currency)}</p>
+                <p className="font-bold">{client.skipped ? "Skipped · " : ""}{formatCurrency(client.amount, payReview.currency)}</p>
               </div>
             ))}
             <p className="mt-3 text-right font-display text-2xl font-bold text-primary">

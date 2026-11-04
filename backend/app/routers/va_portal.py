@@ -23,6 +23,7 @@ from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionRe
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
 from app.services.notifications import push
+from app.services.package_overrides import effective_package_amount, load_overrides
 from app.services.va_rates import combine_period_pay, get_approved_rate, package_flats_for_period, package_period_amounts, resolve_log_pay
 from app.services.work_log_entry import apply_work_log_timing, resolve_timing
 from app.services.work_log_overlap import assert_no_time_overlap
@@ -299,6 +300,19 @@ def my_earnings(
         or (va.name if va else None)
     )
 
+    def _package_dues(start: date, end: date) -> dict:
+        saved = load_overrides(db, {current.va_id}, start, end)
+        dues: dict = {}
+        for cid, _name, calculated in package_period_amounts(db, current.va_id, start, end):
+            row = saved.get((current.va_id, cid))
+            effective, _skipped, _adjusted = effective_package_amount(
+                calculated,
+                skipped=bool(row.skipped) if row else False,
+                amount=row.amount if row else None,
+            )
+            dues[cid] = effective
+        return dues
+
     def period_stats(start: date | None, end: date | None):
         subset = [l for l in logs if (start is None or l.work_date >= start) and (end is None or l.work_date <= end)]
         hours = sum((l.hours for l in subset), Decimal("0"))
@@ -312,7 +326,7 @@ def my_earnings(
             flats = package_flats_for_period(db, current.va_id, set(log_pay), dates_by_client=dates_by_client)
             earned = combine_period_pay(flats, log_pay)
         else:
-            dues = {cid: amount for cid, _name, amount in package_period_amounts(db, current.va_id, start, end)}
+            dues = _package_dues(start, end)
             earned = combine_period_pay(dues, log_pay)
         return {
             "hours": str(hours),
@@ -347,14 +361,21 @@ def my_earnings(
                 if rate:
                     by_client_map[key]["currency"] = rate.currency.value
     else:
+        saved = load_overrides(db, {current.va_id}, range_start, range_end)
         for cid, name, flat in package_period_amounts(db, current.va_id, range_start, range_end):
+            override = saved.get((current.va_id, cid))
+            effective, _skipped, _adjusted = effective_package_amount(
+                flat,
+                skipped=bool(override.skipped) if override else False,
+                amount=override.amount if override else None,
+            )
             key = str(cid)
             row = by_client_map.setdefault(
                 key,
                 {"client_id": key, "client_name": name, "hours": Decimal("0"), "earned": Decimal("0"), "pay_type": "package", "currency": currency, "status": "Approved"},
             )
             row["client_name"] = name
-            row["earned"] = flat
+            row["earned"] = effective
             row["pay_type"] = "package"
             rate = get_approved_rate(db, current.va_id, cid)
             if rate:

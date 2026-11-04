@@ -18,6 +18,7 @@ from app.models import (
     TimesheetStatus,
     TimesheetSubmission,
     UserRole,
+    PackagePeriodOverride,
     PayType,
     RateStatus,
     VA,
@@ -26,6 +27,8 @@ from app.models import (
     WorkLogStatus,
 )
 from app.schemas import (
+    PackageOverrideResponse,
+    PackageOverrideUpsert,
     PayrollBreakdown,
     PayrollDay,
     PayrollEntry,
@@ -42,7 +45,13 @@ from app.services.log_display import approval_task_label, log_task_name
 from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
 from app.services.payroll_calendar import filter_logs_in_pay_period
-from app.services.va_rates import combine_period_pay, package_period_amounts
+from app.services.package_overrides import (
+    effective_package_amount,
+    load_overrides,
+    period_is_paid,
+    plan_override,
+)
+from app.services.va_rates import combine_period_pay, get_approved_rate, package_amount_for_window, package_period_amounts, resolved_frequency
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
@@ -169,13 +178,35 @@ def calculate_payroll(
     results = []
     total_php = Decimal("0")
     total_usd = Decimal("0")
+    period_overrides = load_overrides(db, set(va_map), period_start, period_end)
+    prev_overrides = load_overrides(db, set(va_map), prev_start, prev_end)
     for va_id, data in va_map.items():
         va = data["va"]
         # Package pay comes from the approved rate for this period, never from logged hours.
+        # A saved override can skip a client or replace the amount for this period only.
         package_rows = package_rows_by_va.get(va_id)
         if package_rows is None:
             package_rows = package_period_amounts(db, va_id, period_start, period_end)
-        package_dues = {cid: amount for cid, _name, amount in package_rows}
+        package_lines: list[dict] = []
+        package_dues: dict = {}
+        for cid, name, calculated in package_rows:
+            saved = period_overrides.get((va_id, cid))
+            effective, skipped, adjusted = effective_package_amount(
+                calculated,
+                skipped=bool(saved.skipped) if saved else False,
+                amount=saved.amount if saved else None,
+            )
+            package_dues[cid] = effective
+            package_lines.append({
+                "client_id": cid,
+                "name": name,
+                "calculated": calculated,
+                "effective": effective,
+                "override_amount": saved.amount if saved else None,
+                "skipped": skipped,
+                "adjusted": adjusted,
+                "note": (saved.note or "").strip() or None if saved else None,
+            })
         log_pay_by_client: dict = {}
         for entry in data["entries"]:
             log_pay_by_client[entry.client_id] = log_pay_by_client.get(entry.client_id, Decimal("0")) + entry.va_pay
@@ -207,20 +238,28 @@ def calculate_payroll(
             b = by_client.setdefault(l.client.name, {
                 "hours": Decimal("0"), "pay": Decimal("0"), "client_id": l.client_id,
                 "rate": l.va_rate, "pay_type": "hourly",
+                "calculated_pay": None, "skipped": False, "adjusted": False, "note": None,
             })
             b["hours"] += l.hours
             b["pay"] += l.va_pay
             if l.va_rate is not None:
                 b["rate"] = l.va_rate
             daily_map[l.work_date] = daily_map.get(l.work_date, Decimal("0")) + l.hours
-        for cid, name, flat in package_rows:
-            b = by_client.setdefault(name, {
-                "hours": Decimal("0"), "pay": Decimal("0"), "client_id": cid,
-                "rate": flat, "pay_type": "package",
+        for line in package_lines:
+            b = by_client.setdefault(line["name"], {
+                "hours": Decimal("0"), "pay": Decimal("0"), "client_id": line["client_id"],
+                "rate": line["calculated"], "pay_type": "package",
+                "calculated_pay": line["calculated"], "override_amount": None, "skipped": False, "adjusted": False, "note": None,
             })
-            b["pay"] = flat
-            b["rate"] = flat
+            b["pay"] = line["effective"]
+            b["rate"] = line["effective"] if not line["skipped"] else line["calculated"]
             b["pay_type"] = "package"
+            b["client_id"] = line["client_id"]
+            b["calculated_pay"] = line["calculated"]
+            b["override_amount"] = line["override_amount"]
+            b["skipped"] = line["skipped"]
+            b["adjusted"] = line["adjusted"]
+            b["note"] = line["note"]
         daily = []
         d = period_start
         while d <= period_end:
@@ -236,7 +275,15 @@ def calculate_payroll(
         sheet = sheets.get(va_id)
         change = float((data["total_hours"] - prev_hours) / prev_hours * 100) if prev_hours > 0 else None
         prev_rows = package_period_amounts(db, va_id, prev_start, prev_end)
-        prev_dues = {cid: amount for cid, _name, amount in prev_rows}
+        prev_dues = {}
+        for cid, _name, calculated in prev_rows:
+            saved = prev_overrides.get((va_id, cid))
+            effective, _skipped, _adjusted = effective_package_amount(
+                calculated,
+                skipped=bool(saved.skipped) if saved else False,
+                amount=saved.amount if saved else None,
+            )
+            prev_dues[cid] = effective
         prev_log_pay: dict = {}
         for entry in va_prev:
             prev_log_pay[entry.client_id] = prev_log_pay.get(entry.client_id, Decimal("0")) + entry.va_pay
@@ -253,6 +300,12 @@ def calculate_payroll(
                     pay=None if redact else v["pay"],
                     rate=None if redact else v.get("rate"),
                     pay_type=None if redact else v.get("pay_type"),
+                    client_id=None if redact else v.get("client_id"),
+                    calculated_pay=None if redact else v.get("calculated_pay"),
+                    override_amount=None if redact else v.get("override_amount"),
+                    skipped=None if redact else (v.get("skipped") if v.get("pay_type") == "package" else None),
+                    adjusted=None if redact else (v.get("adjusted") if v.get("pay_type") == "package" else None),
+                    note=None if redact else v.get("note"),
                 )
                 for k, v in by_client.items()
             ),
@@ -601,6 +654,91 @@ def _notify_timesheet_va(db: Session, row: TimesheetSubmission, current: Current
                 )
         except Exception:
             pass
+
+
+@router.put("/package-overrides", response_model=PackageOverrideResponse)
+def upsert_package_override(
+    body: PackageOverrideUpsert,
+    current: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Skip or replace one Fixed Package for this payroll period. The VA Rate is not changed."""
+    if body.period_end < body.period_start:
+        raise HTTPException(status_code=400, detail="period_end must be on or after period_start")
+    if period_is_paid(db, body.va_id, body.period_start, body.period_end):
+        raise HTTPException(
+            status_code=400,
+            detail="This period is already marked paid. Undo Paid before changing the package.",
+        )
+    rate = get_approved_rate(db, body.va_id, body.client_id)
+    if not rate or rate.pay_type != PayType.package:
+        raise HTTPException(status_code=400, detail="This client does not have an approved Fixed Package for this VA")
+    calculated = package_amount_for_window(rate.amount, resolved_frequency(rate), body.period_start, body.period_end)
+    try:
+        plan = plan_override(calculated, skipped=body.skipped, amount=body.amount, note=body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    existing = (
+        db.query(PackagePeriodOverride)
+        .filter(
+            PackagePeriodOverride.va_id == body.va_id,
+            PackagePeriodOverride.client_id == body.client_id,
+            PackagePeriodOverride.period_start == body.period_start,
+            PackagePeriodOverride.period_end == body.period_end,
+        )
+        .first()
+    )
+    if plan.action == "delete":
+        if existing:
+            db.delete(existing)
+            db.commit()
+        effective, skipped, adjusted = effective_package_amount(calculated)
+        return PackageOverrideResponse(
+            va_id=body.va_id,
+            client_id=body.client_id,
+            period_start=body.period_start,
+            period_end=body.period_end,
+            skipped=skipped,
+            amount=None,
+            calculated_amount=calculated,
+            effective_amount=effective,
+            adjusted=adjusted,
+            note=None,
+            locked=False,
+        )
+    if existing:
+        existing.skipped = plan.skipped
+        existing.amount = plan.amount
+        existing.note = plan.note
+        row = existing
+    else:
+        row = PackagePeriodOverride(
+            va_id=body.va_id,
+            client_id=body.client_id,
+            period_start=body.period_start,
+            period_end=body.period_end,
+            skipped=plan.skipped,
+            amount=plan.amount,
+            note=plan.note,
+            created_by=current.user.id,
+        )
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    effective, skipped, adjusted = effective_package_amount(calculated, skipped=row.skipped, amount=row.amount)
+    return PackageOverrideResponse(
+        va_id=row.va_id,
+        client_id=row.client_id,
+        period_start=row.period_start,
+        period_end=row.period_end,
+        skipped=skipped,
+        amount=row.amount,
+        calculated_amount=calculated,
+        effective_amount=effective,
+        adjusted=adjusted,
+        note=row.note,
+        locked=False,
+    )
 
 
 @router.post("/runs", response_model=PayrollRunResponse, status_code=status.HTTP_201_CREATED)

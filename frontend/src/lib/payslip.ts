@@ -15,6 +15,13 @@ export interface PayslipClient {
   payType: string | null
   amount: number
   tasks: PayslipTask[]
+  clientId?: string | null
+  /** Admin review keeps a skipped package visible at 0. The printed payslip hides it. */
+  skipped?: boolean
+  adjusted?: boolean
+  originalAmount?: number | null
+  note?: string | null
+  overrideAmount?: number | null
 }
 
 export interface PayslipModel {
@@ -94,16 +101,35 @@ export function buildPayslip(
     })
     const hours = round2(tasks.reduce((s, t) => s + t.hours, 0))
     const taskAmount = round2(tasks.reduce((s, t) => s + t.amount, 0))
-    const amount = payType === "package"
-      ? round2(num(breakdown?.pay))
-      : breakdown?.pay != null
-        ? round2(num(breakdown.pay))
-        : taskAmount
-    return { name, hours, rate: rate && rate > 0 ? rate : null, payType, amount, tasks }
-  }).sort((a, b) => b.amount - a.amount || b.hours - a.hours)
+    const skipped = breakdown?.skipped === true
+    const amount = skipped
+      ? 0
+      : payType === "package"
+        ? round2(num(breakdown?.pay))
+        : breakdown?.pay != null
+          ? round2(num(breakdown.pay))
+          : taskAmount
+    const originalAmount = breakdown?.calculated_pay != null ? round2(num(breakdown.calculated_pay)) : null
+    return {
+      name,
+      hours,
+      rate: rate && rate > 0 ? rate : null,
+      payType,
+      amount,
+      tasks,
+      clientId: breakdown?.client_id ?? null,
+      skipped,
+      adjusted: !skipped && breakdown?.adjusted === true,
+      originalAmount,
+      note: breakdown?.note ?? null,
+      overrideAmount: breakdown?.override_amount != null && breakdown.override_amount !== "" ? round2(num(breakdown.override_amount)) : null,
+    }
+  }).sort((a, b) => Number(a.skipped) - Number(b.skipped) || b.amount - a.amount || b.hours - a.hours)
 
+  const payable = clients.filter((c) => !c.skipped)
   const totalHours = round2(clients.reduce((s, c) => s + c.hours, 0)) || num(va.total_hours)
-  const totalPay = round2(clients.reduce((s, c) => s + c.amount, 0)) || num(va.total_pay)
+  const summedPay = round2(payable.reduce((s, c) => s + c.amount, 0))
+  const totalPay = clients.length ? summedPay : num(va.total_pay)
 
   const today = new Date()
   const isoToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`

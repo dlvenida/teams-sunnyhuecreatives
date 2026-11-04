@@ -235,16 +235,22 @@ function shortDate(iso: string) {
 }
 
 function rateText(client: PayslipClient, currency: string) {
-  if (client.payType === "package") return "Fixed Package"
+  if (client.payType === "package") return client.adjusted ? "Fixed Package, Adjusted" : "Fixed Package"
   if (client.rate == null) return ""
   return `${money(client.rate, currency)}/hr`
+}
+
+function payableClients(slip: PayslipModel) {
+  return slip.clients.filter((client) => !client.skipped)
 }
 
 function subtotalLine(client: PayslipClient, currency: string) {
   const hrs = `${hours(client.hours)} hrs`
   const amt = money(client.amount, currency)
   if (client.payType === "package") {
-    return `${client.name} subtotal · ${hrs} · Fixed Package · ${amt}`
+    const label = client.adjusted ? "Fixed Package, Adjusted" : "Fixed Package"
+    const was = client.adjusted && client.originalAmount != null ? ` (was ${money(client.originalAmount, currency)})` : ""
+    return `${client.name} subtotal · ${hrs} · ${label} · ${amt}${was}`
   }
   if (client.rate == null) {
     return `${client.name} subtotal · ${hrs} · ${amt}`
@@ -280,11 +286,17 @@ function summaryPage(slip: PayslipModel, logoSrc: string, pageNo: number, pageCo
   const first = slip.vaName.split(" ")[0]
   const period = periodLabel(slip.periodStart, slip.periodEnd)
   const month = monthLabel(slip.periodStart)
-  const rows = slip.clients.map((client) => `
+  const visible = payableClients(slip)
+  const visibleHours = visible.reduce((sum, client) => sum + client.hours, 0)
+  const rows = visible.map((client) => `
     <tr>
       <td>
         <p class="name">${esc(client.name)}</p>
-        <p class="sub">${esc(clientBlurb(client))}</p>
+        <p class="sub">${[
+          esc(clientBlurb(client)),
+          client.adjusted && client.originalAmount != null ? `was ${money(client.originalAmount, slip.currency)}` : "",
+          client.note ? esc(client.note) : "",
+        ].filter(Boolean).join(" · ")}</p>
       </td>
       <td class="num">${hours(client.hours)}</td>
       <td class="num">${rateText(client, slip.currency)}</td>
@@ -355,7 +367,7 @@ ${esc(slip.location)}</p>
       <div class="total-wrap">
         <p class="kicker">Total</p>
         <p class="total-amount">${money(slip.totalPay, slip.currency)}</p>
-        <p class="total-hint">${hours(slip.totalHours)} hrs · ${esc(slip.currency)} · Task breakdown on the next page</p>
+        <p class="total-hint">${hours(visibleHours)} hrs · ${esc(slip.currency)} · Task breakdown on the next page</p>
       </div>
       <div class="note">
         <p class="kicker">Note</p>
@@ -370,7 +382,7 @@ ${esc(slip.location)}</p>
 function detailPage(slip: PayslipModel, pageNo: number, pageCount: number) {
   const period = periodLabel(slip.periodStart, slip.periodEnd)
   const month = monthLabel(slip.periodStart)
-  const clients = slip.clients.map((client) => {
+  const clients = payableClients(slip).map((client) => {
     const tasks = client.tasks.map((task) => `
       <tr>
         <td class="num" style="text-align:left; white-space:nowrap">${esc(shortDate(task.date))}</td>
@@ -419,7 +431,7 @@ function detailPage(slip: PayslipModel, pageNo: number, pageCount: number) {
       ${clients}
       <div class="grand">
         <span>Grand total</span>
-        <span>${hours(slip.totalHours)} hrs · ${money(slip.totalPay, slip.currency)}</span>
+        <span>${hours(payableClients(slip).reduce((sum, client) => sum + client.hours, 0))} hrs · ${money(slip.totalPay, slip.currency)}</span>
       </div>
       <div class="note">
         <p class="kicker">Payment</p>

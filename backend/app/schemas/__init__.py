@@ -968,6 +968,13 @@ class PayrollBreakdown(BaseModel):
     pay: Decimal | None = None
     rate: Decimal | None = None
     pay_type: str | None = None
+    client_id: UUID | None = None
+    # Fixed Package period controls. Omitted for the Project Manager.
+    calculated_pay: Decimal | None = None
+    override_amount: Decimal | None = None
+    skipped: bool | None = None
+    adjusted: bool | None = None
+    note: str | None = None
 
 
 class PayrollDay(BaseModel):
@@ -1038,6 +1045,30 @@ class PayrollResponse(BaseModel):
     total_usd: Decimal | None = None
     total_hours: Decimal = Decimal("0")
     total_pending_hours: Decimal = Decimal("0")
+
+
+class PackageOverrideUpsert(BaseModel):
+    va_id: UUID
+    client_id: UUID
+    period_start: date
+    period_end: date
+    skipped: bool = False
+    amount: Decimal | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PackageOverrideResponse(BaseModel):
+    va_id: UUID
+    client_id: UUID
+    period_start: date
+    period_end: date
+    skipped: bool
+    amount: Decimal | None = None
+    calculated_amount: Decimal
+    effective_amount: Decimal
+    adjusted: bool
+    note: str | None = None
+    locked: bool = False
 
 
 class PayrollRunCreate(BaseModel):

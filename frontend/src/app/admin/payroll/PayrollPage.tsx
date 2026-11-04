@@ -27,7 +27,7 @@ const PERIODS = [
 function initials(name: string) { return name.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase() }
 const n = (v?: string | number | null) => Number(v ?? 0)
 
-type PackageDraft = { skipped: boolean; amount: string; note: string }
+type PackageDraft = { skipped: boolean; mode: "amount" | "deduction"; amount: string; deduction: string; note: string }
 
 function overlayVa(va: PayrollVA, drafts: Record<string, PackageDraft>): PayrollVA {
   if (!va.by_client?.length) return va
@@ -40,13 +40,27 @@ function overlayVa(va: PayrollVA, drafts: Record<string, PackageDraft>): Payroll
     const calculated = n(row.calculated_pay ?? row.pay)
     const skipped = draft.skipped
     let effective = calculated
-    if (!skipped && draft.amount.trim() !== "") {
+    let deduction: number | null = null
+    if (!skipped && draft.mode === "deduction") {
+      const parsed = Number(draft.deduction)
+      if (Number.isFinite(parsed) && parsed >= 0 && parsed <= calculated + 0.001) {
+        deduction = Math.round(parsed * 100) / 100
+        effective = Math.round((calculated - deduction) * 100) / 100
+      }
+    } else if (!skipped && draft.amount.trim() !== "") {
       const parsed = Number(draft.amount)
       if (Number.isFinite(parsed) && parsed >= 0) effective = Math.round(parsed * 100) / 100
     }
     if (skipped) effective = 0
-    const adjusted = !skipped && Math.round(effective * 100) !== Math.round(calculated * 100)
-    return { ...row, pay: effective.toFixed(2), skipped, adjusted, note: draft.note.trim() || null }
+    const adjusted = !skipped && draft.mode !== "deduction" && Math.round(effective * 100) !== Math.round(calculated * 100)
+    return {
+      ...row,
+      pay: effective.toFixed(2),
+      skipped,
+      adjusted,
+      deduction: deduction != null && deduction > 0 ? deduction.toFixed(2) : null,
+      note: draft.note.trim() || null,
+    }
   })
   if (!changed) return va
   const total = by_client.reduce((sum, row) => sum + n(row.pay), 0)
@@ -85,13 +99,19 @@ function PackagePeriodFields({
   onCommit: (next: PackageDraft) => void
 }) {
   const skipped = draft ? draft.skipped : !!client.skipped
+  const mode = draft?.mode ?? (client.deduction ? "deduction" : "amount")
   const fallback = client.overrideAmount ?? client.originalAmount ?? client.amount
   const amountValue = draft ? draft.amount : fallback.toFixed(2)
+  const deductionValue = draft ? draft.deduction : (client.deduction ? client.deduction.toFixed(2) : "")
   const noteValue = draft ? draft.note : (client.note || "")
-  const current = (): PackageDraft => ({ skipped, amount: amountValue, note: noteValue })
+  const current = (): PackageDraft => ({ skipped, mode, amount: amountValue, deduction: deductionValue, note: noteValue })
+  const packageAmount = client.originalAmount ?? client.amount
+  const deductionNumber = Number(deductionValue)
+  const deductionOk = Number.isFinite(deductionNumber) && deductionNumber >= 0 && deductionNumber <= packageAmount + 0.001
+  const payPreview = deductionOk ? Math.round((packageAmount - deductionNumber) * 100) / 100 : null
   return (
     <div className="mt-2 space-y-1.5">
-      <p className="text-[11px] font-semibold text-muted-foreground">Fixed Package</p>
+      <p className="text-[11px] font-semibold text-muted-foreground">Fixed Package {formatCurrency(packageAmount, currency)}</p>
       <label className="flex items-center gap-2 text-[11px] font-semibold">
         <input
           type="checkbox"
@@ -106,26 +126,61 @@ function PackagePeriodFields({
         />
         Pay this period
       </label>
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          type="number"
-          min="0"
-          step="0.01"
-          className="h-8 w-28"
-          aria-label={`${client.name} amount this period`}
-          disabled={locked || skipped}
-          value={amountValue}
-          onChange={(e) => onDraft({ ...current(), amount: e.target.value })}
-          onBlur={() => onCommit(draft ?? current())}
-        />
-        {skipped && <span className="text-[11px] font-semibold text-amber-800">Skipped · {formatCurrency(0, currency)}</span>}
-        {!skipped && client.adjusted && client.originalAmount != null && (
-          <span className="text-[11px] font-semibold text-primary">Adjusted · was {formatCurrency(client.originalAmount, currency)}</span>
-        )}
-      </div>
+      {!skipped && (
+        <div className="flex gap-2 text-[11px] font-semibold">
+          <label className="flex items-center gap-1">
+            <input type="radio" name={`${client.clientId}-mode`} checked={mode === "amount"} disabled={locked} onChange={() => onDraft({ ...current(), mode: "amount" })} />
+            New amount
+          </label>
+          <label className="flex items-center gap-1">
+            <input type="radio" name={`${client.clientId}-mode`} checked={mode === "deduction"} disabled={locked} onChange={() => onDraft({ ...current(), mode: "deduction" })} />
+            Deduction
+          </label>
+        </div>
+      )}
+      {mode === "amount" || skipped ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            className="h-8 w-28"
+            aria-label={`${client.name} amount this period`}
+            disabled={locked || skipped}
+            value={amountValue}
+            onChange={(e) => onDraft({ ...current(), amount: e.target.value })}
+            onBlur={() => onCommit(draft ?? current())}
+          />
+          {skipped && <span className="text-[11px] font-semibold text-amber-800">Skipped · {formatCurrency(0, currency)}</span>}
+          {!skipped && client.adjusted && client.originalAmount != null && (
+            <span className="text-[11px] font-semibold text-primary">Adjusted · was {formatCurrency(client.originalAmount, currency)}</span>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-1">
+          <Input
+            type="number"
+            min="0"
+            step="0.01"
+            className="h-8 w-28"
+            aria-label={`${client.name} deduction this period`}
+            disabled={locked}
+            value={deductionValue}
+            onChange={(e) => onDraft({ ...current(), deduction: e.target.value })}
+            onBlur={() => onCommit(draft ?? current())}
+          />
+          {payPreview != null && deductionNumber > 0 && (
+            <div className="text-[11px] leading-5">
+              <p>Fixed Package {formatCurrency(packageAmount, currency)}</p>
+              <p>Deduction{noteValue.trim() ? ` (${noteValue.trim()})` : ""} -{formatCurrency(deductionNumber, currency)}</p>
+              <p className="font-semibold">Pay {formatCurrency(payPreview, currency)}</p>
+            </div>
+          )}
+        </div>
+      )}
       <Input
         className="h-8"
-        placeholder="Reason (optional)"
+        placeholder={mode === "deduction" ? "Reason, such as days off" : "Reason (optional)"}
         aria-label={`${client.name} reason`}
         disabled={locked}
         value={noteValue}
@@ -235,16 +290,35 @@ export function PayrollPage() {
   })
   const saveOverride = async (va: PayrollVA, clientId: string, draft: PackageDraft, calculated: number) => {
     if (va.is_paid || !payroll?.period_start || !payroll.period_end) return
-    const raw = draft.amount.trim()
     let amount: number | null = null
-    if (raw !== "") {
-      const parsed = Number(raw)
+    let deduction: number | null = null
+    if (!draft.skipped && draft.mode === "deduction") {
+      const parsed = Number(draft.deduction)
       if (!Number.isFinite(parsed) || parsed < 0) {
-        setOverrideError("Amount cannot be negative.")
+        setOverrideError("Deduction cannot be negative.")
         return
       }
-      amount = Math.round(parsed * 100) / 100
-      if (amount === Math.round(calculated * 100) / 100) amount = null
+      if (parsed > calculated + 0.001) {
+        setOverrideError("Deduction cannot be more than the package amount.")
+        return
+      }
+      if (parsed > 0 && !draft.note.trim()) {
+        setOverrideError("Add a reason for the deduction.")
+        return
+      }
+      deduction = Math.round(parsed * 100) / 100
+      if (deduction === 0) deduction = null
+    } else {
+      const raw = draft.amount.trim()
+      if (raw !== "") {
+        const parsed = Number(raw)
+        if (!Number.isFinite(parsed) || parsed < 0) {
+          setOverrideError("Amount cannot be negative.")
+          return
+        }
+        amount = Math.round(parsed * 100) / 100
+        if (amount === Math.round(calculated * 100) / 100) amount = null
+      }
     }
     const key = `${va.va_id}:${clientId}`
     try {
@@ -257,13 +331,14 @@ export function PayrollPage() {
           period_end: payroll.period_end,
           skipped: draft.skipped,
           amount,
+          deduction,
           note: draft.note.trim() || null,
         }),
       })
       setOverrideError("")
       setDrafts((prev) => {
         const cur = prev[key]
-        if (!cur || cur.amount !== draft.amount || cur.skipped !== draft.skipped || cur.note !== draft.note) return prev
+        if (!cur || cur.amount !== draft.amount || cur.deduction !== draft.deduction || cur.mode !== draft.mode || cur.skipped !== draft.skipped || cur.note !== draft.note) return prev
         const next = { ...prev }
         delete next[key]
         return next
@@ -641,7 +716,7 @@ export function PayrollPage() {
                   {showPricing && (
                     <p className="px-3 py-2 text-right text-[11px] text-muted-foreground">
                       {client.name} subtotal · {client.hours.toFixed(2)} hrs
-                      {client.payType === "package" ? (client.skipped ? " · Skipped" : client.adjusted ? " · Fixed Package, Adjusted" : " · Fixed Package") : client.rate != null ? ` × ${formatCurrency(client.rate, va.currency)}/hr` : ""}
+                      {client.payType === "package" ? (client.skipped ? " · Skipped" : client.deduction ? ` · Deduction -${formatCurrency(client.deduction, va.currency)}` : client.adjusted ? " · Fixed Package, Adjusted" : " · Fixed Package") : client.rate != null ? ` × ${formatCurrency(client.rate, va.currency)}/hr` : ""}
                       {" · "}{formatCurrency(client.amount, va.currency)}
                     </p>
                   )}
@@ -731,7 +806,7 @@ export function PayrollPage() {
               <div key={client.name} className="flex items-start justify-between gap-3 border-b py-2 text-xs">
                 <div>
                   <p className="font-bold">{client.name}</p>
-                  <p className="text-[11px] text-muted-foreground">{client.tasks.length} task{client.tasks.length === 1 ? "" : "s"} · {client.hours.toFixed(2)} hrs{client.skipped ? " · Skipped" : client.payType === "package" ? (client.adjusted ? " · Fixed Package, Adjusted" : " · Fixed Package") : client.rate != null ? ` × ${formatCurrency(client.rate, payReview.currency)}/hr` : ""}</p>
+                  <p className="text-[11px] text-muted-foreground">{client.tasks.length} task{client.tasks.length === 1 ? "" : "s"} · {client.hours.toFixed(2)} hrs{client.skipped ? " · Skipped" : client.deduction ? ` · Fixed Package ${formatCurrency(client.originalAmount ?? client.amount + client.deduction, payReview.currency)} · Deduction${client.note ? ` (${client.note})` : ""} -${formatCurrency(client.deduction, payReview.currency)} · Pay ${formatCurrency(client.amount, payReview.currency)}` : client.payType === "package" ? (client.adjusted ? " · Fixed Package, Adjusted" : " · Fixed Package") : client.rate != null ? ` × ${formatCurrency(client.rate, payReview.currency)}/hr` : ""}</p>
                 </div>
                 <p className="font-bold">{client.skipped ? "Skipped · " : ""}{formatCurrency(client.amount, payReview.currency)}</p>
               </div>

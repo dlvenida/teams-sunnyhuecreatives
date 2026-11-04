@@ -564,6 +564,8 @@ class PackagePeriodOverride(Base):
     skipped: Mapped[bool] = mapped_column(Boolean, default=False)
     # Null means this period still uses the calculated package amount.
     amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    # Taken off the calculated package for this period. Pay is package minus this.
+    deduction: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

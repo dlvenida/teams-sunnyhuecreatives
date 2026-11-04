@@ -22,6 +22,7 @@ export interface PayslipClient {
   originalAmount?: number | null
   note?: string | null
   overrideAmount?: number | null
+  deduction?: number | null
 }
 
 export interface PayslipModel {
@@ -123,6 +124,7 @@ export function buildPayslip(
       originalAmount,
       note: breakdown?.note ?? null,
       overrideAmount: breakdown?.override_amount != null && breakdown.override_amount !== "" ? round2(num(breakdown.override_amount)) : null,
+      deduction: breakdown?.deduction != null && breakdown.deduction !== "" && num(breakdown.deduction) > 0 ? round2(num(breakdown.deduction)) : null,
     }
   }).sort((a, b) => Number(a.skipped) - Number(b.skipped) || b.amount - a.amount || b.hours - a.hours)
 

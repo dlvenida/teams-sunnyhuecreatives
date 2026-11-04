@@ -309,6 +309,7 @@ def my_earnings(
                 calculated,
                 skipped=bool(row.skipped) if row else False,
                 amount=row.amount if row else None,
+                deduction=row.deduction if row else None,
             )
             dues[cid] = effective
         return dues
@@ -368,6 +369,7 @@ def my_earnings(
                 flat,
                 skipped=bool(override.skipped) if override else False,
                 amount=override.amount if override else None,
+                deduction=override.deduction if override else None,
             )
             key = str(cid)
             row = by_client_map.setdefault(

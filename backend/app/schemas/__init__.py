@@ -972,6 +972,7 @@ class PayrollBreakdown(BaseModel):
     # Fixed Package period controls. Omitted for the Project Manager.
     calculated_pay: Decimal | None = None
     override_amount: Decimal | None = None
+    deduction: Decimal | None = None
     skipped: bool | None = None
     adjusted: bool | None = None
     note: str | None = None
@@ -1054,6 +1055,7 @@ class PackageOverrideUpsert(BaseModel):
     period_end: date
     skipped: bool = False
     amount: Decimal | None = None
+    deduction: Decimal | None = None
     note: str | None = Field(default=None, max_length=500)
 
 
@@ -1064,6 +1066,7 @@ class PackageOverrideResponse(BaseModel):
     period_end: date
     skipped: bool
     amount: Decimal | None = None
+    deduction: Decimal | None = None
     calculated_amount: Decimal
     effective_amount: Decimal
     adjusted: bool

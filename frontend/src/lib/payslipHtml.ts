@@ -234,7 +234,23 @@ function shortDate(iso: string) {
   })
 }
 
+function minusMoney(amount: number, currency: string) {
+  return `-${money(amount, currency)}`
+}
+
+function deductionLines(client: PayslipClient, currency: string) {
+  if (!client.deduction || client.deduction <= 0) return ""
+  const packageAmount = client.originalAmount ?? client.amount + client.deduction
+  const reason = client.note ? ` (${esc(client.note)})` : ""
+  return [
+    `<p class="sub">Fixed Package ${money(packageAmount, currency)}</p>`,
+    `<p class="sub">Deduction${reason} ${minusMoney(client.deduction, currency)}</p>`,
+    `<p class="sub">Pay ${money(client.amount, currency)}</p>`,
+  ].join("")
+}
+
 function rateText(client: PayslipClient, currency: string) {
+  if (client.payType === "package" && client.deduction) return "Fixed Package"
   if (client.payType === "package") return client.adjusted ? "Fixed Package, Adjusted" : "Fixed Package"
   if (client.rate == null) return ""
   return `${money(client.rate, currency)}/hr`
@@ -247,6 +263,11 @@ function payableClients(slip: PayslipModel) {
 function subtotalLine(client: PayslipClient, currency: string) {
   const hrs = `${hours(client.hours)} hrs`
   const amt = money(client.amount, currency)
+  if (client.payType === "package" && client.deduction) {
+    const packageAmount = client.originalAmount ?? client.amount + client.deduction
+    const reason = client.note ? ` (${client.note})` : ""
+    return `${client.name} subtotal · ${hrs} · Fixed Package ${money(packageAmount, currency)} · Deduction${reason} -${money(client.deduction, currency)} · Pay ${amt}`
+  }
   if (client.payType === "package") {
     const label = client.adjusted ? "Fixed Package, Adjusted" : "Fixed Package"
     const was = client.adjusted && client.originalAmount != null ? ` (was ${money(client.originalAmount, currency)})` : ""
@@ -292,11 +313,11 @@ function summaryPage(slip: PayslipModel, logoSrc: string, pageNo: number, pageCo
     <tr>
       <td>
         <p class="name">${esc(client.name)}</p>
-        <p class="sub">${[
+        ${client.deduction ? deductionLines(client, slip.currency) : `<p class="sub">${[
           esc(clientBlurb(client)),
           client.adjusted && client.originalAmount != null ? `was ${money(client.originalAmount, slip.currency)}` : "",
           client.note ? esc(client.note) : "",
-        ].filter(Boolean).join(" · ")}</p>
+        ].filter(Boolean).join(" · ")}</p>`}
       </td>
       <td class="num">${hours(client.hours)}</td>
       <td class="num">${rateText(client, slip.currency)}</td>

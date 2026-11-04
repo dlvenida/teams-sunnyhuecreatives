@@ -196,7 +196,7 @@ def get_overview(current: Annotated[CurrentUser, Depends(get_current_user)], db:
         "tomorrow_tasks": [_task_mini(db, t) for t in tomorrow_tasks[:6]],
         "estimated_hours_today": str(est_today),
         "team_load": team_load,
-        "counts": {"total_tasks": len(all_tasks), "todo": len(by_status(TaskStatus.todo)), "in_progress": len(in_progress), "in_review": len(by_status(TaskStatus.in_review)), "done": len(by_status(TaskStatus.done)), "blocked": len(blocked), "overdue": len(overdue), "due_today": len(due_today), "unassigned": len(unassigned), "done_this_week": len(done_week)},
+        "counts": {"total_tasks": len(all_tasks), "todo": len(by_status(TaskStatus.todo)), "in_progress": len(in_progress), "in_review": len(by_status(TaskStatus.in_review)), "approved": len(by_status(TaskStatus.approved)), "done": len(by_status(TaskStatus.done)), "blocked": len(blocked), "overdue": len(overdue), "due_today": len(due_today), "unassigned": len(unassigned), "done_this_week": len(done_week)},
         "hours_today": str(hours_today), "hours_this_week": str(hours_week),
         "today_tasks": [_task_mini(db, t) for t in (due_today + [t for t in in_progress if t not in due_today])[:8]],
         "backlog": [_task_mini(db, t) for t in backlog[:8]],

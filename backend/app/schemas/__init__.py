@@ -437,6 +437,31 @@ class ReactionToggle(BaseModel):
 
 class LinkAttachmentCreate(BaseModel):
     url: str = Field(min_length=8, max_length=2000)
+    label: str | None = Field(default=None, max_length=80)
+
+
+class LinkLabelUpdate(BaseModel):
+    label: str = Field(default="", max_length=80)
+
+
+class TaskNotesUpdate(BaseModel):
+    body: str = Field(default="", max_length=8000)
+
+
+class TaskNoteRevisionResponse(BaseModel):
+    id: UUID
+    body: str
+    editor_name: str
+    created_at: datetime
+    updated_label: str
+
+
+class TaskNotesResponse(BaseModel):
+    body: str
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+    updated_label: str | None = None
+    history: list[TaskNoteRevisionResponse] = []
 
 
 class AttachmentResponse(BaseModel):

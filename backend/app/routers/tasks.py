@@ -9,10 +9,23 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin_or_auditor
-from app.models import Client, CommentAttachment, CommentReaction, Project, SubClient, Task, TaskComment, TaskPriority, TaskRecurrence, TaskStatus, UserRole, VA, WorkLog
-from app.schemas import LinkAttachmentCreate, ReactionToggle, TaskCommentCreate, TaskCommentResponse, TaskCommentUpdate, TaskCreate, TaskResponse, TaskUpdate
+from app.models import Client, CommentAttachment, CommentReaction, Project, SubClient, Task, TaskComment, TaskNoteRevision, TaskPriority, TaskRecurrence, TaskStatus, UserRole, VA, WorkLog
+from app.schemas import (
+    LinkAttachmentCreate,
+    ReactionToggle,
+    TaskCommentCreate,
+    TaskCommentResponse,
+    TaskCommentUpdate,
+    TaskCreate,
+    TaskNotesResponse,
+    TaskNotesUpdate,
+    TaskNoteRevisionResponse,
+    TaskResponse,
+    TaskUpdate,
+)
 from app.services import comments as comment_svc
 from app.services.notifications import notify_task_assigned, notify_task_comment, notify_task_updated, push
+from app.services.task_board import can_edit_staff_notes, format_team_timestamp, status_notice
 from app.services.task_recurrence import (
     recover_missing_occurrences,
     recurrence_label,
@@ -283,10 +296,10 @@ def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser,
             db, t, first_in_project=first_in_project,
             actor_name=actor, actor_user_id=current.user.id,
         )
-    elif staff and t.assignee_va_id and t.status == TaskStatus.done and old_status != TaskStatus.done:
+    elif staff and t.assignee_va_id and status_notice(old_status.value, t.status.value) == "approved":
         from app.services.notifications import notify_task_decision
         notify_task_decision(db, t, approved=True, actor_name=actor, actor_user_id=current.user.id)
-    elif staff and t.assignee_va_id and old_status == TaskStatus.in_review and t.status != TaskStatus.done:
+    elif staff and t.assignee_va_id and status_notice(old_status.value, t.status.value) == "rejected":
         from app.services.notifications import notify_task_decision
         notify_task_decision(db, t, approved=False, actor_name=actor, actor_user_id=current.user.id)
     elif staff and t.assignee_va_id and any(key in data for key in ("title", "description", "priority", "due_date", "status", "project_id")):
@@ -411,6 +424,71 @@ def toggle_reaction(task_id: UUID, comment_id: UUID, body: ReactionToggle, curre
     return comment_svc.serialize_comment(db, c, "task", current.user.id)
 
 
+def _team_timezone(db: Session) -> str:
+    from app.routers.settings import _get_settings
+    return (_get_settings(db).get("timezone") or "Asia/Manila")
+
+
+def _notes_response(db: Session, task: Task, *, include_history: bool) -> TaskNotesResponse:
+    tz = _team_timezone(db)
+    label = format_team_timestamp(task.staff_notes_updated_at, tz) if task.staff_notes_updated_at else None
+    history: list[TaskNoteRevisionResponse] = []
+    if include_history:
+        rows = (
+            db.query(TaskNoteRevision)
+            .filter(TaskNoteRevision.task_id == task.id)
+            .order_by(TaskNoteRevision.created_at.desc())
+            .all()
+        )
+        history = [
+            TaskNoteRevisionResponse(
+                id=row.id,
+                body=row.body,
+                editor_name=row.editor_name,
+                created_at=row.created_at,
+                updated_label=format_team_timestamp(row.created_at, tz),
+            )
+            for row in rows
+        ]
+    return TaskNotesResponse(
+        body=task.staff_notes or "",
+        updated_at=task.staff_notes_updated_at,
+        updated_by=task.staff_notes_updated_by_name,
+        updated_label=label,
+        history=history,
+    )
+
+
+@router.get("/{task_id}/notes", response_model=TaskNotesResponse)
+def get_task_notes(task_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    task = _get_visible_task(db, current, task_id)
+    return _notes_response(db, task, include_history=can_edit_staff_notes(current.role))
+
+
+@router.put("/{task_id}/notes", response_model=TaskNotesResponse)
+def save_task_notes(
+    task_id: UUID,
+    body: TaskNotesUpdate,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Save staff notes. This does not create a comment."""
+    if not can_edit_staff_notes(current.role):
+        raise HTTPException(403, "Only an Admin or Project Manager can edit notes")
+    task = _get_visible_task(db, current, task_id)
+    text = body.body.replace("\r\n", "\n")
+    now = datetime.now(timezone.utc)
+    editor = comment_svc.display_name(db, current)
+    task.staff_notes = text
+    task.staff_notes_updated_at = now
+    task.staff_notes_updated_by = current.user.id
+    task.staff_notes_updated_by_name = editor
+    db.add(TaskNoteRevision(task_id=task.id, body=text, editor_user_id=current.user.id, editor_name=editor, created_at=now))
+    db.commit()
+    db.refresh(task)
+    return _notes_response(db, task, include_history=True)
+
+
 @router.get("/{task_id}/attachments")
 def list_task_attachments(task_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
     """All images attached anywhere on this task (details + comments)."""
@@ -423,7 +501,7 @@ def list_task_attachments(task_id: UUID, current: Annotated[CurrentUser, Depends
 def add_task_link_attachment(task_id: UUID, body: LinkAttachmentCreate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
     """Drop a Google Drive / Dropbox link onto the task details."""
     _get_visible_task(db, current, task_id)
-    a = comment_svc.create_link_attachment(db, scope="task", scope_id=task_id, current=current, url=body.url)
+    a = comment_svc.create_link_attachment(db, scope="task", scope_id=task_id, current=current, url=body.url, label=body.label)
     return comment_svc.serialize_attachment(a)
 
 

@@ -83,7 +83,7 @@ def _local_reply(message: str, ctx: dict) -> str:
         lines.append(f"{ctx['active_projects']} active project(s). See Projects for per-client progress and cadence.")
     else:
         c = ctx["task_counts"]
-        lines.append(f"Here's the workspace right now: {c.get('todo', 0)} to do, {c.get('in_progress', 0)} in progress, {c.get('in_review', 0)} in review, {c.get('done', 0)} done. {len(ctx['overdue'])} overdue, {ctx['pending_logs']} logs pending approval, {ctx['live_clock_sessions']} live clock session(s).")
+        lines.append(f"Here's the workspace right now: {c.get('todo', 0)} to do, {c.get('in_progress', 0)} in progress, {c.get('in_review', 0)} in review, {c.get('approved', 0)} approved, {c.get('done', 0)} done. {len(ctx['overdue'])} overdue, {ctx['pending_logs']} logs pending approval, {ctx['live_clock_sessions']} live clock session(s).")
         lines.append("Ask me about overdue work, today's plan, unassigned tasks, or invoices — or set XAI_API_KEY on the API for full Grok reasoning.")
     return "\n\n".join(lines)
 

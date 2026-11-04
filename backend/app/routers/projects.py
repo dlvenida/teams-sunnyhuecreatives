@@ -188,7 +188,7 @@ def list_project_attachments(project_id: UUID, current: Annotated[CurrentUser, D
 def add_project_link_attachment(project_id: UUID, body: LinkAttachmentCreate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
     """Drop a Google Drive / Dropbox link onto the project details."""
     _project(db, project_id)
-    a = comment_svc.create_link_attachment(db, scope="project", scope_id=project_id, current=current, url=body.url)
+    a = comment_svc.create_link_attachment(db, scope="project", scope_id=project_id, current=current, url=body.url, label=body.label)
     return comment_svc.serialize_attachment(a)
 
 

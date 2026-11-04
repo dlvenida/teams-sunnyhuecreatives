@@ -68,7 +68,7 @@ class ResolveTimingTests(unittest.TestCase):
     def test_rejects_empty_too_long_and_bad_minutes(self):
         with self.assertRaises(HTTPException) as zero:
             resolve_timing(entry_mode="duration", start_time=None, end_time=None, duration_hours=0, duration_minutes=0)
-        self.assertIn("greater than 0", zero.exception.detail)
+        self.assertEqual(zero.exception.detail, "Please enter your actual work duration.")
         with self.assertRaises(HTTPException) as over:
             resolve_timing(entry_mode="duration", start_time=None, end_time=None, duration_hours=24, duration_minutes=1)
         self.assertIn("24", over.exception.detail)

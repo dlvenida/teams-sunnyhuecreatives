@@ -10,6 +10,7 @@ import { formatDate } from "@/lib/utils"
 import { TASK_STATUSES, PRIORITY_META, RECURRENCE_OPTIONS, WEEKDAY_OPTIONS, groupByPeriod, isDueToday, isOverdue } from "@/components/tasks/task-utils"
 import { CommentThread } from "@/components/comments/CommentThread"
 import { DetailAttachments } from "@/components/comments/DetailAttachments"
+import { TaskStaffNotes } from "@/components/tasks/TaskStaffNotes"
 import { AlertTriangle, CalendarDays, Columns3, List, MessageSquare, Pencil, Plus, Repeat, Search, Timer, Trash2, X } from "lucide-react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 
@@ -357,6 +358,7 @@ export function TasksPage() {
               ].map(([k, v]) => <div key={k} className="rounded-lg border bg-muted/20 p-2"><div className="text-muted-foreground">{k}</div><div className="mt-0.5 font-medium capitalize">{v}</div></div>)}
             </div>
             <div className="mb-4"><DetailAttachments scope="task" scopeId={commentTask.id} /></div>
+            <div className="mb-4"><TaskStaffNotes taskId={commentTask.id} canEdit={isStaff} /></div>
             <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> Comments & Updates</h3>
             <p className="mb-2 text-[11px] text-muted-foreground">Admin, Project Managers, and VAs can comment here. Tag teammates with @, react with emoji, and attach images.</p>
             <CommentThread scope="task" scopeId={commentTask.id} scopeTitle={commentTask.title} highlightCommentId={highlightCommentId} />
@@ -390,6 +392,7 @@ function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onCo
     >
       <span className="text-left w-full"><span className="text-xs font-semibold leading-snug">{t.title}</span></span>
       <div className="mt-2 flex flex-wrap gap-1.5">
+        <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ color: TASK_STATUSES.find((s) => s.id === t.status)?.color, background: TASK_STATUSES.find((s) => s.id === t.status)?.bg }}>{TASK_STATUSES.find((s) => s.id === t.status)?.label}</span>
         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", PRIORITY_META[t.priority].className)}>{PRIORITY_META[t.priority].label}</span>
         {t.recurrence_label && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700"><Repeat className="h-2.5 w-2.5" />{t.recurrence_label}</span>}
         {isOverdue(t) && t.recurrence_label && (

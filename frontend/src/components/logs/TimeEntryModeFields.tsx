@@ -13,7 +13,7 @@ export function durationError(hours: number, minutes: number): string {
   if (!Number.isInteger(hours) || hours < 0 || hours > 24) return "Hours must be a whole number from 0 to 24."
   if (!Number.isInteger(minutes) || minutes < 0 || minutes > 59) return "Minutes must be a whole number from 0 to 59."
   const total = hours * 60 + minutes
-  if (total <= 0) return "Duration must be greater than 0."
+  if (total <= 0) return "Please enter your actual work duration."
   if (total > 24 * 60) return "A single entry cannot be more than 24 hours."
   return ""
 }

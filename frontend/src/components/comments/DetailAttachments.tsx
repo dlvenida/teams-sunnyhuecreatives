@@ -21,6 +21,9 @@ export function DetailAttachments({ scope, scopeId }: { scope: "task" | "project
   const [drawing, setDrawing] = useState(false)
   const [note, setNote] = useState("")
   const [link, setLink] = useState("")
+  const [linkLabel, setLinkLabel] = useState("")
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingLabel, setEditingLabel] = useState("")
   const plainRef = useRef<HTMLInputElement>(null)
   const guideRef = useRef<HTMLInputElement>(null)
 
@@ -52,8 +55,13 @@ export function DetailAttachments({ scope, scopeId }: { scope: "task" | "project
     onError: (e: Error) => setNote(e.message),
   })
   const addLink = useMutation({
-    mutationFn: () => apiFetch<CommentAttachment>(`${base}/attachments/link`, { method: "POST", body: JSON.stringify({ url: link.trim() }) }),
-    onSuccess: () => { setLink(""); qc.invalidateQueries({ queryKey: ["attachments", scope, scopeId] }) },
+    mutationFn: () => apiFetch<CommentAttachment>(`${base}/attachments/link`, { method: "POST", body: JSON.stringify({ url: link.trim(), label: linkLabel.trim() || null }) }),
+    onSuccess: () => { setLink(""); setLinkLabel(""); qc.invalidateQueries({ queryKey: ["attachments", scope, scopeId] }) },
+    onError: (e: Error) => setNote(e.message),
+  })
+  const renameLink = useMutation({
+    mutationFn: ({ id, label }: { id: string; label: string }) => apiFetch<CommentAttachment>(`/comments/attachments/${id}`, { method: "PATCH", body: JSON.stringify({ label }) }),
+    onSuccess: () => { setEditingId(null); setEditingLabel(""); qc.invalidateQueries({ queryKey: ["attachments", scope, scopeId] }) },
     onError: (e: Error) => setNote(e.message),
   })
   const removeAtt = useMutation({
@@ -73,7 +81,22 @@ export function DetailAttachments({ scope, scopeId }: { scope: "task" | "project
           {attachments.filter(a => a.kind === "link").map(a => (
             <div key={a.id} className="flex items-center gap-2 rounded-lg border bg-muted/20 px-2.5 py-1.5 text-[11px]">
               <span>{a.provider === "google_drive" ? "🟢" : "🔵"}</span>
-              <span className="min-w-0 flex-1 truncate font-medium">{a.provider === "google_drive" ? "Google Drive" : "Dropbox"} link</span>
+              {editingId === a.id ? (
+                <Input
+                  value={editingLabel}
+                  onChange={(e) => setEditingLabel(e.target.value)}
+                  className="h-7 min-w-0 flex-1"
+                  aria-label="Link label"
+                  onKeyDown={(e) => { if (e.key === "Enter") renameLink.mutate({ id: a.id, label: editingLabel }) }}
+                />
+              ) : (
+                <span className="min-w-0 flex-1 truncate font-medium">{a.original_name}</span>
+              )}
+              {editingId === a.id ? (
+                <button type="button" className="shrink-0 font-semibold text-primary" onClick={() => renameLink.mutate({ id: a.id, label: editingLabel })}>Save</button>
+              ) : (
+                <button type="button" title="Edit label" onClick={() => { setEditingId(a.id); setEditingLabel(a.original_name) }}><Pencil className="h-3 w-3 text-muted-foreground" /></button>
+              )}
               <a href={a.link_url || "#"} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1 font-medium text-primary hover:underline"><ExternalLink className="h-3 w-3" /> Open</a>
               <button title="Remove link" onClick={() => { if (confirm("Remove this link?")) removeAtt.mutate(a.id) }}><Trash2 className="h-3 w-3 text-red-500" /></button>
             </div>
@@ -137,6 +160,7 @@ export function DetailAttachments({ scope, scopeId }: { scope: "task" | "project
             <Input value={link} onChange={e => setLink(e.target.value)} placeholder="Drop a Google Drive or Dropbox link here…" className="pl-7"
               onKeyDown={e => { if (e.key === "Enter" && link.trim()) addLink.mutate() }}
               />
+            <Input value={linkLabel} onChange={e => setLinkLabel(e.target.value)} placeholder="Label (optional)" className="mt-1.5" aria-label="Link label" />
           </div>
           <Button size="sm" variant="outline" className="shrink-0 whitespace-nowrap" disabled={!link.trim() || addLink.isPending} onClick={() => addLink.mutate()}>
             {addLink.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />} Add link

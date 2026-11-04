@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { apiFetch, apiFetchBlob } from "@/lib/api"
+import { apiFetch, apiFetchBlob, getAuthUser } from "@/lib/api"
 import { Button } from "@/components/ui/button"
-import { formatDate } from "@/lib/utils"
+import { Input } from "@/components/ui/input"
+import { formatCurrency, formatDate } from "@/lib/utils"
 import { formatHoursMinutes } from "@/lib/approvalEntry"
 import { groupByWeek } from "@/lib/weeks"
 import { LogApprovalCard } from "@/components/payroll/LogApprovalCard"
@@ -32,6 +33,23 @@ interface ReviewEntry {
   attachments: Att[]
 }
 
+interface PackagePayClient {
+  client_id: string
+  client_name: string
+  calculated_amount: string
+  amount: string
+  deduction?: string | null
+  pay_this_period: boolean
+  reason?: string | null
+  adjusted?: boolean
+}
+
+interface PackagePay {
+  locked: boolean
+  currency: "PHP" | "USD" | string
+  clients: PackagePayClient[]
+}
+
 interface ReviewPayload {
   timesheet: {
     id: string
@@ -45,6 +63,205 @@ interface ReviewPayload {
     total_hours: string
   }
   entries: ReviewEntry[]
+  package_pay?: PackagePay | null
+}
+
+function EditPackagePay({
+  sheet,
+  packagePay,
+  onSaved,
+}: {
+  sheet: ReviewPayload["timesheet"]
+  packagePay: PackagePay
+  onSaved: () => void
+}) {
+  const [drafts, setDrafts] = useState<Record<string, { pay: boolean; mode: "amount" | "deduction"; amount: string; deduction: string; reason: string }>>({})
+  const [error, setError] = useState("")
+  const locked = packagePay.locked
+  const currency = packagePay.currency === "USD" ? "USD" : "PHP"
+
+  const rowState = (client: PackagePayClient) => {
+    const draft = drafts[client.client_id]
+    return {
+      pay: draft ? draft.pay : client.pay_this_period,
+      mode: draft ? draft.mode : (client.deduction ? "deduction" as const : "amount" as const),
+      amount: draft ? draft.amount : client.amount,
+      deduction: draft ? draft.deduction : (client.deduction || ""),
+      reason: draft ? draft.reason : (client.reason || ""),
+    }
+  }
+
+  const displayed = packagePay.clients.map((client) => {
+    const state = rowState(client)
+    const calculated = Number(client.calculated_amount)
+    let amount = 0
+    let deduction = 0
+    if (state.pay && state.mode === "deduction") {
+      const parsed = Number(state.deduction)
+      if (Number.isFinite(parsed) && parsed >= 0 && parsed <= calculated + 0.001) {
+        deduction = Math.round(parsed * 100) / 100
+        amount = Math.round((calculated - deduction) * 100) / 100
+      }
+    } else if (state.pay) {
+      const typed = Number(state.amount)
+      amount = Number.isFinite(typed) && typed >= 0 ? Math.round(typed * 100) / 100 : 0
+    }
+    return { client, state, calculated, amount, deduction }
+  })
+  const total = displayed.reduce((sum, row) => sum + row.amount, 0)
+
+  const save = async (client: PackagePayClient, state: { pay: boolean; mode: "amount" | "deduction"; amount: string; deduction: string; reason: string }) => {
+    if (locked) return
+    const calculated = Number(client.calculated_amount)
+    let amount: number | null = null
+    let deduction: number | null = null
+    if (state.pay && state.mode === "deduction") {
+      const parsed = Number(state.deduction)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setError("Deduction cannot be negative.")
+        return
+      }
+      if (parsed > calculated + 0.001) {
+        setError("Deduction cannot be more than the package amount.")
+        return
+      }
+      if (parsed > 0 && !state.reason.trim()) {
+        setError("Add a reason for the deduction.")
+        return
+      }
+      deduction = Math.round(parsed * 100) / 100
+      if (deduction === 0) deduction = null
+    } else if (state.pay) {
+      const parsed = Number(state.amount)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setError("Amount cannot be negative.")
+        return
+      }
+      if (state.amount.trim() !== "") {
+        amount = Math.round(parsed * 100) / 100
+        if (amount === Math.round(calculated * 100) / 100) amount = null
+      }
+    }
+    try {
+      await apiFetch("/payroll/package-overrides", {
+        method: "PUT",
+        body: JSON.stringify({
+          va_id: sheet.va_id,
+          client_id: client.client_id,
+          period_start: sheet.period_start,
+          period_end: sheet.period_end,
+          skipped: !state.pay,
+          amount,
+          deduction,
+          note: state.reason.trim() || null,
+        }),
+      })
+      setError("")
+      setDrafts((prev) => {
+        const next = { ...prev }
+        delete next[client.client_id]
+        return next
+      })
+      onSaved()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save this period")
+    }
+  }
+
+  return (
+    <section className="mb-5 rounded-2xl border border-primary/25 bg-white p-4">
+      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary">Edit package pay</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Each Fixed Package is listed with this period's amount. A change here updates Timesheets & pay and the payslip.
+      </p>
+      <div className="mt-3 space-y-3">
+        {displayed.map(({ client, state, calculated, amount, deduction }) => (
+          <div key={client.client_id} className="rounded-xl border bg-muted/20 p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <p className="text-sm font-bold">{client.client_name}</p>
+                <p className="text-[11px] font-semibold text-muted-foreground">Fixed Package</p>
+                <p className="text-[11px] text-muted-foreground">Period amount {formatCurrency(calculated, currency)}</p>
+              </div>
+              <p className="text-sm font-bold">{state.pay ? formatCurrency(amount, currency) : `Skipped · ${formatCurrency(0, currency)}`}</p>
+            </div>
+            <label className="mt-2 flex items-center gap-2 text-[11px] font-semibold">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 accent-primary"
+                checked={state.pay}
+                disabled={locked}
+                onChange={(e) => {
+                  const next = { ...state, pay: e.target.checked }
+                  setDrafts((prev) => ({ ...prev, [client.client_id]: next }))
+                  void save(client, next)
+                }}
+              />
+              Pay this period
+            </label>
+            {state.pay && (
+              <div className="mt-2 flex gap-3 text-[11px] font-semibold">
+                <label className="flex items-center gap-1">
+                  <input type="radio" name={`${client.client_id}-mode`} checked={state.mode === "amount"} disabled={locked} onChange={() => { const next = { ...state, mode: "amount" as const }; setDrafts((prev) => ({ ...prev, [client.client_id]: next })); void save(client, next) }} />
+                  New amount
+                </label>
+                <label className="flex items-center gap-1">
+                  <input type="radio" name={`${client.client_id}-mode`} checked={state.mode === "deduction"} disabled={locked} onChange={() => setDrafts((prev) => ({ ...prev, [client.client_id]: { ...state, mode: "deduction" } }))} />
+                  Deduction
+                </label>
+              </div>
+            )}
+            <div className="mt-2 grid gap-2 sm:grid-cols-[8rem_1fr]">
+              {state.mode === "deduction" && state.pay ? (
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="h-8"
+                  aria-label={`${client.client_name} deduction this period`}
+                  disabled={locked}
+                  value={state.deduction}
+                  onChange={(e) => setDrafts((prev) => ({ ...prev, [client.client_id]: { ...state, deduction: e.target.value } }))}
+                  onBlur={(e) => void save(client, { ...state, deduction: e.target.value })}
+                />
+              ) : (
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  className="h-8"
+                  aria-label={`${client.client_name} amount this period`}
+                  disabled={locked || !state.pay}
+                  value={state.amount}
+                  onChange={(e) => setDrafts((prev) => ({ ...prev, [client.client_id]: { ...state, amount: e.target.value } }))}
+                  onBlur={(e) => void save(client, { ...state, amount: e.target.value })}
+                />
+              )}
+              <Input
+                className="h-8"
+                placeholder={state.mode === "deduction" ? "Reason, such as days off" : "Reason (optional)"}
+                aria-label={`${client.client_name} reason`}
+                disabled={locked}
+                value={state.reason}
+                onChange={(e) => setDrafts((prev) => ({ ...prev, [client.client_id]: { ...state, reason: e.target.value } }))}
+                onBlur={(e) => void save(client, { ...state, reason: e.target.value })}
+              />
+            </div>
+            {state.pay && state.mode === "deduction" && deduction > 0 && (
+              <div className="mt-2 text-[11px] leading-5">
+                <p>Fixed Package {formatCurrency(calculated, currency)}</p>
+                <p>Deduction{state.reason.trim() ? ` (${state.reason.trim()})` : ""} -{formatCurrency(deduction, currency)}</p>
+                <p className="font-semibold">Pay {formatCurrency(amount, currency)}</p>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-right text-sm font-extrabold">Package total {formatCurrency(total, currency)}</p>
+      {error && <p className="mt-2 text-[11px] text-red-600">{error}</p>}
+      {locked && <p className="mt-2 text-[11px] text-muted-foreground">This period is paid. Undo Paid to change it.</p>}
+    </section>
+  )
 }
 
 function isImage(ctype: string) {
@@ -181,6 +398,7 @@ export function TimesheetReviewPanel({
   })
 
   const sheet = data?.timesheet
+  const isAdmin = getAuthUser()?.role === "admin"
   const reviewed = sheet?.status === "reviewed"
   const rejected = sheet?.status === "rejected"
   const busy = approve.isPending || reject.isPending
@@ -211,6 +429,9 @@ export function TimesheetReviewPanel({
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4">
+          {isAdmin && sheet && data?.package_pay && (
+            <EditPackagePay sheet={sheet} packagePay={data.package_pay} onSaved={refresh} />
+          )}
           {isLoading && <p className="text-sm text-muted-foreground">Loading timesheet entries…</p>}
           {error && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{(error as Error).message}</p>}
           {!isLoading && data?.entries.length === 0 && (

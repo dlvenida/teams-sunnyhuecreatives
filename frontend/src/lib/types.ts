@@ -207,7 +207,19 @@ export interface PayrollVA {
   clock_hours?: string
   manual_hours?: string
   tasks_done?: number
-  by_client?: { label: string; hours: string; pay?: string | null; rate?: string | null; pay_type?: string | null }[]
+  by_client?: {
+    label: string
+    hours: string
+    pay?: string | null
+    rate?: string | null
+    pay_type?: string | null
+    client_id?: string | null
+    calculated_pay?: string | null
+    override_amount?: string | null
+    skipped?: boolean | null
+    adjusted?: boolean | null
+    note?: string | null
+  }[]
   daily?: { work_date: string; hours: string }[]
   prev_hours?: string
   prev_pay?: string

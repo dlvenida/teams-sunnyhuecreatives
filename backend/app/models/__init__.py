@@ -548,6 +548,32 @@ class PayrollRun(Base):
     va: Mapped["VA"] = relationship()
 
 
+class PackagePeriodOverride(Base):
+    """One period's Fixed Package decision for a VA and client. The VA Rate stays unchanged."""
+
+    __tablename__ = "package_period_overrides"
+    __table_args__ = (
+        UniqueConstraint("va_id", "client_id", "period_start", "period_end", name="uq_package_period_override"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    va_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("vas.id", ondelete="CASCADE"), index=True)
+    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    skipped: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Null means this period still uses the calculated package amount.
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class BusinessExpense(Base):
     """Admin-only manual business expenses (tools, subscriptions, misc)."""
 

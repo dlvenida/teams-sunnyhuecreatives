@@ -48,6 +48,9 @@ export function TimeClockPage() {
   const [newTaskOpen, setNewTaskOpen] = useState(false)
   const [newTaskTitle, setNewTaskTitle] = useState("")
   const [taskCreateError, setTaskCreateError] = useState("")
+  const [inTaskQuery, setInTaskQuery] = useState("")
+  const [inTaskOpen, setInTaskOpen] = useState(false)
+  const [extraTasks, setExtraTasks] = useState<TaskItem[]>([])
   const [createLog, setCreateLog] = useState(true)
   const [quickComment, setQuickComment] = useState("")
   const [error, setError] = useState("")
@@ -250,17 +253,26 @@ export function TimeClockPage() {
     </div>
   )
 
-  const selectedTask = tasks.find(t => t.id === taskId)
+  const listedTasks = [...extraTasks.filter((task) => !tasks.some((row) => row.id === task.id)), ...tasks]
+  const selectedTask = listedTasks.find(t => t.id === taskId)
   const activeTaskId = current?.task_id || taskId
   const { data: taskComments = [] } = useQuery({ queryKey: ["clock-task-comments", activeTaskId], queryFn: () => apiFetch<{ id: string; author_name: string; body: string; created_at: string }[]>(`/tasks/${activeTaskId}/comments`), enabled: showMine && !!activeTaskId })
   const postComment = useMutation({ mutationFn: () => apiFetch(`/tasks/${activeTaskId}/comments`, { method: "POST", body: JSON.stringify({ body: quickComment }) }), onSuccess: () => { setQuickComment(""); qc.invalidateQueries({ queryKey: ["clock-task-comments"] }) } })
   const createTask = useMutation({
-    mutationFn: () => apiFetch<TaskItem>("/tasks", {
+    mutationFn: (where: "in" | "out") => apiFetch<TaskItem>("/tasks", {
       method: "POST",
-      body: JSON.stringify({ title: newTaskTitle.trim(), client_id: outClientId, project_id: outProjectId, status: "todo" }),
+      body: JSON.stringify({
+        title: newTaskTitle.trim(),
+        client_id: where === "in" ? clientId : outClientId,
+        project_id: where === "in" ? projectId : outProjectId,
+        status: "todo",
+        assignee_va_id: getAuthUser()?.vaId || null,
+      }),
     }),
-    onSuccess: (task) => {
-      setOutTaskId(task.id)
+    onSuccess: (task, where) => {
+      setExtraTasks((prev) => [task, ...prev.filter((row) => row.id !== task.id)])
+      if (where === "in") setTaskId(task.id)
+      else setOutTaskId(task.id)
       setNewTaskOpen(false)
       setNewTaskTitle("")
       setTaskCreateError("")
@@ -378,30 +390,84 @@ export function TimeClockPage() {
                 <div className="min-w-0">
                   {!current ? (
                     <div className="w-full space-y-3 text-left">
-                      <div>
-                        <Label>My task (optional — picks client/project automatically)</Label>
-                        <Select
-                          value={taskId}
-                          onChange={(e) => {
-                            setTaskId(e.target.value)
-                            const t = tasks.find((x) => x.id === e.target.value)
-                            if (t) { setClientId(t.client_id); setProjectId(t.project_id || "") }
-                          }}
-                        >
-                          <option value="">General / choose below</option>
-                          {tasks
-                            .slice()
-                            .sort((a, b) => (a.client_name || "").localeCompare(b.client_name || "") || a.title.localeCompare(b.title))
-                            .map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.client_name ? `${t.client_name} — ${t.title}` : t.title}
-                              </option>
-                            ))}
-                        </Select>
-                      </div>
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <div><Label>Client</Label><Select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Select client</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
-                        <div><Label>Project</Label><Select value={projectId} onChange={e => setProjectId(e.target.value)}><option value="">No project</option>{projects.filter(p => !clientId || p.client_id === clientId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</Select></div>
+                        <div>
+                          <Label>Client</Label>
+                          <Select aria-label="Clock in client" value={clientId} onChange={(e) => { setClientId(e.target.value); setProjectId(""); setTaskId("") }}>
+                            <option value="">Select client</option>
+                            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </Select>
+                        </div>
+                        <div>
+                          <Label>Project</Label>
+                          <Select aria-label="Clock in project" value={projectId} disabled={!clientId} onChange={(e) => { setProjectId(e.target.value); setTaskId("") }}>
+                            <option value="">{clientId ? "No project" : "Choose a client first"}</option>
+                            {projects.filter((p) => p.client_id === clientId).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </Select>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <Label>My task (optional — picks client/project automatically)</Label>
+                          <button
+                            type="button"
+                            aria-label="New Task"
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+                            disabled={!clientId || !projectId}
+                            onClick={() => { setTaskCreateError(""); setNewTaskOpen((open) => !open) }}
+                          >
+                            <Plus className="h-3 w-3" /> New Task
+                          </button>
+                        </div>
+                        {(!clientId || !projectId) && <p className="mb-1 text-[11px] text-muted-foreground">Choose a client and project before adding a task.</p>}
+                        <div className="relative">
+                          <Input
+                            aria-label="My task"
+                            autoComplete="off"
+                            value={inTaskOpen ? inTaskQuery : (listedTasks.find((t) => t.id === taskId)?.title || "")}
+                            onFocus={() => { setInTaskOpen(true); setInTaskQuery("") }}
+                            onBlur={() => window.setTimeout(() => setInTaskOpen(false), 150)}
+                            onChange={(e) => { setInTaskQuery(e.target.value); setInTaskOpen(true) }}
+                          />
+                          {inTaskOpen && (
+                            <ul className="absolute z-20 mt-1 max-h-40 w-full overflow-auto rounded-xl border bg-card shadow-lg">
+                              <li>
+                                <button type="button" className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-muted" onMouseDown={() => { setTaskId(""); setInTaskOpen(false); setInTaskQuery("") }}>No task</button>
+                              </li>
+                              {listedTasks
+                                .filter((t) => t.status !== "done")
+                                .filter((t) => !clientId || t.client_id === clientId)
+                                .filter((t) => !projectId || t.project_id === projectId)
+                                .filter((t) => !inTaskQuery.trim() || t.title.toLowerCase().includes(inTaskQuery.trim().toLowerCase()))
+                                .sort((a, b) => a.title.localeCompare(b.title))
+                                .map((t) => (
+                                  <li key={t.id}>
+                                    <button
+                                      type="button"
+                                      className="w-full px-3 py-2 text-left text-xs hover:bg-muted"
+                                      onMouseDown={() => {
+                                        setTaskId(t.id)
+                                        if (t.client_id) setClientId(t.client_id)
+                                        if (t.project_id) setProjectId(t.project_id)
+                                        setInTaskOpen(false)
+                                        setInTaskQuery("")
+                                      }}
+                                    >
+                                      {t.title}
+                                    </button>
+                                  </li>
+                                ))}
+                            </ul>
+                          )}
+                        </div>
+                        {newTaskOpen && !current && (
+                          <div className="mt-2 space-y-2 rounded-xl border p-3">
+                            <Label>New task title</Label>
+                            <Input aria-label="New task title" autoComplete="off" value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} />
+                            <Button type="button" size="sm" variant="outline" disabled={!newTaskTitle.trim() || createTask.isPending} onClick={() => createTask.mutate("in")}>{createTask.isPending ? "Adding..." : "Add task"}</Button>
+                            {taskCreateError && <p className="text-[11px] text-red-600">{taskCreateError}</p>}
+                          </div>
+                        )}
                       </div>
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                         <div className="min-w-0 flex-1"><Label>Notes</Label><Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="What are you working on?" /></div>
@@ -439,14 +505,14 @@ export function TimeClockPage() {
                             <Input
                               aria-label="My Task"
                               autoComplete="off"
-                              value={taskOpen ? taskQuery : (tasks.find((t) => t.id === outTaskId)?.title || "")}
+                              value={taskOpen ? taskQuery : (listedTasks.find((t) => t.id === outTaskId)?.title || "")}
                               onFocus={() => { setTaskOpen(true); setTaskQuery("") }}
                               onBlur={() => window.setTimeout(() => setTaskOpen(false), 150)}
                               onChange={(e) => { setTaskQuery(e.target.value); setTaskOpen(true) }}
                             />
                             {taskOpen && (
                               <ul className="absolute z-20 mt-1 max-h-40 w-full overflow-auto rounded-xl border bg-card shadow-lg">
-                                {tasks
+                                {listedTasks
                                   .filter((t) => t.status !== "done")
                                   .filter((t) => !outClientId || t.client_id === outClientId)
                                   .filter((t) => !outProjectId || t.project_id === outProjectId)
@@ -464,7 +530,7 @@ export function TimeClockPage() {
                             <div className="mt-2 space-y-2 rounded-xl border p-3">
                               <Label>New task title</Label>
                               <Input aria-label="New task title" autoComplete="off" value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} />
-                              <Button type="button" size="sm" variant="outline" disabled={!newTaskTitle.trim() || createTask.isPending} onClick={() => createTask.mutate()}>{createTask.isPending ? "Adding..." : "Add task"}</Button>
+                              <Button type="button" size="sm" variant="outline" disabled={!newTaskTitle.trim() || createTask.isPending} onClick={() => createTask.mutate("out")}>{createTask.isPending ? "Adding..." : "Add task"}</Button>
                               {taskCreateError && <p className="text-[11px] text-red-600">{taskCreateError}</p>}
                             </div>
                           )}

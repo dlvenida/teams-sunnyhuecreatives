@@ -893,14 +893,65 @@ class WorkLogResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ClientBillingLineWrite(BaseModel):
+    project_id: UUID | None = None
+    billing_type: str
+    description: str | None = None
+    default_hours: Decimal | None = None
+    default_rate: Decimal | None = None
+    default_amount: Decimal | None = None
+
+
+class ClientBillingLineResponse(BaseModel):
+    id: UUID
+    client_id: UUID
+    project_id: UUID | None = None
+    project_name: str | None = None
+    billing_type: str
+    description: str | None = None
+    default_hours: Decimal | None = None
+    default_rate: Decimal | None = None
+    default_amount: Decimal | None = None
+    sort_order: int = 0
+
+
+class InvoiceDraftLine(BaseModel):
+    project_id: UUID | None = None
+    billing_type: str
+    description: str = ""
+    hours: Decimal | None = None
+    rate: Decimal | None = None
+    amount: Decimal | None = None
+
+
+class InvoiceDraftLineResponse(BaseModel):
+    project_id: UUID | None = None
+    project_name: str | None = None
+    billing_type: str
+    description: str = ""
+    hours: Decimal | None = None
+    rate: Decimal | None = None
+    amount: Decimal | None = None
+    preset_id: UUID | None = None
+
+
+class InvoicePrepareResponse(BaseModel):
+    period_label: str
+    period_start: date
+    period_end: date
+    client_rate: Decimal
+    lines: list[InvoiceDraftLineResponse]
+    message: str
+
+
 # Invoices
 class InvoiceGenerateRequest(BaseModel):
-    client_id: UUID
+    client_id: UUID | None = None
     year: int
     month: int
     cutoff: int = Field(ge=15, le=30)
-    billing_type: BillingType
-    rate: Decimal
+    billing_type: BillingType | None = None
+    rate: Decimal | None = None
     invoice_number: str | None = None
     payment_method: PaymentMethod
     bank_details: str | None = None
@@ -909,10 +960,18 @@ class InvoiceGenerateRequest(BaseModel):
     included_hours: Decimal | None = None
     overage_rate: Decimal | None = None
     service_description: str | None = None  # client-facing text on generated line items
+    # When set, this invoice uses the reviewed lines. The saved client setup is not changed.
+    lines: list[InvoiceDraftLine] | None = None
+    one_off_name: str | None = None
+    one_off_email: str | None = None
+    one_off_business: str | None = None
+    one_off_address: str | None = None
+    currency: str | None = None
 
 
 class InvoiceLineItemUpdate(BaseModel):
     description: str | None = None
+    hours: Decimal | None = None
     rate: Decimal | None = None
     amount: Decimal | None = None
 
@@ -940,6 +999,8 @@ class InvoiceLineItemResponse(BaseModel):
     hours: Decimal
     rate: Decimal
     amount: Decimal
+    line_kind: str | None = None
+    project_id: UUID | None = None
 
     model_config = {"from_attributes": True}
 
@@ -947,8 +1008,13 @@ class InvoiceLineItemResponse(BaseModel):
 class InvoiceResponse(BaseModel):
     id: UUID
     invoice_number: str
-    client_id: UUID
+    client_id: UUID | None = None
     client_name: str | None = None
+    one_off_name: str | None = None
+    one_off_email: str | None = None
+    one_off_business: str | None = None
+    one_off_address: str | None = None
+    currency: str = "USD"
     period_label: str
     period_start: date
     period_end: date

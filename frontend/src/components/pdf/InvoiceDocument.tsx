@@ -146,25 +146,21 @@ const styles = StyleSheet.create({
 
 function paymentCopy(method: string, settings: Settings, bankDetails?: string | null) {
   if (method === "wise") {
-    return `Please send payment via Wise to ${settings.wise_email || bankDetails || "—"}.`
+    return `Please send payment via Wise to ${settings.wise_email || bankDetails || "the email on file"}.`
   }
   if (method === "paypal") {
-    return `Please send payment via PayPal to ${settings.paypal_email || bankDetails || "—"}.`
+    return `Please send payment via PayPal to ${settings.paypal_email || bankDetails || "the email on file"}.`
   }
   return `Please send payment via bank transfer:\n${bankDetails || "Details on request."}`
+}
+
+function cleanInvoiceText(value: string) {
+  return (value || "").replaceAll("\u2014", "-").replaceAll("\u2013", "-").replaceAll("\u2012", "-")
 }
 
 function lineParts(item: InvoiceLineItem) {
   const parts = (item.description || "").split("\n")
   return { title: parts[0] || "Services", sub: parts.slice(1).join(" ").trim() }
-}
-
-function rateLabel(item: InvoiceLineItem, billingType: string) {
-  const desc = (item.description || "").toLowerCase()
-  if (billingType === "hourly" || desc.includes("va services") || desc.includes("overage")) {
-    return formatInvoiceRate(item.rate)
-  }
-  return formatCurrency(item.rate)
 }
 
 function dueLabel(invoice: Invoice) {
@@ -213,7 +209,7 @@ export function InvoiceDocument({
 
         <View style={styles.banner}>
           <View>
-            <Text style={styles.bannerAmount}>{formatCurrency(invoice.amount)}</Text>
+            <Text style={styles.bannerAmount}>{formatCurrency(invoice.amount, invoice.currency || "USD")}</Text>
             <Text style={styles.bannerDue}>due this period</Text>
           </View>
           <View>
@@ -226,7 +222,7 @@ export function InvoiceDocument({
           <View style={styles.partyCol}>
             <Text style={styles.partyTitle}>Billed to</Text>
             <Text style={styles.partyLabel}>Client</Text>
-            <Text style={styles.partyValue}>{invoice.client_name}</Text>
+            <Text style={styles.partyValue}>{invoice.client_name}{invoice.one_off_business ? `\n${invoice.one_off_business}` : ""}{invoice.one_off_address ? `\n${invoice.one_off_address}` : ""}</Text>
           </View>
           <View style={styles.partyCol}>
             <Text style={styles.partyTitle}>Paid to</Text>
@@ -247,26 +243,29 @@ export function InvoiceDocument({
         </View>
 
         {lines.map((item) => {
-          const { title, sub } = lineParts(item)
-          // Never show timesheet / hour-log details on the client invoice — only service copy.
-          const serviceSub = sub && !/hrs|mins|logged/i.test(sub) ? sub : ""
+          const typed = cleanInvoiceText(item.description || "")
+          const keepBreaks = item.line_kind === "manual" || item.line_kind === "hourly" || item.line_kind === "package" || item.line_kind === "extra"
+          const parts = keepBreaks ? typed.split("\n") : [lineParts({ ...item, description: typed }).title]
+          const currency = invoice.currency || "USD"
+          const showRate = item.line_kind === "entered_hours" || item.line_kind === "actual_hours" || item.line_kind === "hourly" || (!item.line_kind && invoice.billing_type === "hourly")
           return (
             <View key={item.id} style={styles.tableRow} wrap={false}>
               <View style={styles.colDesc}>
-                <Text style={styles.rowTitle}>{title}</Text>
-                {!!serviceSub && <Text style={styles.rowSub}>{serviceSub}</Text>}
+                {parts.map((line, index) => (
+                  <Text key={index} style={index === 0 ? styles.rowTitle : styles.rowSub}>{line || " "}</Text>
+                ))}
               </View>
               <Text style={[styles.rowRate, styles.colRate]}>
-                {rateLabel(item, invoice.billing_type)}
+                {showRate && Number(item.rate) > 0 ? formatInvoiceRate(item.rate).replace("$", currency === "PHP" ? "₱" : "$") : ""}
               </Text>
-              <Text style={[styles.rowAmt, styles.colAmt]}>{formatCurrency(item.amount)}</Text>
+              <Text style={[styles.rowAmt, styles.colAmt]}>{formatCurrency(item.amount, currency)}</Text>
             </View>
           )
         })}
 
         <View style={styles.totalBlock}>
           <Text style={styles.totalLabel}>Total due</Text>
-          <Text style={styles.totalValue}>{formatInvoiceTotal(invoice.amount)}</Text>
+          <Text style={styles.totalValue}>{formatInvoiceTotal(invoice.amount).replace("$", (invoice.currency || "USD") === "PHP" ? "₱" : "$")}</Text>
         </View>
 
         <View style={styles.payBox}>

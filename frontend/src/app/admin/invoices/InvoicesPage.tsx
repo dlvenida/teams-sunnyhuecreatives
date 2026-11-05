@@ -60,6 +60,22 @@ export function InvoicesPage() {
   const [pdfFilename, setPdfFilename] = useState("invoice.pdf")
   const [generateError, setGenerateError] = useState("")
   const [generateSuccess, setGenerateSuccess] = useState("")
+  const [source, setSource] = useState<"saved" | "oneoff">("saved")
+  const [oneOff, setOneOff] = useState({ name: "", email: "", business: "", address: "", currency: "USD" as "USD" | "PHP" })
+  type DraftLine = {
+    key: string
+    description: string
+    billing_type: "hourly" | "package" | "manual" | "extra" | "entered_hours" | "actual_hours" | "flat_fee"
+    hours: string
+    rate: string
+    amount: string
+    project_id?: string | null
+    project_name?: string | null
+    preset_id?: string | null
+  }
+  const [presetLines, setPresetLines] = useState<DraftLine[]>([])
+  const [manualLines, setManualLines] = useState<DraftLine[]>([])
+  const [extras, setExtras] = useState<DraftLine[]>([])
   const { showPricing } = useDisplaySettings()
 
   const { data: clients = [] } = useQuery({
@@ -122,11 +138,39 @@ export function InvoicesPage() {
   }, [searchParams, activeClients])
 
   useEffect(() => {
-    if (!form.client_id) return
+    if (source === "saved" && !form.client_id) return
     apiFetch<{ invoice_number: string }>(`/invoices/next-number?year=${form.year}`)
       .then((d) => setForm((f) => ({ ...f, invoice_number: d.invoice_number })))
       .catch(() => {})
-  }, [form.client_id, form.year])
+  }, [form.client_id, form.year, source])
+
+  useEffect(() => {
+    if (source !== "saved" || !form.client_id) {
+      setPresetLines([])
+      return
+    }
+    const qs = new URLSearchParams({
+      client_id: form.client_id,
+      year: String(form.year),
+      month: String(form.month),
+      cutoff: String(form.cutoff),
+    })
+    apiFetch<{ lines: DraftLine[] }>(`/invoices/prepare?${qs}`)
+      .then((data) => {
+        setPresetLines((data.lines || []).map((line) => ({
+          key: crypto.randomUUID(),
+          description: line.description || "",
+          billing_type: line.billing_type,
+          hours: line.billing_type === "package" || line.hours == null ? "" : String(line.hours),
+          rate: line.billing_type === "package" || line.rate == null ? "" : String(line.rate),
+          amount: line.amount == null ? "" : String(line.amount),
+          project_id: line.project_id,
+          project_name: line.project_name,
+          preset_id: (line as { preset_id?: string | null }).preset_id,
+        })))
+      })
+      .catch(() => setPresetLines([]))
+  }, [source, form.client_id, form.year, form.month, form.cutoff])
 
   useEffect(() => {
     if (!settings) return
@@ -171,26 +215,49 @@ export function InvoicesPage() {
   }
 
   const generate = useMutation({
-    mutationFn: () =>
-      apiFetch<Invoice>("/invoices/generate", {
+    mutationFn: () => {
+      const currency = source === "oneoff" ? oneOff.currency : "USD"
+      const pack = (line: DraftLine) => {
+        const hours = line.hours.trim() === "" ? null : Number(line.hours)
+        const rate = line.rate.trim() === "" ? null : Number(line.rate)
+        const both = hours != null && rate != null && line.billing_type !== "package" && line.billing_type !== "extra" && line.billing_type !== "flat_fee"
+        const amount = both ? Math.round(hours * rate * 100) / 100 : (line.amount.trim() === "" ? 0 : Number(line.amount))
+        return {
+          project_id: line.project_id || null,
+          billing_type: line.billing_type,
+          description: line.description,
+          hours: line.billing_type === "package" ? null : hours,
+          rate: line.billing_type === "package" ? null : rate,
+          amount,
+        }
+      }
+      const lines = [...presetLines, ...manualLines, ...extras].map(pack)
+      return apiFetch<Invoice>("/invoices/generate", {
         method: "POST",
         body: JSON.stringify({
-          client_id: form.client_id,
+          client_id: source === "saved" ? form.client_id : null,
           year: form.year,
           month: form.month,
           cutoff: form.cutoff,
-          billing_type: form.billing_type,
-          rate: rateNum,
+          billing_type: lines.length ? null : form.billing_type,
+          rate: lines.length ? null : rateNum,
           invoice_number: form.invoice_number || null,
           payment_method: form.payment_method,
           bank_details: form.bank_details || null,
           payment_terms_days: form.payment_terms_days,
-          package_id: form.package_id || null,
-          included_hours: form.included_hours ? parseFloat(form.included_hours) : null,
-          overage_rate: form.overage_rate ? parseFloat(form.overage_rate) : null,
-          service_description: form.service_description.trim() || null,
+          package_id: lines.length ? null : (form.package_id || null),
+          included_hours: lines.length ? null : (form.included_hours ? parseFloat(form.included_hours) : null),
+          overage_rate: lines.length ? null : (form.overage_rate ? parseFloat(form.overage_rate) : null),
+          service_description: lines.length ? null : (form.service_description.trim() || null),
+          lines: lines.length ? lines : null,
+          one_off_name: source === "oneoff" ? oneOff.name.trim() : null,
+          one_off_email: source === "oneoff" ? oneOff.email.trim() || null : null,
+          one_off_business: source === "oneoff" ? oneOff.business.trim() || null : null,
+          one_off_address: source === "oneoff" ? oneOff.address.trim() || null : null,
+          currency,
         }),
-      }),
+      })
+    },
     onSuccess: (inv) => {
       qc.invalidateQueries({ queryKey: ["invoices"] })
       qc.invalidateQueries({ queryKey: ["invoice-preview"] })
@@ -205,6 +272,12 @@ export function InvoicesPage() {
       setGenerateError(err.message)
       setGenerateSuccess("")
     },
+  })
+
+  const sendInvoice = useMutation({
+    mutationFn: (id: string) => apiFetch<{ sent: boolean; to: string }>(`/invoices/${id}/send`, { method: "POST" }),
+    onSuccess: (res) => setGenerateSuccess(res.sent ? `Emailed ${res.to}` : `Send skipped for ${res.to}. Check the email settings.`),
+    onError: (err: Error) => setGenerateError(err.message),
   })
 
   const markPaid = useMutation({
@@ -285,6 +358,8 @@ export function InvoicesPage() {
       return (
         inv.invoice_number.toLowerCase().includes(q) ||
         (inv.client_name?.toLowerCase().includes(q) ?? false) ||
+        (inv.one_off_email?.toLowerCase().includes(q) ?? false) ||
+        (inv.one_off_business?.toLowerCase().includes(q) ?? false) ||
         inv.period_label.toLowerCase().includes(q)
       )
     })
@@ -340,14 +415,35 @@ export function InvoicesPage() {
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
+          <div className="sm:col-span-2">
             <Label>Client</Label>
-            <Select value={form.client_id} onChange={(e) => onClientChange(e.target.value)}>
-              <option value="">Select client</option>
-              {activeClients.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </Select>
+            <div className="mb-2 flex gap-2">
+              <button type="button" className={cn("rounded-full border px-3 py-1 text-xs font-semibold", source === "saved" ? "border-primary bg-primary text-primary-foreground" : "")} onClick={() => setSource("saved")}>Saved client</button>
+              <button type="button" className={cn("rounded-full border px-3 py-1 text-xs font-semibold", source === "oneoff" ? "border-primary bg-primary text-primary-foreground" : "")} onClick={() => setSource("oneoff")}>One-off client</button>
+            </div>
+            {source === "saved" ? (
+              <Select value={form.client_id} onChange={(e) => onClientChange(e.target.value)}>
+                <option value="">Select client</option>
+                {activeClients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </Select>
+            ) : (
+              <div className="grid gap-2">
+                <div><Label>Name</Label><Input aria-label="One-off client name" value={oneOff.name} onChange={(e) => setOneOff({ ...oneOff, name: e.target.value })} autoComplete="off" /></div>
+                <div><Label>Email</Label><Input aria-label="One-off email" value={oneOff.email} onChange={(e) => setOneOff({ ...oneOff, email: e.target.value })} autoComplete="off" /></div>
+                <div><Label>Business name</Label><Input aria-label="One-off business name" value={oneOff.business} onChange={(e) => setOneOff({ ...oneOff, business: e.target.value })} autoComplete="off" /></div>
+                <div><Label>Address</Label><Textarea aria-label="One-off address" value={oneOff.address} onChange={(e) => setOneOff({ ...oneOff, address: e.target.value })} rows={2} autoComplete="off" /></div>
+                <div>
+                  <Label>Currency</Label>
+                  <Select aria-label="Currency" value={oneOff.currency} onChange={(e) => setOneOff({ ...oneOff, currency: e.target.value as "USD" | "PHP" })}>
+                    <option value="USD">USD</option>
+                    <option value="PHP">PHP</option>
+                  </Select>
+                </div>
+                <p className="text-[11px] text-muted-foreground">Name is required. Email, business name, and address are optional. This does not create a client. One-off invoices use manual lines and extra charges only.</p>
+              </div>
+            )}
           </div>
           <div>
             <Label>Month</Label>
@@ -463,7 +559,93 @@ export function InvoicesPage() {
           </div>
         </div>
 
-        {previewEnabled && (
+        <div className="mt-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold">Invoice lines</h3>
+            <div className="flex gap-2">
+              <Button type="button" size="sm" variant="outline" onClick={() => setManualLines((rows) => [...rows, { key: crypto.randomUUID(), description: "", billing_type: "manual", hours: "", rate: "", amount: "" }])}>Add manual line</Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => setExtras((rows) => [...rows, { key: crypto.randomUUID(), description: "", billing_type: "extra", hours: "", rate: "", amount: "" }])}>Add extra charge</Button>
+            </div>
+          </div>
+          {source === "saved" && presetLines.map((line) => (
+            <div key={line.key} className="rounded-xl border p-3">
+              <p className="text-[11px] font-semibold text-muted-foreground">Preset · {line.project_name || line.billing_type}</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm">{line.description}</p>
+              <p className="text-xs text-muted-foreground">{line.amount ? formatCurrency(line.amount, "USD") : ""}</p>
+              {line.preset_id && form.client_id && (
+                <Button type="button" size="sm" variant="ghost" onClick={() => {
+                  apiFetch(`/invoices/clients/${form.client_id}/billing-lines/${line.preset_id}`, { method: "DELETE" })
+                    .then(() => setPresetLines((rows) => rows.filter((row) => row.preset_id !== line.preset_id)))
+                    .catch((err: Error) => setGenerateError(err.message))
+                }}>Delete preset</Button>
+              )}
+            </div>
+          ))}
+          {manualLines.map((line) => {
+            const both = line.billing_type !== "package" && line.hours.trim() !== "" && line.rate.trim() !== ""
+            const shownAmount = both ? (Math.round(Number(line.hours) * Number(line.rate) * 100) / 100).toFixed(2) : line.amount
+            return (
+              <div key={line.key} className="rounded-xl border p-3">
+                <Label>Description</Label>
+                <Textarea
+                  rows={4}
+                  className="mt-1"
+                  value={line.description}
+                  autoComplete="off"
+                  onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, description: e.target.value } : row))}
+                />
+                <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                  <div>
+                    <Label>Type</Label>
+                    <Select value={line.billing_type} onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, billing_type: e.target.value as DraftLine["billing_type"] } : row))}>
+                      <option value="hourly">Hourly</option>
+                      <option value="package">Package</option>
+                      <option value="manual">Manual</option>
+                    </Select>
+                  </div>
+                  {line.billing_type !== "package" && (
+                    <>
+                      <div><Label>Hours</Label><Input type="number" step="0.01" value={line.hours} onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, hours: e.target.value } : row))} /></div>
+                      <div><Label>Rate</Label><Input type="number" step="0.01" value={line.rate} onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, rate: e.target.value } : row))} /></div>
+                    </>
+                  )}
+                  <div>
+                    <Label>Amount</Label>
+                    <Input type="number" step="0.01" value={shownAmount} readOnly={both} onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, amount: e.target.value } : row))} />
+                  </div>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  {source === "saved" && form.client_id && (
+                    <Button type="button" size="sm" variant="outline" onClick={() => {
+                      const amount = both ? Math.round(Number(line.hours) * Number(line.rate) * 100) / 100 : (line.amount === "" ? null : Number(line.amount))
+                      apiFetch("/invoices/clients/" + form.client_id + "/billing-lines", {
+                        method: "POST",
+                        body: JSON.stringify({
+                          billing_type: line.billing_type,
+                          description: line.description,
+                          default_hours: line.hours === "" ? null : Number(line.hours),
+                          default_rate: line.rate === "" ? null : Number(line.rate),
+                          default_amount: amount,
+                        }),
+                      }).then(() => setGenerateSuccess("Saved as a preset. This invoice line stays editable on its own.")).catch((err: Error) => setGenerateError(err.message))
+                    }}>Save as preset</Button>
+                  )}
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setManualLines((rows) => rows.filter((row) => row.key !== line.key))}>Remove</Button>
+                </div>
+              </div>
+            )
+          })}
+          {extras.map((line) => (
+            <div key={line.key} className="rounded-xl border p-3">
+              <Label>Extra charge</Label>
+              <Textarea rows={2} className="mt-1" value={line.description} autoComplete="off" onChange={(e) => setExtras((rows) => rows.map((row) => row.key === line.key ? { ...row, description: e.target.value } : row))} />
+              <div className="mt-2"><Label>Amount</Label><Input type="number" step="0.01" value={line.amount} onChange={(e) => setExtras((rows) => rows.map((row) => row.key === line.key ? { ...row, amount: e.target.value } : row))} /></div>
+              <Button type="button" size="sm" variant="ghost" className="mt-2" onClick={() => setExtras((rows) => rows.filter((row) => row.key !== line.key))}>Remove</Button>
+            </div>
+          ))}
+        </div>
+
+        {previewEnabled && source === "saved" && (
           <div className={`mt-4 rounded-lg border px-3 py-2.5 text-xs ${periodPreview?.can_generate ? "border-green-300/60 bg-green-50/80 text-green-900" : "border-amber-300/60 bg-amber-50/80 text-amber-950"}`}>
             {previewLoading ? (
               <span>Checking approved entries...</span>
@@ -503,7 +685,7 @@ export function InvoicesPage() {
         <Button
           variant="gold"
           className="mt-4"
-          disabled={!previewEnabled || !periodPreview?.can_generate || generate.isPending}
+          disabled={generate.isPending || (source === "oneoff" ? !oneOff.name.trim() || manualLines.length + extras.length === 0 : !form.client_id || (manualLines.length + extras.length + presetLines.length === 0 && !periodPreview?.can_generate))}
           onClick={() => generate.mutate()}
         >
           <Receipt className="h-3.5 w-3.5" />
@@ -576,7 +758,7 @@ export function InvoicesPage() {
                     <td className="p-3 text-muted-foreground">{inv.period_label}</td>
                     <td className="p-3 whitespace-nowrap text-muted-foreground">{formatDate(inv.due_date)}{isOverdue(inv) && <span className="block text-[10px] font-bold text-red-600">{daysOverdue(inv)}d overdue</span>}</td>
                     <td className="p-3">{inv.total_hours}</td>
-                    {showPricing && <td className="p-3 font-medium">{formatCurrency(inv.amount)}</td>}
+                    {showPricing && <td className="p-3 font-medium">{formatCurrency(inv.amount, inv.currency || "USD")}</td>}
                     <td className="p-3">{isOverdue(inv) ? <span className="whitespace-nowrap rounded-full border border-red-200 bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700">Overdue</span> : <StatusBadge status={inv.status} />}</td>
                     <td className="p-3">
                       <div className="flex justify-end gap-1">
@@ -585,6 +767,9 @@ export function InvoicesPage() {
                         </Button>
                         <Button size="sm" variant="ghost" title="View PDF" onClick={() => exportPdf(inv)}>
                           <Eye className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="sm" variant="ghost" title="Email this invoice" onClick={() => sendInvoice.mutate(inv.id)}>
+                          Send
                         </Button>
                         <Button size="sm" variant="ghost" title="Download PDF (send to client)" onClick={() => downloadPdf(inv)}>
                           <FileDown className="h-3.5 w-3.5" />

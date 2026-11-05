@@ -206,6 +206,9 @@ class Client(Base):
     work_logs: Mapped[list["WorkLog"]] = relationship(back_populates="client")
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="client")
     packages: Mapped[list["ClientPackage"]] = relationship(back_populates="client", cascade="all, delete-orphan")
+    billing_lines: Mapped[list["ClientBillingLine"]] = relationship(
+        back_populates="client", cascade="all, delete-orphan", order_by="ClientBillingLine.sort_order"
+    )
     proposer: Mapped["User | None"] = relationship(foreign_keys=[proposed_by])
 
 
@@ -504,7 +507,12 @@ class Invoice(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     invoice_number: Mapped[str] = mapped_column(String(50), unique=True)
-    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id"))
+    client_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id"), nullable=True)
+    one_off_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    one_off_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    one_off_business: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    one_off_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), default="USD", server_default="USD")
     period_label: Mapped[str] = mapped_column(String(100))
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)
@@ -532,6 +540,11 @@ class InvoiceLineItem(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="CASCADE"))
     work_log_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("work_logs.id"), nullable=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True
+    )
+    # entered_hours, actual_hours, flat_fee, extra. Null on invoices created before flexible billing.
+    line_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     line_date: Mapped[date] = mapped_column(Date)
     description: Mapped[str] = mapped_column(Text)
     hours: Mapped[Decimal] = mapped_column(Numeric(8, 2))
@@ -539,6 +552,27 @@ class InvoiceLineItem(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
 
     invoice: Mapped["Invoice"] = relationship(back_populates="line_items")
+    project: Mapped["Project | None"] = relationship()
+
+
+class ClientBillingLine(Base):
+    """Default billing line saved on the client. It pre-fills every period and is not an invoice."""
+
+    __tablename__ = "client_billing_lines"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("clients.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    billing_type: Mapped[str] = mapped_column(String(20))
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_hours: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    default_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    default_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    client: Mapped["Client"] = relationship(back_populates="billing_lines")
+    project: Mapped["Project | None"] = relationship()
 
 
 class AgentAuditLog(Base):

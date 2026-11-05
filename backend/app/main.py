@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -161,4 +162,8 @@ app.include_router(agent_control.router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    commit = os.getenv("RAILWAY_GIT_COMMIT_SHA") or ""
+    body = {"status": "ok"}
+    if commit:
+        body["commit"] = commit[:12]
+    return body

@@ -61,6 +61,30 @@ class PrepareTests(unittest.TestCase):
         opened = Image.open(io.BytesIO(jpeg))
         self.assertLessEqual(max(opened.size), PROFILE_MAX_EDGE)
 
+    def test_a_tiny_photo_is_saved_instead_of_rejected_for_size(self):
+        jpeg = prepare_profile_photo(_jpeg(16, 16), "image/jpeg", "tiny.jpg")
+        png = prepare_profile_photo(_encoded("PNG", size=(20, 20)), "application/octet-stream", "tiny.png")
+        for data in (jpeg, png):
+            self.assertTrue(data.startswith(b"\xff\xd8"))
+            opened = Image.open(io.BytesIO(data))
+            self.assertGreaterEqual(min(opened.size), 1)
+            self.assertLessEqual(max(opened.size), PROFILE_MAX_EDGE)
+
+    def test_saved_messages_do_not_demand_avif_or_a_400_pixel_minimum(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        files = [
+            root / "backend/app/routers/profile.py",
+            root / "backend/app/services/profile_photo.py",
+            root / "frontend/src/components/profile/ProfilePhotoUpload.tsx",
+            root / "frontend/src/lib/cropImage.ts",
+        ]
+        banned = ("Photo must be AVIF format", "Photo must be at least 400")
+        for path in files:
+            text = path.read_text()
+            for phrase in banned:
+                self.assertNotIn(phrase, text)
+
     def test_a_text_file_gets_a_friendly_error(self):
         with self.assertRaises(ValueError) as raised:
             prepare_profile_photo(b"not a photo", "text/plain", "notes.txt")

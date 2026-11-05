@@ -59,7 +59,14 @@ export function ProfilePhotoUpload({ hasPhoto, displayName, className }: Profile
       setImageSrc(null)
       setError("")
     },
-    onError: (err: Error) => setError(err.message),
+    onError: (err: Error) => {
+      const message = err.message || ""
+      if (/avif/i.test(message) || /400\s*[x×]\s*400/i.test(message)) {
+        setError("That photo could not be saved. Please try Save photo again.")
+        return
+      }
+      setError(message || "Could not save that photo.")
+    },
   })
 
   const remove = useMutation({
@@ -100,10 +107,15 @@ export function ProfilePhotoUpload({ hasPhoto, displayName, className }: Profile
   }
 
   const saveCrop = async () => {
-    if (!imageSrc || !croppedArea) return
+    if (upload.isPending) return
+    if (!imageSrc || !croppedArea) {
+      setError("Drag the photo into place, then save.")
+      return
+    }
     try {
       const blob = await cropToJpeg(imageSrc, croppedArea)
-      upload.mutate(blob)
+      const file = new File([blob], "profile.jpg", { type: "image/jpeg" })
+      upload.mutate(file)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not prepare that photo.")
     }

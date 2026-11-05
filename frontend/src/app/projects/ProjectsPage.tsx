@@ -8,10 +8,21 @@ import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { formatDate } from "@/lib/utils"
 import { ProjectDetail } from "@/components/projects/ProjectDetail"
-import { FolderKanban, Pencil, Plus, Search, Trash2, X } from "lucide-react"
+import { FolderKanban, Pencil, Plus, Search, Trash2, X, ChevronDown } from "lucide-react"
 
 const empty = { name: "", client_id: "", description: "", color: "#ec4899", status: "active" as ProjectStatus, cadence: "weekly" as Cadence, start_date: "", due_date: "" }
 const CADENCE_LABEL: Record<Cadence, string> = { weekly: "Weekly", biweekly: "Bi-weekly", monthly: "Monthly" }
+const COLLAPSE_KEY = "shc.projectSections.collapsed"
+
+function readCollapsed(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(COLLAPSE_KEY)
+    const parsed = raw ? JSON.parse(raw) : {}
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
 
 export function ProjectsPage() {
   const qc = useQueryClient()
@@ -22,7 +33,7 @@ export function ProjectsPage() {
   const isAuditor = user?.role === "auditor"
   const isVA = user?.role === "va"
   const isStaff = isAdmin || isAuditor
-  const canCreate = isAdmin || isAuditor || isVA
+  const canCreate = isStaff
   const canManage = isStaff
   const deepProjectId = searchParams.get("project")
   const deepCommentId = searchParams.get("comment")
@@ -34,6 +45,7 @@ export function ProjectsPage() {
   const [highlightCommentId, setHighlightCommentId] = useState<string | null>(null)
   const [form, setForm] = useState(empty)
   const [error, setError] = useState("")
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(readCollapsed)
 
   const qs = `${clientId ? `&client_id=${clientId}` : ""}`
   const { data: projects = [], isLoading } = useQuery({ queryKey: ["projects", clientId], queryFn: () => apiFetch<Project[]>(`/projects?include_archived=true${qs}`) })
@@ -52,7 +64,34 @@ export function ProjectsPage() {
     navigate(base, { replace: true })
   }, [deepProjectId, deepCommentId, projects, navigate, user?.role])
 
-  const filtered = projects.filter(p => (!search || p.name.toLowerCase().includes(search.toLowerCase())) && (!statusF || p.status === statusF))
+  const needle = search.trim().toLowerCase()
+  const filtered = projects.filter((p) => {
+    if (statusF && p.status !== statusF) return false
+    if (!needle) return true
+    return p.name.toLowerCase().includes(needle) || (p.client_name || "").toLowerCase().includes(needle)
+  })
+  const groups = Object.values(
+    filtered.reduce<Record<string, { client_id: string; client_name: string; projects: Project[] }>>((acc, project) => {
+      const key = project.client_id
+      const bucket = acc[key] ?? { client_id: key, client_name: project.client_name || "Client", projects: [] }
+      bucket.projects.push(project)
+      acc[key] = bucket
+      return acc
+    }, {}),
+  )
+    .map((group) => ({
+      ...group,
+      projects: group.projects.slice().sort((a, b) => a.name.localeCompare(b.name)),
+    }))
+    .sort((a, b) => a.client_name.localeCompare(b.client_name))
+
+  const toggleSection = (id: string) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [id]: !prev[id] }
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify(next))
+      return next
+    })
+  }
   const invalidate = () => qc.invalidateQueries({ queryKey: ["projects"] })
   const save = useMutation({
     mutationFn: () => {
@@ -72,8 +111,8 @@ export function ProjectsPage() {
           <h1 className="text-base font-semibold tracking-tight">Projects</h1>
           <p className="text-xs text-muted-foreground">
             {isVA
-              ? "Create and open client projects — they appear in Log Time and Time Clock dropdowns"
-              : "One board per client project · cadence sets the reporting rhythm"}
+              ? "Clients you are assigned to, with their projects underneath."
+              : "Grouped by client. Open a section to see its projects."}
           </p>
         </div>
         {canCreate && <Button variant="gold" size="sm" onClick={() => { setForm(empty); setModal({ mode: "create" }); setError("") }}><Plus className="h-3.5 w-3.5" /> New Project</Button>}
@@ -84,33 +123,57 @@ export function ProjectsPage() {
         <Select value={statusF} onChange={e => setStatusF(e.target.value)} className="w-auto"><option value="">Any Status</option><option value="active">Active</option><option value="on_hold">On Hold</option><option value="completed">Completed</option><option value="archived">Archived</option></Select>
       </div>
       {isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map(p => {
-            const pct = p.task_total ? Math.round((p.task_done / p.task_total) * 100) : 0
+        <div className="space-y-3">
+          {groups.map((group) => {
+            const searching = needle.length > 0
+            const open = searching || !collapsed[group.client_id]
             return (
-              <Card key={p.id} className="overflow-hidden">
-                <div className="h-1.5" style={{ background: p.color }} />
-                <CardContent className="p-4 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <button className="text-left" onClick={() => setDetail(p)} title="Open project — Tasks, Details, Discussion, Meet-ups"><span className="flex items-center gap-1.5 text-sm font-semibold hover:underline"><FolderKanban className="h-4 w-4" style={{ color: p.color }} />{p.name}</span></button>
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] capitalize">{p.status.replace("_", " ")}</span>
+              <section key={group.client_id} className="overflow-hidden rounded-2xl border bg-card">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+                  aria-expanded={open}
+                  onClick={() => toggleSection(group.client_id)}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-bold">{group.client_name}</span>
+                    <span className="text-[11px] text-muted-foreground">{group.projects.length} project{group.projects.length === 1 ? "" : "s"}</span>
+                  </span>
+                  <ChevronDown className={`h-4 w-4 shrink-0 text-muted-foreground transition ${open ? "rotate-180" : ""}`} />
+                </button>
+                {open && (
+                  <div className="grid gap-3 border-t p-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {group.projects.map(p => {
+                      const pct = p.task_total ? Math.round((p.task_done / p.task_total) * 100) : 0
+                      return (
+                        <Card key={p.id} className="overflow-hidden">
+                          <div className="h-1.5" style={{ background: p.color }} />
+                          <CardContent className="space-y-2 p-4">
+                            <div className="flex items-start justify-between gap-2">
+                              <button className="text-left" onClick={() => setDetail(p)} title="Open project"><span className="flex items-center gap-1.5 text-sm font-semibold hover:underline"><FolderKanban className="h-4 w-4" style={{ color: p.color }} />{p.name}</span></button>
+                              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] capitalize">{p.status.replace("_", " ")}</span>
+                            </div>
+                            {p.description && <p className="line-clamp-2 text-xs text-muted-foreground">{p.description}</p>}
+                            <div className="text-[11px] text-muted-foreground">{CADENCE_LABEL[p.cadence]} · {p.due_date ? `Due ${formatDate(p.due_date)}` : "No due date"}</div>
+                            <div><div className="flex justify-between text-[11px]"><span>{p.task_done}/{p.task_total} done · {p.task_in_progress} in progress</span><span>{pct}%</span></div><div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full" style={{ width: `${pct}%`, background: p.color }} /></div></div>
+                            <div className="flex items-center justify-between pt-1">
+                              <span className="text-[11px] text-muted-foreground">{p.total_hours}h logged</span>
+                              <span className="flex items-center gap-2">
+                                <button className="text-xs text-primary underline" onClick={() => setDetail(p)}>Open</button>
+                                {canManage && <button title="Edit project" onClick={() => openEdit(p)}><Pencil className="h-3.5 w-3.5 text-muted-foreground" /></button>}
+                                {canManage && <button onClick={() => { if (confirm("Delete project? Tasks will be kept unlinked.")) remove.mutate(p.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></button>}
+                              </span>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    })}
                   </div>
-                  {p.description && <p className="text-xs text-muted-foreground line-clamp-2">{p.description}</p>}
-                  <div className="text-[11px] text-muted-foreground">{p.client_name} · {CADENCE_LABEL[p.cadence]} · {p.due_date ? `Due ${formatDate(p.due_date)}` : "No due date"}</div>
-                  <div><div className="flex justify-between text-[11px]"><span>{p.task_done}/{p.task_total} done · {p.task_in_progress} in progress</span><span>{pct}%</span></div><div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full" style={{ width: `${pct}%`, background: p.color }} /></div></div>
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-[11px] text-muted-foreground">{p.total_hours}h logged</span>
-                    <span className="flex items-center gap-2">
-                      <button className="text-xs text-primary underline" onClick={() => setDetail(p)}>Tasks · Discussion · Meet-ups →</button>
-                      {canManage && <button title="Edit project" onClick={() => openEdit(p)}><Pencil className="h-3.5 w-3.5 text-muted-foreground" /></button>}
-                      {canManage && <button onClick={() => { if (confirm("Delete project? Tasks will be kept unlinked.")) remove.mutate(p.id) }}><Trash2 className="h-3.5 w-3.5 text-red-500" /></button>}
-                    </span>
-                  </div>
-                </CardContent>
-              </Card>
+                )}
+              </section>
             )
           })}
-          {filtered.length === 0 && <p className="text-sm text-muted-foreground">No projects yet.{canCreate ? " Create one to group tasks per client." : ""}</p>}
+          {groups.length === 0 && <p className="text-sm text-muted-foreground">No projects yet.{canCreate ? " Create one to group tasks per client." : ""}</p>}
         </div>
       )}
       {detail && (

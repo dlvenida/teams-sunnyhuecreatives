@@ -11,6 +11,7 @@ from app.database import get_db
 from app.deps import CurrentUser, require_va
 from app.models import (
     Client,
+    ClientApprovalStatus,
     PayrollRun,
     SubClient,
     TimesheetStatus,
@@ -26,6 +27,7 @@ from app.services.notifications import push
 from app.services.package_overrides import effective_package_amount, load_overrides
 from app.services.va_rates import combine_period_pay, get_approved_rate, package_flats_for_period, package_period_amounts, resolve_log_pay
 from app.services.work_log_entry import apply_work_log_timing, resolve_timing
+from app.services.va_scope import ensure_va_scope, is_va, load_va_scope
 from app.services.work_log_overlap import assert_no_time_overlap
 
 router = APIRouter(prefix="/va", tags=["va"])
@@ -67,16 +69,16 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
 
 @router.get("/clients", response_model=list[ClientResponse])
 def list_clients_for_va(
-    _: Annotated[CurrentUser, Depends(require_va)],
+    current: Annotated[CurrentUser, Depends(require_va)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    from app.models import ClientApprovalStatus
-    return (
-        db.query(Client)
-        .filter(Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved)
-        .order_by(Client.name)
-        .all()
-    )
+    q = db.query(Client).filter(Client.is_active == True, Client.approval_status == ClientApprovalStatus.approved)
+    if is_va(current):
+        scope = load_va_scope(db, current.va_id)
+        if not scope.client_ids:
+            return []
+        q = q.filter(Client.id.in_(scope.client_ids))
+    return q.order_by(Client.name).all()
 
 
 @router.get("/my-clients")
@@ -172,11 +174,16 @@ def set_my_client_role(
 
 @router.get("/sub-clients", response_model=list[SubClientResponse])
 def list_sub_clients_for_va(
-    _: Annotated[CurrentUser, Depends(require_va)],
+    current: Annotated[CurrentUser, Depends(require_va)],
     db: Annotated[Session, Depends(get_db)],
     client_id: str | None = None,
 ):
     q = db.query(SubClient).filter(SubClient.is_active == True)
+    if is_va(current):
+        scope = load_va_scope(db, current.va_id)
+        if not scope.client_ids:
+            return []
+        q = q.filter(SubClient.client_id.in_(scope.client_ids))
     if client_id:
         q = q.filter(SubClient.client_id == client_id)
     return q.order_by(SubClient.name).all()
@@ -236,6 +243,13 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
     data = body.model_dump(exclude_unset=True)
     for key in ("entry_mode", "duration_hours", "duration_minutes", "start_time", "end_time"):
         data.pop(key, None)
+    if is_va(current) and ("client_id" in data or "project_id" in data):
+        ensure_va_scope(
+            db,
+            current.va_id,
+            data.get("client_id", log.client_id),
+            data.get("project_id", log.project_id),
+        )
     for k, v in data.items():
         setattr(log, k, v)
     if apply_work_log_timing(db, log, body):
@@ -577,6 +591,8 @@ def submit_work_log(
             start_time=start_time,
             end_time=end_time,
         )
+    if is_va(current):
+        ensure_va_scope(db, current.va_id, body.client_id, body.project_id)
     rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
     payable_on = resolve_payable_on(db, current.va_id, body.work_date)
     task_name = (body.task_name or "").strip() or None

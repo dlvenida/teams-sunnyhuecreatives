@@ -73,6 +73,11 @@ export function VATimeLogPage() {
   const [projectModal, setProjectModal] = useState(false)
   const [newProject, setNewProject] = useState({ name: "", description: "", client_id: "" })
   const [projectError, setProjectError] = useState("")
+  const [taskQuery, setTaskQuery] = useState("")
+  const [taskOpen, setTaskOpen] = useState(false)
+  const [newTaskOpen, setNewTaskOpen] = useState(false)
+  const [newTaskTitle, setNewTaskTitle] = useState("")
+  const [taskCreateError, setTaskCreateError] = useState("")
 
   const { data: clients = [] } = useQuery({
     queryKey: [isStaff ? "clients" : "va-clients"],
@@ -110,6 +115,27 @@ export function VATimeLogPage() {
       setProjectError("")
     },
     onError: (e: Error) => setProjectError(e.message),
+  })
+
+  const createTask = useMutation({
+    mutationFn: () =>
+      apiFetch<TaskItem>("/tasks", {
+        method: "POST",
+        body: JSON.stringify({
+          title: newTaskTitle.trim(),
+          client_id: form.client_id,
+          project_id: form.project_id,
+          status: "todo",
+        }),
+      }),
+    onSuccess: (task) => {
+      qc.invalidateQueries({ queryKey: ["tasks-mine"] })
+      setForm((current) => ({ ...current, task_id: task.id }))
+      setNewTaskTitle("")
+      setNewTaskOpen(false)
+      setTaskCreateError("")
+    },
+    onError: (e: Error) => setTaskCreateError(e.message),
   })
 
   const hours = entryHours(entryMode, form.start_time, form.end_time, durationHours, durationMinutes)
@@ -236,7 +262,7 @@ export function VATimeLogPage() {
         <CardContent className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <div><Label>Date</Label><Input type="date" value={form.work_date} onChange={(e) => setForm({ ...form, work_date: e.target.value })} /></div>
-            <div><Label>Client</Label><Select value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value, sub_client_id: "" })}><option value="">Select client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
+            <div><Label>Client</Label><Select value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value, sub_client_id: "", project_id: "", task_id: "" })}><option value="">Select client</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select></div>
             <div className="sm:col-span-2">
               <Label>Task name</Label>
               <Input
@@ -250,54 +276,108 @@ export function VATimeLogPage() {
             <div>
               <div className="mb-1 flex items-center justify-between gap-2">
                 <Label>Project</Label>
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
-                  onClick={() => {
-                    setProjectError("")
-                    setNewProject({ name: "", description: "", client_id: form.client_id || "" })
-                    setProjectModal(true)
-                  }}
-                >
-                  <Plus className="h-3 w-3" /> New project
-                </button>
+                {isStaff && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
+                    onClick={() => {
+                      setProjectError("")
+                      setNewProject({ name: "", description: "", client_id: form.client_id || "" })
+                      setProjectModal(true)
+                    }}
+                  >
+                    <Plus className="h-3 w-3" /> New project
+                  </button>
+                )}
               </div>
-              <Select value={form.project_id} onChange={(e) => setForm({ ...form, project_id: e.target.value })}>
-                <option value="">No project</option>
-                {projects.filter((p) => !form.client_id || p.client_id === form.client_id).map((p) => (
+              <Select
+                aria-label="Project"
+                value={form.project_id}
+                disabled={!isStaff && !form.client_id}
+                onChange={(e) => setForm({ ...form, project_id: e.target.value, task_id: "" })}
+              >
+                <option value="">{form.client_id ? "No project" : "Choose a client first"}</option>
+                {form.client_id && projects.filter((p) => p.client_id === form.client_id).map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </Select>
-              {projects.filter((p) => !form.client_id || p.client_id === form.client_id).length === 0 && (
-                <p className="mt-1 text-[11px] text-muted-foreground">No projects yet — create one so you can select it when logging time.</p>
+              {!isStaff && !form.client_id && (
+                <p className="mt-1 text-[11px] text-muted-foreground">Choose a client to see its projects.</p>
               )}
             </div>
             <div>
-              <Label>My Task</Label>
-              <Select
-                value={form.task_id}
-                onChange={(e) => {
-                  const t = myTasks.find((x) => x.id === e.target.value)
-                  setForm({
-                    ...form,
-                    task_id: e.target.value,
-                    task_name: t?.title || form.task_name,
-                    client_id: t ? t.client_id : form.client_id,
-                    project_id: (t && t.project_id) || form.project_id,
-                  })
-                }}
-              >
-                <option value="">No task</option>
-                {myTasks
-                  .filter((t) => t.status !== "done")
-                  .slice()
-                  .sort((a, b) => (a.client_name || "").localeCompare(b.client_name || "") || a.title.localeCompare(b.title))
-                  .map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.client_name ? `${t.client_name} — ${t.title}` : t.title}
-                    </option>
-                  ))}
-              </Select>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <Label>My Task</Label>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline"
+                  disabled={!form.client_id || !form.project_id}
+                  onClick={() => { setTaskCreateError(""); setNewTaskOpen((open) => !open) }}
+                >
+                  <Plus className="h-3 w-3" /> New Task
+                </button>
+              </div>
+              {(!form.client_id || !form.project_id) && (
+                <p className="mb-1 text-[11px] text-muted-foreground">Choose a client and project before adding a task.</p>
+              )}
+              <div className="relative">
+                <Input
+                  aria-label="My Task"
+                  autoComplete="off"
+                  value={taskOpen ? taskQuery : (myTasks.find((t) => t.id === form.task_id)?.title || "")}
+                  onFocus={() => { setTaskOpen(true); setTaskQuery("") }}
+                  onBlur={() => window.setTimeout(() => setTaskOpen(false), 150)}
+                  onChange={(e) => { setTaskQuery(e.target.value); setTaskOpen(true) }}
+                />
+                {taskOpen && (
+                  <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-xl border bg-card shadow-lg">
+                    <li>
+                      <button type="button" className="w-full px-3 py-2 text-left text-xs text-muted-foreground hover:bg-muted" onMouseDown={() => { setForm({ ...form, task_id: "" }); setTaskOpen(false) }}>No task</button>
+                    </li>
+                    {myTasks
+                      .filter((t) => t.status !== "done")
+                      .filter((t) => !form.client_id || t.client_id === form.client_id)
+                      .filter((t) => !form.project_id || t.project_id === form.project_id)
+                      .filter((t) => !taskQuery.trim() || t.title.toLowerCase().includes(taskQuery.trim().toLowerCase()))
+                      .sort((a, b) => a.title.localeCompare(b.title))
+                      .map((t) => (
+                        <li key={t.id}>
+                          <button
+                            type="button"
+                            className="w-full px-3 py-2 text-left text-xs hover:bg-muted"
+                            onMouseDown={() => { setForm({ ...form, task_id: t.id }); setTaskOpen(false); setTaskQuery("") }}
+                          >
+                            {t.title}
+                          </button>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </div>
+              {newTaskOpen && (
+                <div className="mt-2 space-y-2 rounded-xl border p-3">
+                  <Label>New task title</Label>
+                  <Input aria-label="New task title" autoComplete="off" value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} />
+                  {newTaskTitle.trim() && (
+                    <ul className="space-y-1 text-[11px] text-muted-foreground">
+                      {myTasks
+                        .filter((t) => t.project_id === form.project_id && t.title.toLowerCase().includes(newTaskTitle.trim().toLowerCase()))
+                        .slice(0, 5)
+                        .map((t) => <li key={t.id}>Similar: {t.title}</li>)}
+                    </ul>
+                  )}
+                  {taskCreateError && <p className="text-[11px] text-red-600">{taskCreateError}</p>}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!newTaskTitle.trim() || createTask.isPending}
+                    onClick={() => createTask.mutate()}
+                  >
+                    {createTask.isPending ? "Adding..." : "Add task"}
+                  </Button>
+                </div>
+              )}
             </div>
             <TimeEntryModeFields
               mode={entryMode}
@@ -454,7 +534,7 @@ export function VATimeLogPage() {
 
       {viewingLog && <LogAttachmentsViewer logId={viewingLog.id} onClose={() => setViewingLog(null)} />}
 
-      {projectModal && (
+      {isStaff && projectModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setProjectModal(false)}>
           <div className="w-full max-w-md rounded-2xl bg-card p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-3 flex items-center justify-between">

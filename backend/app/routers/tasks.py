@@ -31,6 +31,7 @@ from app.services.task_recurrence import (
     recurrence_label,
     spawn_next_occurrence,
 )
+from app.services.va_scope import ensure_va_scope, is_va
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -220,10 +221,13 @@ def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_cu
     payload = body.model_dump(exclude={"assignee_va_id"})
     _normalize_recurrence(payload)
     assignee = body.assignee_va_id
-    if current.role == UserRole.va:
-        assignee = assignee or current.va_id
-        if assignee != current.va_id:
+    if is_va(current):
+        if assignee and assignee != current.va_id:
             raise HTTPException(403, "VAs can only assign tasks to themselves")
+        assignee = current.va_id
+        ensure_va_scope(db, current.va_id, body.client_id, body.project_id)
+        if payload.get("status") is None:
+            payload["status"] = TaskStatus.todo
     max_pos = db.query(func.coalesce(func.max(Task.position), 0)).filter(Task.status == body.status).scalar() or 0
     t = Task(**payload, assignee_va_id=assignee, created_by=current.user.id, position=int(max_pos) + 1)
     if t.status == TaskStatus.done:

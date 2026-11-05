@@ -3,15 +3,17 @@ import { cn } from "@/lib/utils"
 interface StatCardProps {
   title: string
   value: string | number
+  detail?: string | null
   subtitle?: string
   className?: string
 }
 
-export function StatCard({ title, value, subtitle, className }: StatCardProps) {
+export function StatCard({ title, value, detail, subtitle, className }: StatCardProps) {
   return (
     <div className={cn("rounded-xl border border-border bg-card p-4 shadow-sm animate-fade-in", className)}>
       <p className="text-[11px] text-muted-foreground">{title}</p>
       <p className="mt-0.5 text-lg font-bold tracking-tight text-foreground">{value}</p>
+      {detail && <p className="mt-0.5 text-[10px] font-medium text-muted-foreground">{detail}</p>}
       {subtitle && <p className="mt-0.5 text-[10px] text-muted-foreground">{subtitle}</p>}
     </div>
   )

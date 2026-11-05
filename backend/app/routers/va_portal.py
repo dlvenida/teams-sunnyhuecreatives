@@ -279,6 +279,33 @@ def delete_my_work_log(log_id: UUID, current: Annotated[CurrentUser, Depends(req
     db.commit()
 
 
+def _positive_rate(raw) -> Decimal | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        rate = Decimal(str(raw))
+    except Exception:
+        return None
+    return rate if rate > 0 else None
+
+
+@router.get("/usd-php-rate")
+def my_usd_php_rate(current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
+    """The admin's USD to PHP rate, and nothing else. The VA's estimate stays in the browser."""
+    from app.routers.settings import _get_settings
+
+    rate = _positive_rate(_get_settings(db).get("usd_php_rate"))
+    if rate is None:
+        latest = (
+            db.query(PayrollRun.usd_php_rate)
+            .filter(PayrollRun.usd_php_rate.isnot(None), PayrollRun.usd_php_rate > 0)
+            .order_by(PayrollRun.paid_at.desc())
+            .first()
+        )
+        rate = _positive_rate(latest[0] if latest else None)
+    return {"usd_php_rate": str(rate) if rate is not None else None}
+
+
 @router.get("/earnings")
 def my_earnings(
     current: Annotated[CurrentUser, Depends(require_va)],

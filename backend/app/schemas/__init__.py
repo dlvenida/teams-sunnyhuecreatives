@@ -1365,6 +1365,7 @@ class SettingsUpdate(BaseModel):
     booking_url: str | None = None
     booking_hide_pricing: bool | None = None
     default_va_hourly_rate: Decimal | None = None
+    usd_php_rate: Decimal | None = None
     resend_api_key: str | None = None
     resend_from_email: str | None = None
     admin_notify_email: str | None = None
@@ -1380,6 +1381,7 @@ class SettingsResponse(BaseModel):
     booking_url: str = ""
     booking_hide_pricing: bool = True
     default_va_hourly_rate: Decimal = Decimal("75.00")
+    usd_php_rate: Decimal | None = None
     resend_api_key: str = ""
     resend_from_email: str = "onboarding@resend.dev"
     admin_notify_email: str = "janelaurine@gmail.com"

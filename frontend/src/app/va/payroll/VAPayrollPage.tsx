@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
 import { cn, formatCurrency, formatDate, formatInvoiceDate, localISODate, payrollPdfFilename } from "@/lib/utils"
+import { VA_USD_PHP_STORAGE_KEY, initialRateInput, isUsdPaid, parseUsdPhpRate, pesoEstimatePlan } from "@/lib/pesoEstimate"
 import { VAEarningsDocument } from "@/components/pdf/VAEarningsDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { generatePdfBlob } from "@/lib/pdf"
@@ -186,6 +187,8 @@ export function VAPayrollPage() {
   const [pdfFilename, setPdfFilename] = useState("my-payroll.pdf")
   const [submitMsg, setSubmitMsg] = useState("")
   const [submitErr, setSubmitErr] = useState("")
+  const [rateInput, setRateInput] = useState(() => localStorage.getItem(VA_USD_PHP_STORAGE_KEY) ?? "")
+  const [rateChosen, setRateChosen] = useState(() => localStorage.getItem(VA_USD_PHP_STORAGE_KEY) !== null)
 
   const rangeReady = !!dateFrom && !!dateTo
   const { data: earnings, isLoading } = useQuery({
@@ -202,6 +205,37 @@ export function VAPayrollPage() {
     queryKey: ["va-payroll-history", year],
     queryFn: () => apiFetch<HistoryResponse>(`/va/payroll-history?year=${year}`),
   })
+  const grand = useMemo(() => {
+    const rows = earnings?.by_client ?? []
+    const currency = earnings?.currency || ""
+    const same = rows.filter((row) => (row.currency || currency) === currency)
+    const earned = same.reduce((sum, row) => sum + Number(row.earned || 0), 0)
+    const hours = rows.reduce((sum, row) => sum + Number(row.hours || 0), 0)
+    return { earned, hours, currency, show: rows.length > 0 }
+  }, [earnings])
+  const pesoAmounts = useMemo(() => {
+    if (!earnings) return []
+    const profile = earnings.currency || ""
+    return [
+      { id: "range", currency: earnings.range?.currency || profile, amount: earnings.range?.earned ?? 0 },
+      { id: "week", currency: earnings.this_week.currency || profile, amount: earnings.this_week.earned },
+      { id: "month", currency: earnings.this_month.currency || profile, amount: earnings.this_month.earned },
+      ...earnings.by_client.map((row) => ({ id: `client-${row.client_id}`, currency: row.currency || profile, amount: row.earned })),
+      { id: "grand", currency: grand.currency, amount: grand.earned },
+    ]
+  }, [earnings, grand])
+  const hasUsdPay = pesoAmounts.some((row) => isUsdPaid(row.currency))
+  const { data: adminRate } = useQuery({
+    queryKey: ["va-usd-php-rate"],
+    queryFn: () => apiFetch<{ usd_php_rate: string | null }>("/va/usd-php-rate"),
+    enabled: hasUsdPay,
+  })
+  useEffect(() => {
+    if (!hasUsdPay || rateChosen || !adminRate) return
+    setRateInput(initialRateInput(null, adminRate.usd_php_rate))
+  }, [adminRate, hasUsdPay, rateChosen])
+  const plan = pesoEstimatePlan(pesoAmounts, hasUsdPay ? parseUsdPhpRate(rateInput) : null)
+  const pesoText = (id: string) => plan.lines.find((line) => line.id === id)?.text ?? null
   const submitted = sheets[0]
 
   const yearOptions = useMemo(() => {
@@ -456,16 +490,39 @@ export function VAPayrollPage() {
               </p>
             </div>
 
+            {plan.showField && (
+              <div className="rounded-2xl border bg-card p-4">
+                <Label htmlFor="va-usd-php-rate">Enter USD to PHP rate to estimate your pay in pesos:</Label>
+                <Input
+                  id="va-usd-php-rate"
+                  className="mt-1 max-w-xs"
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  min="0"
+                  placeholder="58.50"
+                  value={rateInput}
+                  onChange={(e) => {
+                    setRateInput(e.target.value)
+                    setRateChosen(true)
+                    localStorage.setItem(VA_USD_PHP_STORAGE_KEY, e.target.value)
+                  }}
+                />
+                <p className="mt-1 text-[11px] text-muted-foreground">This is an estimate only. Your actual peso amount will depend on the exchange rate on payroll day.</p>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               <StatCard
                 title="Range total"
                 value={formatCurrency(earnings.range?.earned ?? 0, earnings.currency)}
+                detail={pesoText("range")}
                 subtitle={`${earnings.range?.hours ?? 0} hrs approved`}
                 className="border-primary/30"
               />
               <StatCard title="Entries" value={earnings.range?.entries ?? 0} subtitle="Approved in this range" />
-              <StatCard title="This week" value={formatCurrency(earnings.this_week.earned, earnings.this_week.currency)} subtitle={`${earnings.this_week.hours} hrs`} />
-              <StatCard title="This month" value={formatCurrency(earnings.this_month.earned, earnings.this_month.currency)} subtitle={`${earnings.this_month.hours} hrs`} />
+              <StatCard title="This week" value={formatCurrency(earnings.this_week.earned, earnings.this_week.currency)} detail={pesoText("week")} subtitle={`${earnings.this_week.hours} hrs`} />
+              <StatCard title="This month" value={formatCurrency(earnings.this_month.earned, earnings.this_month.currency)} detail={pesoText("month")} subtitle={`${earnings.this_month.hours} hrs`} />
             </div>
 
             <Card>
@@ -487,7 +544,10 @@ export function VAPayrollPage() {
                         <td className="p-3 font-semibold">{r.client_name}</td>
                         <td className="p-3">{r.pay_type === "package" ? "Fixed Package" : "Hourly"}</td>
                         <td className="p-3">{r.hours}</td>
-                        <td className="p-3 font-semibold">{formatCurrency(r.earned, r.currency)}</td>
+                        <td className="p-3 font-semibold">
+                          {formatCurrency(r.earned, r.currency)}
+                          {pesoText(`client-${r.client_id}`) && <span className="mt-0.5 block text-[10px] font-medium text-muted-foreground">{pesoText(`client-${r.client_id}`)}</span>}
+                        </td>
                         <td className="p-3">{r.status}</td>
                       </tr>
                     ))}
@@ -495,6 +555,20 @@ export function VAPayrollPage() {
                       <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">No approved work in this range yet.</td></tr>
                     )}
                   </tbody>
+                  {grand.show && (
+                    <tfoot>
+                      <tr className="border-t bg-muted/30">
+                        <td className="p-3 font-bold">Grand total</td>
+                        <td className="p-3" />
+                        <td className="p-3 font-semibold">{grand.hours.toFixed(2)}</td>
+                        <td className="p-3 font-bold">
+                          {formatCurrency(grand.earned, grand.currency || "PHP")}
+                          {pesoText("grand") && <span className="mt-0.5 block text-[10px] font-medium text-muted-foreground">{pesoText("grand")}</span>}
+                        </td>
+                        <td className="p-3" />
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </CardContent>
             </Card>

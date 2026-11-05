@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useSearchParams } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
 import { cn, formatCurrency, formatDate, payrollPdfFilename } from "@/lib/utils"
+import { parseUsdPhpRate } from "@/lib/pesoEstimate"
 import { PayrollDocument } from "@/components/pdf/PayrollDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { PayslipPaperModal } from "@/components/payroll/PayslipPaperModal"
@@ -214,13 +215,25 @@ export function PayrollPage() {
   const [reviewTimesheetId, setReviewTimesheetId] = useState<string | null>(null)
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
   const [usdPhpRate, setUsdPhpRate] = useState("")
-  const parsedRate = (() => {
-    const r = parseFloat(usdPhpRate)
-    return usdPhpRate && !Number.isNaN(r) && r > 0 ? r : null
-  })()
+  const rateHydrated = useRef(false)
+  const rateTimer = useRef<number | null>(null)
+  const parsedRate = parseUsdPhpRate(usdPhpRate)
 
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => apiFetch<Settings>("/settings") })
+  useEffect(() => {
+    if (rateHydrated.current || !settings) return
+    rateHydrated.current = true
+    if (settings.usd_php_rate) setUsdPhpRate(String(settings.usd_php_rate))
+  }, [settings])
+  function rememberRate(value: string) {
+    setUsdPhpRate(value)
+    if (!isAdmin) return
+    if (rateTimer.current) window.clearTimeout(rateTimer.current)
+    rateTimer.current = window.setTimeout(() => {
+      apiFetch("/settings", { method: "PUT", body: JSON.stringify({ usd_php_rate: parseUsdPhpRate(value) }) }).catch(() => {})
+    }, 400)
+  }
 
   type PendingSheet = {
     id: string
@@ -474,7 +487,7 @@ export function PayrollPage() {
               min="0"
               placeholder="e.g. 58.50"
               value={usdPhpRate}
-              onChange={(e) => setUsdPhpRate(e.target.value)}
+              onChange={(e) => rememberRate(e.target.value)}
             />
             <p className="mt-1 text-[10px] text-muted-foreground">
               {parsedRate

@@ -33,6 +33,28 @@ export function formatPesoEstimate(amount: number | string, rate: number | null)
   return `≈ PHP ${formatted}`
 }
 
-export function showsUsd(currency: string | null | undefined): boolean {
-  return String(currency || "USD").toUpperCase() === "USD"
+/** True only for an amount that is paid in USD. Blank is not treated as USD. */
+export function isUsdPaid(currency: string | null | undefined): boolean {
+  return String(currency ?? "").trim().toUpperCase() === "USD"
+}
+
+export interface PesoAmount {
+  id: string
+  currency?: string | null
+  amount?: number | string | null
+}
+
+/**
+ * VAs and Project Managers paid only in PHP get nothing: no field, no disclaimer, no peso lines.
+ * Mixed pay shows a line only on the USD amounts.
+ */
+export function pesoEstimatePlan(amounts: PesoAmount[], rate: number | null) {
+  const showFeature = amounts.some((row) => isUsdPaid(row.currency))
+  if (!showFeature) return { showField: false, showDisclaimer: false, lines: [] as { id: string; text: string }[] }
+  const lines = amounts.flatMap((row) => {
+    if (!isUsdPaid(row.currency)) return []
+    const text = formatPesoEstimate(row.amount ?? 0, rate)
+    return text ? [{ id: row.id, text }] : []
+  })
+  return { showField: true, showDisclaimer: true, lines }
 }

@@ -3,7 +3,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -11,6 +11,7 @@ from app.deps import CurrentUser, get_current_user, require_admin, require_admin
 from app.models import Client, CommentAttachment, CommentReaction, Project, ProjectComment, ProjectMeetup, ProjectStatus, SubClient, Task, TaskStatus, UserRole, WorkLog
 from app.schemas import LinkAttachmentCreate, MeetupCreate, MeetupResponse, MeetupUpdate, ProjectCommentCreate, ProjectCreate, ProjectResponse, ProjectUpdate, ReactionToggle, TaskCommentResponse, TaskCommentUpdate
 from app.services import comments as comment_svc
+from app.services.va_scope import is_va, load_va_scope
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -31,7 +32,7 @@ def _serialize(db: Session, p: Project) -> ProjectResponse:
 
 @router.get("", response_model=list[ProjectResponse])
 def list_projects(
-    _: Annotated[CurrentUser, Depends(get_current_user)],
+    current: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
     client_id: UUID | None = None,
     status_filter: ProjectStatus | None = None,
@@ -44,13 +45,27 @@ def list_projects(
         q = q.filter(Project.status == status_filter)
     elif not include_archived:
         q = q.filter(Project.status != ProjectStatus.archived)
-    return [_serialize(db, p) for p in q.order_by(Project.created_at.desc()).all()]
+    if is_va(current):
+        scope = load_va_scope(db, current.va_id)
+        if not scope.client_ids and not scope.project_ids:
+            return []
+        limits = []
+        if scope.broad_client_ids:
+            limits.append(Project.client_id.in_(scope.broad_client_ids))
+        if scope.project_ids:
+            limits.append(Project.id.in_(scope.project_ids))
+        if not limits:
+            return []
+        q = q.filter(or_(*limits))
+    return [_serialize(db, p) for p in q.order_by(Project.client_id, Project.name).all()]
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
 def create_project(body: ProjectCreate, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
-    """Admin, auditor, or VA can create a project (name + description + client)."""
-    if current.role not in (UserRole.admin, UserRole.auditor, UserRole.va):
+    """Only an Admin or Project Manager can create a project."""
+    if current.role == UserRole.va:
+        raise HTTPException(status_code=403, detail="Only an Admin or Project Manager can create projects")
+    if current.role not in (UserRole.admin, UserRole.auditor):
         raise HTTPException(403, "Not allowed to create projects")
     if not db.query(Client).filter(Client.id == body.client_id).first():
         raise HTTPException(404, "Client not found")
@@ -65,9 +80,13 @@ def create_project(body: ProjectCreate, current: Annotated[CurrentUser, Depends(
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
-def get_project(project_id: UUID, _: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+def get_project(project_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
     p = db.query(Project).options(joinedload(Project.client), joinedload(Project.sub_client)).filter(Project.id == project_id).first()
     if not p: raise HTTPException(404, "Project not found")
+    if is_va(current):
+        scope = load_va_scope(db, current.va_id)
+        if not scope.allows_project(p) or not scope.allows_client(p.client_id):
+            raise HTTPException(404, "Project not found")
     return _serialize(db, p)
 
 

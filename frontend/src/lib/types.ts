@@ -174,6 +174,7 @@ export interface PayrollResponse {
 export interface PayrollVA {
   va_id: string
   va_name: string
+  role_label?: string | null
   currency: "PHP" | "USD"
   total_hours: string
   total_pay?: string | null

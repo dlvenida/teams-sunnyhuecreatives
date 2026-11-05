@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
+from app.services.pay_access import hide_team_money
 from decimal import Decimal
 from app.models import ActivityLog, EmailLog, EmailTemplate, SystemSetting, UserRole
 from app.schemas import (
@@ -117,10 +118,10 @@ def get_display_settings(
     s = _get_settings(db)
     # Auditors must never receive money-related defaults
     rate = s.get("default_va_hourly_rate", "75.00")
-    if current.role == UserRole.auditor:
+    if hide_team_money(current.role):
         rate = "0"
     return DisplaySettingsResponse(
-        hide_pricing=True if current.role == UserRole.auditor else bool(s.get("hide_pricing", True)),
+        hide_pricing=True if hide_team_money(current.role) else bool(s.get("hide_pricing", True)),
         booking_url=s.get("booking_url") or "",
         booking_hide_pricing=bool(s.get("booking_hide_pricing", True)),
         default_va_hourly_rate=rate,
@@ -134,7 +135,7 @@ def get_settings(
 ):
     """Company branding for PDFs/reports. Money fields are blanked for auditors."""
     data = _get_settings(db)
-    if current.role == UserRole.auditor:
+    if hide_team_money(current.role):
         data = {
             **data,
             "wise_email": "",

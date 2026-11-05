@@ -20,6 +20,7 @@ from app.services.calculations import calculate_pay
 from app.services.work_log_entry import apply_work_log_timing
 from app.services.images import ALLOWED_CONTENT_TYPES, optimize_image
 from app.services.notifications import push, va_user_id
+from app.services.pay_access import hide_team_money
 
 router = APIRouter(prefix="/work-logs", tags=["work-logs"])
 
@@ -76,7 +77,7 @@ def list_work_logs(
     date_from: date | None = None,
     date_to: date | None = None,
 ):
-    redact = current.role == UserRole.auditor
+    redact = hide_team_money(current.role)
     return [_serialize_log(log, redact) for log in _query_logs(db, client_id, va_id, status_filter, date_from, date_to)]
 
 
@@ -161,7 +162,7 @@ def update_work_log(
     log = _get_log(db, log_id)
     data = body.model_dump(exclude_unset=True)
     # Auditors cannot touch money fields
-    if current.role == UserRole.auditor:
+    if hide_team_money(current.role):
         data.pop("va_rate", None)
         if "status" in data and data["status"] not in (WorkLogStatus.approved, WorkLogStatus.rejected, WorkLogStatus.submitted):
             raise HTTPException(403, "Auditor cannot set that status")
@@ -181,7 +182,7 @@ def update_work_log(
 
     db.commit()
     log = _get_log(db, log.id)
-    return _serialize_log(log, redact_money=current.role == UserRole.auditor)
+    return _serialize_log(log, redact_money=hide_team_money(current.role))
 
 
 @router.post("/{log_id}/approve", response_model=WorkLogResponse, response_model_exclude_none=True)

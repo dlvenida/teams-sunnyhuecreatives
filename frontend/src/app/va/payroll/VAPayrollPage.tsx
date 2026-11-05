@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, getAuthUser } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
@@ -172,6 +172,7 @@ function defaultRange() {
 
 export function VAPayrollPage() {
   const qc = useQueryClient()
+  const isManager = getAuthUser()?.role === "auditor"
   const defaults = useMemo(() => defaultRange(), [])
   const [dateFrom, setDateFrom] = useState(defaults.from)
   const [dateTo, setDateTo] = useState(defaults.to)
@@ -211,7 +212,9 @@ export function VAPayrollPage() {
       }),
     onSuccess: () => {
       setSubmitErr("")
-      setSubmitMsg("Timesheet submitted. Admin and your Project Manager can approve or reject it.")
+      setSubmitMsg(isManager
+        ? "Timesheet submitted. An Admin reviews it. You cannot approve your own timesheet."
+        : "Timesheet submitted. Admin and your Project Manager can approve or reject it.")
       qc.invalidateQueries({ queryKey: ["va-timesheets"] })
       qc.invalidateQueries({ queryKey: ["va-payroll-history"] })
     },
@@ -255,9 +258,11 @@ export function VAPayrollPage() {
     <div className="mx-auto max-w-4xl space-y-5 animate-fade-in">
       <div className="flex flex-wrap items-end justify-between gap-3 px-1 pt-1">
         <div>
-          <h1 className="font-display text-xl font-bold">My timesheets & pay</h1>
+          <h1 className="font-display text-xl font-bold">{isManager ? "My Timesheet / My Payslips" : "My timesheets & pay"}</h1>
           <p className="text-xs text-muted-foreground">
-            Grouped by week, Monday to Sunday. Submit a timesheet when the week is ready. Peso amounts are yours.
+            {isManager
+              ? "Only your pay and payslips. An Admin approves your timesheet and edits the amount."
+              : "Grouped by week, Monday to Sunday. Submit a timesheet when the week is ready. Peso amounts are yours."}
           </p>
         </div>
       </div>

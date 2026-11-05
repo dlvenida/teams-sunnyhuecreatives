@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
+from app.services.pay_access import hide_team_money
 from app.models import (
     BusinessExpense,
     Client,
@@ -334,7 +335,7 @@ def get_dashboard_summary(
     db: Annotated[Session, Depends(get_db)],
 ):
     # Auditors get ops metrics only — money fields zeroed
-    if current.role == UserRole.auditor:
+    if hide_team_money(current.role):
         pending_entries = db.query(WorkLog).filter(WorkLog.status == WorkLogStatus.submitted).count()
         approved_hours = (
             db.query(func.coalesce(func.sum(WorkLog.hours), 0))

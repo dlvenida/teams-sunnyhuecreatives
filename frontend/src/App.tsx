@@ -72,6 +72,8 @@ export default function App() {
                 <Route path="/admin/projects" element={<ProjectsPage />} />
                 <Route path="/admin/time-clock" element={<TimeClockPage />} />
                 <Route path="/admin/log-time" element={<VATimeLogPage />} />
+                <Route path="/admin/my-pay" element={<VAPayrollPage />} />
+                <Route path="/admin/my-rates" element={<VARatesPage />} />
                 <Route path="/admin/reports" element={<ReportsPage />} />
                 <Route path="/admin/analytics" element={<AnalyticsPage />} />
                 <Route path="/admin/users" element={<UsersPage />} />

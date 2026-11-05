@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, require_admin_or_auditor
+from app.services.pay_access import hide_team_money
 from app.models import Client, Invoice, Task, TaskStatus, UserRole, WorkLog, WorkLogStatus
 from app.schemas import (
     ReportBreakdown,
@@ -95,7 +96,7 @@ def report_clients(
 ):
     """Every client with their report stats for the period — powers the client list.
     Auditors always get hours-only (no rates/amounts)."""
-    show_rate = show_rate and not pricing_hidden(db) and current.role != UserRole.auditor
+    show_rate = show_rate and not pricing_hidden(db) and not hide_team_money(current.role)
     period_start, period_end, period_label = _resolve_period(
         year=year, month=month, cutoff=cutoff, date_from=date_from, date_to=date_to
     )
@@ -179,7 +180,7 @@ def generate_report(
     current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    show_rate = body.show_rate and not pricing_hidden(db) and current.role != UserRole.auditor
+    show_rate = body.show_rate and not pricing_hidden(db) and not hide_team_money(current.role)
     client = db.query(Client).filter(Client.id == body.client_id).first()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")

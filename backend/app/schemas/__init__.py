@@ -770,10 +770,18 @@ class VARateAdminCreate(BaseModel):
     notes: str | None = None
 
 
+class PayablePerson(BaseModel):
+    va_id: UUID
+    name: str
+    role: str
+    role_label: str
+
+
 class VARateResponse(BaseModel):
     id: UUID
     va_id: UUID
     va_name: str | None = None
+    person_role: str | None = None
     client_id: UUID
     client_name: str | None = None
     pay_type: PayType
@@ -1011,6 +1019,7 @@ class PayrollDay(BaseModel):
 class PayrollVAResult(BaseModel):
     va_id: UUID
     va_name: str
+    role_label: str | None = None
     currency: Currency
     total_hours: Decimal
     total_pay: Decimal | None = None

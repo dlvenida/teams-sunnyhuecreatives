@@ -357,6 +357,7 @@ export function TasksPage() {
                  ["Hours", `${commentTask.logged_hours}/${commentTask.estimated_hours || "—"}h`]
               ].map(([k, v]) => <div key={k} className="rounded-lg border bg-muted/20 p-2"><div className="text-muted-foreground">{k}</div><div className="mt-0.5 font-medium capitalize">{v}</div></div>)}
             </div>
+            <TaskTimeLogs taskId={commentTask.id} />
             <div className="mb-4"><DetailAttachments scope="task" scopeId={commentTask.id} /></div>
             <div className="mb-4"><TaskStaffNotes taskId={commentTask.id} canEdit={isStaff} /></div>
             <h3 className="mb-2 flex items-center gap-1.5 text-sm font-semibold"><MessageSquare className="h-4 w-4 text-primary" /> Comments & Updates</h3>
@@ -364,6 +365,30 @@ export function TasksPage() {
             <CommentThread scope="task" scopeId={commentTask.id} scopeTitle={commentTask.title} highlightCommentId={highlightCommentId} />
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+function TaskTimeLogs({ taskId }: { taskId: string }) {
+  const { data: logs = [] } = useQuery({
+    queryKey: ["task-work-logs", taskId],
+    queryFn: () => apiFetch<{ id: string; work_date: string; hours: string; task_name: string; description: string; va_name?: string | null }[]>(`/tasks/${taskId}/work-logs`),
+  })
+  return (
+    <div className="mb-4">
+      <h3 className="mb-2 text-sm font-semibold">Time logged</h3>
+      {logs.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">No time has been logged on this task yet.</p>
+      ) : (
+        <ul className="space-y-2">
+          {logs.map((log) => (
+            <li key={log.id} className="rounded-xl border p-2 text-xs">
+              <p className="font-semibold">{log.task_name || "Logged work"} <span className="font-normal text-muted-foreground">· {log.work_date} · {log.hours}h{log.va_name ? ` · ${log.va_name}` : ""}</span></p>
+              <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{log.description || "No description"}</p>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

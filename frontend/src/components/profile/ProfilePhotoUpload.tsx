@@ -3,7 +3,7 @@ import Cropper, { type Area } from "react-easy-crop"
 import "react-easy-crop/react-easy-crop.css"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { apiFetch, apiFetchBlob } from "@/lib/api"
-import { avifSupported, cropToAvif, readFileAsDataUrl } from "@/lib/cropImage"
+import { cropToJpeg, isPhotoFile, readFileAsDataUrl } from "@/lib/cropImage"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Camera, Trash2, User } from "lucide-react"
@@ -47,9 +47,10 @@ export function ProfilePhotoUpload({ hasPhoto, displayName, className }: Profile
   }, [hasPhoto, loadPhoto])
 
   const upload = useMutation({
-    mutationFn: async (blob: Blob) => {
+    mutationFn: async (file: Blob) => {
       const form = new FormData()
-      form.append("file", blob, "profile.avif")
+      const name = file instanceof File && file.name ? file.name : "profile.jpg"
+      form.append("file", file, name)
       return apiFetch("/profile/photo", { method: "POST", body: form })
     },
     onSuccess: () => {
@@ -75,29 +76,36 @@ export function ProfilePhotoUpload({ hasPhoto, displayName, className }: Profile
     const file = e.target.files?.[0]
     e.target.value = ""
     if (!file) return
-    if (!file.type.startsWith("image/")) {
-      setError("Please choose an image file.")
-      return
-    }
-    if (!avifSupported()) {
-      setError("Your browser cannot export AVIF. Please use Chrome or Safari.")
+    if (!isPhotoFile(file)) {
+      setError("Please choose a photo. JPG, PNG, HEIC, WebP, GIF, and AVIF all work.")
       return
     }
     setError("")
-    const dataUrl = await readFileAsDataUrl(file)
-    setImageSrc(dataUrl)
-    setCropOpen(true)
-    setZoom(1)
-    setCrop({ x: 0, y: 0 })
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      await new Promise<void>((resolve, reject) => {
+        const probe = new Image()
+        probe.onload = () => resolve()
+        probe.onerror = () => reject(new Error("preview"))
+        probe.src = dataUrl
+      })
+      setImageSrc(dataUrl)
+      setCropOpen(true)
+      setZoom(1)
+      setCrop({ x: 0, y: 0 })
+    } catch {
+      // iPhone HEIC often cannot be previewed. The server still resizes it.
+      upload.mutate(file)
+    }
   }
 
   const saveCrop = async () => {
     if (!imageSrc || !croppedArea) return
     try {
-      const blob = await cropToAvif(imageSrc, croppedArea)
+      const blob = await cropToJpeg(imageSrc, croppedArea)
       upload.mutate(blob)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to process image")
+      setError(err instanceof Error ? err.message : "Could not prepare that photo.")
     }
   }
 
@@ -121,16 +129,16 @@ export function ProfilePhotoUpload({ hasPhoto, displayName, className }: Profile
           </div>
           <label className="absolute -bottom-1 -right-1 flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md hover:opacity-90">
             <Camera className="h-4 w-4" />
-            <input type="file" accept="image/*" className="sr-only" onChange={onFilePick} />
+            <input type="file" accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp,.gif,.avif" className="sr-only" aria-label="Upload photo" onChange={onFilePick} />
           </label>
         </div>
         <div className="flex flex-col gap-1 text-center sm:text-left">
           <p className="text-sm font-semibold text-foreground">{displayName}</p>
-          <p className="text-[11px] text-muted-foreground">Square crop · saved as AVIF</p>
+          <p className="text-[11px] text-muted-foreground">Square crop. Large photos, including iPhone pictures, are resized for you.</p>
           <div className="mt-1 flex justify-center gap-2 sm:justify-start">
             <label className="cursor-pointer">
               <span className="text-[11px] font-medium text-primary hover:underline">Upload photo</span>
-              <input type="file" accept="image/*" className="sr-only" onChange={onFilePick} />
+              <input type="file" accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp,.gif,.avif" className="sr-only" aria-label="Upload photo" onChange={onFilePick} />
             </label>
             {hasPhoto && (
               <button
@@ -187,7 +195,7 @@ export function ProfilePhotoUpload({ hasPhoto, displayName, className }: Profile
                 Cancel
               </Button>
               <Button variant="gold" size="sm" disabled={upload.isPending} onClick={() => void saveCrop()}>
-                {upload.isPending ? "Saving..." : "Save as AVIF"}
+                {upload.isPending ? "Saving..." : "Save photo"}
               </Button>
             </div>
           </div>

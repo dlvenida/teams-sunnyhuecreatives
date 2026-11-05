@@ -570,7 +570,11 @@ class ClockOutRequest(BaseModel):
     notes: str | None = None
     create_work_log: bool = True
     description: str | None = None
+    task_name: str | None = None
     comment: str | None = None
+    client_id: UUID | None = None
+    project_id: UUID | None = None
+    task_id: UUID | None = None
 
 
 class VAWorkLogUpdate(BaseModel):

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
-import { cn, formatCurrency, formatDate } from "@/lib/utils"
+import { cn, formatCurrency, formatDate, localISODate } from "@/lib/utils"
 import { approvalTaskLabel, formatEnteredDuration, formatHoursMinutes, isDurationEntry } from "@/lib/approvalEntry"
 import { TimeEntryModeFields, durationError, splitStoredHours, timingBody, type EntryMode } from "@/components/logs/TimeEntryModeFields"
 import { Check, X, Pencil, Trash2, Download, Search, Clock3, Hand, Paperclip } from "lucide-react"
@@ -26,7 +26,7 @@ const PRESETS = [
 ] as const
 
 function presetRange(id: string): { from: string; to: string } {
-  const t = new Date(); const iso = (d: Date) => d.toISOString().slice(0, 10)
+  const t = new Date(); const iso = (d: Date) => localISODate(d)
   if (id === "today") return { from: iso(t), to: iso(t) }
   if (id === "this_week" || id === "last_week") {
     const mon = new Date(t); mon.setDate(t.getDate() - ((t.getDay() + 6) % 7) - (id === "last_week" ? 7 : 0))
@@ -38,10 +38,11 @@ function presetRange(id: string): { from: string; to: string } {
 }
 function initials(name: string) { return (name || "?").split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase() }
 function dayLabel(dateStr: string) {
-  const today = new Date().toISOString().slice(0, 10)
-  const y = new Date(); y.setDate(y.getDate() - 1)
+  const today = localISODate(new Date())
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
   if (dateStr === today) return "Today"
-  if (dateStr === y.toISOString().slice(0, 10)) return "Yesterday"
+  if (dateStr === localISODate(yesterday)) return "Yesterday"
   return formatDate(dateStr)
 }
 

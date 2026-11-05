@@ -344,6 +344,32 @@ def _get_visible_task(db: Session, current: CurrentUser, task_id: UUID) -> Task:
     return t
 
 
+@router.get("/{task_id}/work-logs")
+def task_work_logs(task_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    """Time logged against this task, including the description typed at clock-out."""
+    _get_visible_task(db, current, task_id)
+    rows = (
+        db.query(WorkLog)
+        .options(joinedload(WorkLog.va), joinedload(WorkLog.project))
+        .filter(WorkLog.task_id == task_id)
+        .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
+        .limit(30)
+        .all()
+    )
+    return [
+        {
+            "id": str(row.id),
+            "work_date": str(row.work_date),
+            "hours": str(row.hours),
+            "task_name": row.task_name or "",
+            "description": row.description_plain or "",
+            "va_name": row.va.name if row.va else None,
+            "project_name": row.project.name if row.project else None,
+        }
+        for row in rows
+    ]
+
+
 @router.get("/{task_id}/comments", response_model=list[TaskCommentResponse])
 def list_comments(task_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)],
                   sort: str = Query("newest", pattern="^(newest|oldest|most_reacted)$")):

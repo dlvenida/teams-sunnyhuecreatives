@@ -71,8 +71,16 @@ export function formatHoursMins(hours: number | string) {
   return `${h} hrs ${m} mins`
 }
 
+/** Calendar date in the browser's local zone. Do not use toISOString for this: Manila midnight is the previous day in UTC. */
+export function localISODate(d: Date): string {
+  const month = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${d.getFullYear()}-${month}-${day}`
+}
+
 export function formatDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("en-US", {
+  const day = d.slice(0, 10)
+  return new Date(day + "T00:00:00").toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -81,7 +89,8 @@ export function formatDate(d: string) {
 
 /** Long invoice date: `October 16, 2026` */
 export function formatInvoiceDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("en-US", {
+  const day = d.slice(0, 10)
+  return new Date(day + "T00:00:00").toLocaleDateString("en-US", {
     month: "long",
     day: "numeric",
     year: "numeric",

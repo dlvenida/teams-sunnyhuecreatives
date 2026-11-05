@@ -24,6 +24,39 @@ def payroll_period_for(d: date) -> tuple[date, date]:
     return date(d.year, d.month, 16), date(d.year, d.month, last)
 
 
+def snap_payroll_period(start: date, end: date) -> tuple[date, date]:
+    """Turn a Manila-midnight period that was saved as the previous UTC date back into the real half.
+
+    Nov 1 00:00 in Asia/Manila is still Oct 31 in UTC, and Nov 15 00:00 is Nov 14.
+    A timesheet saved that way reads Oct 31 to Nov 14 and overlaps both bi-weekly halves,
+    so the package total becomes the whole month. The real period is Nov 1 to Nov 15.
+    """
+    if end.day == 14 and start.day >= 28:
+        next_year = start.year + 1 if start.month == 12 else start.year
+        next_month = 1 if start.month == 12 else start.month + 1
+        last_of_start = monthrange(start.year, start.month)[1]
+        if start.day == last_of_start and end.year == next_year and end.month == next_month:
+            return date(end.year, end.month, 1), date(end.year, end.month, 15)
+    if start.day == 15 and start.year == end.year and start.month == end.month:
+        last = monthrange(end.year, end.month)[1]
+        if end.day == last - 1:
+            return date(start.year, start.month, 16), end.replace(day=last)
+    return start, end
+
+
+def period_lookup_keys(start: date, end: date) -> set[tuple[date, date]]:
+    """Canonical period plus the one-day-early form already stored on some timesheets."""
+    snapped = snap_payroll_period(start, end)
+    keys = {(start, end), snapped}
+    if snapped[0].day == 1 and snapped[1].day == 15 and snapped[0].month == snapped[1].month:
+        keys.add((snapped[0] - timedelta(days=1), date(snapped[1].year, snapped[1].month, 14)))
+    elif snapped[0].day == 16 and snapped[0].month == snapped[1].month:
+        last = monthrange(snapped[1].year, snapped[1].month)[1]
+        if snapped[1].day == last:
+            keys.add((date(snapped[0].year, snapped[0].month, 15), date(snapped[1].year, snapped[1].month, last - 1)))
+    return keys
+
+
 def period_deadline(period_end: date) -> date:
     """Submit-by date for a payroll period (same as period_end)."""
     return period_end

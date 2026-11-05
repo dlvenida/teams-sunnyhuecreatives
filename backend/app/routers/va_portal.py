@@ -5,6 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -23,6 +24,7 @@ from app.models import (
 from app.schemas import ClientResponse, SubClientResponse, TimesheetSubmissionResponse, TimesheetSubmitRequest, VAWorkLogUpdate
 from app.schemas import WorkLogCreate, WorkLogResponse
 from app.services.billing import get_week_period
+from app.services.payroll_calendar import period_lookup_keys, snap_payroll_period
 from app.services.notifications import push
 from app.services.package_overrides import effective_package_amount, load_overrides
 from app.services.va_rates import combine_period_pay, get_approved_rate, package_flats_for_period, package_period_amounts, resolve_log_pay
@@ -350,7 +352,9 @@ def my_earnings(
             "currency": currency,
         }
 
-    # Breakdown by client for custom range (or all time)
+    # A Manila midnight saved via UTC is one day early (Nov 1 becomes Oct 31).
+    if date_from and date_to:
+        date_from, date_to = snap_payroll_period(date_from, date_to)
     range_start, range_end = date_from, date_to
     range_logs = [l for l in logs if (range_start is None or l.work_date >= range_start) and (range_end is None or l.work_date <= range_end)]
     by_client_map: dict = {}
@@ -462,7 +466,7 @@ def my_payroll_history(
         .order_by(PayrollRun.period_end.desc(), PayrollRun.paid_at.desc())
         .all()
     )
-    paid_keys = {(r.period_start, r.period_end) for r in runs}
+    paid_keys = {snap_payroll_period(r.period_start, r.period_end) for r in runs}
 
     sheets = (
         db.query(TimesheetSubmission)
@@ -489,12 +493,13 @@ def my_payroll_history(
         else:
             php_amount = None
             usd_amount = pay if currency == "USD" else None
+        shown_start, shown_end = snap_payroll_period(r.period_start, r.period_end)
         entries.append({
             "id": str(r.id),
             "kind": "paid",
             "status": "paid",
-            "period_start": str(r.period_start),
-            "period_end": str(r.period_end),
+            "period_start": str(shown_start),
+            "period_end": str(shown_end),
             "paid_at": r.paid_at.isoformat() if r.paid_at else None,
             "total_hours": str(r.total_hours),
             "total_pay": str(r.total_pay),
@@ -503,20 +508,21 @@ def my_payroll_history(
             "php_amount": str(php_amount) if php_amount is not None else None,
             "usd_amount": str(usd_amount) if usd_amount is not None else None,
             "method": r.method,
-            "month_key": f"{r.period_end.year}-{r.period_end.month:02d}",
-            "month_label": r.period_end.strftime("%B %Y"),
+            "month_key": f"{shown_end.year}-{shown_end.month:02d}",
+            "month_label": shown_end.strftime("%B %Y"),
         })
 
     for s in sheets:
-        if (s.period_start, s.period_end) in paid_keys:
+        shown_start, shown_end = snap_payroll_period(s.period_start, s.period_end)
+        if (shown_start, shown_end) in paid_keys:
             continue
         status_val = s.status.value if hasattr(s.status, "value") else str(s.status)
         sheet_hours = (
             db.query(WorkLog)
             .filter(
                 WorkLog.va_id == current.va_id,
-                WorkLog.work_date >= s.period_start,
-                WorkLog.work_date <= s.period_end,
+                WorkLog.work_date >= shown_start,
+                WorkLog.work_date <= shown_end,
                 WorkLog.status.in_(BILLABLE + [WorkLogStatus.submitted]),
             )
             .all()
@@ -527,8 +533,8 @@ def my_payroll_history(
             "kind": "timesheet",
             "status": "unpaid",
             "timesheet_status": status_val,
-            "period_start": str(s.period_start),
-            "period_end": str(s.period_end),
+            "period_start": str(shown_start),
+            "period_end": str(shown_end),
             "paid_at": None,
             "total_hours": str(hours_sum),
             "total_pay": None,
@@ -537,8 +543,8 @@ def my_payroll_history(
             "php_amount": None,
             "usd_amount": None,
             "method": None,
-            "month_key": f"{s.period_end.year}-{s.period_end.month:02d}",
-            "month_label": s.period_end.strftime("%B %Y"),
+            "month_key": f"{shown_end.year}-{shown_end.month:02d}",
+            "month_label": shown_end.strftime("%B %Y"),
         })
 
     # Sort newest period first
@@ -645,31 +651,33 @@ def list_my_timesheets(
 ):
     q = db.query(TimesheetSubmission).filter(TimesheetSubmission.va_id == current.va_id)
     if date_from and date_to:
-        q = q.filter(
-            TimesheetSubmission.period_start == date_from,
-            TimesheetSubmission.period_end == date_to,
-        )
+        keys = period_lookup_keys(date_from, date_to)
+        q = q.filter(or_(*[
+            and_(TimesheetSubmission.period_start == start, TimesheetSubmission.period_end == end)
+            for start, end in keys
+        ]))
     from app.services.payroll_calendar import filter_logs_in_pay_period
 
     rows = q.order_by(TimesheetSubmission.submitted_at.desc()).limit(50).all()
     va = db.query(VA).filter(VA.id == current.va_id).first()
     out = []
     for r in rows:
+        shown_start, shown_end = snap_payroll_period(r.period_start, r.period_end)
         logs = filter_logs_in_pay_period(
             db.query(WorkLog).filter(
                 WorkLog.va_id == r.va_id,
                 WorkLog.status.in_(BILLABLE + [WorkLogStatus.submitted]),
             ),
-            r.period_start,
-            r.period_end,
+            shown_start,
+            shown_end,
         ).all()
         out.append(
             TimesheetSubmissionResponse(
                 id=r.id,
                 va_id=r.va_id,
                 va_name=va.name if va else None,
-                period_start=r.period_start,
-                period_end=r.period_end,
+                period_start=shown_start,
+                period_end=shown_end,
                 status=r.status.value if hasattr(r.status, "value") else str(r.status),
                 notes=r.notes,
                 review_note=r.review_note,
@@ -692,13 +700,17 @@ def submit_timesheet(
 
     if body.date_to < body.date_from:
         raise HTTPException(status_code=400, detail="date_to must be on or after date_from")
+    body.date_from, body.date_to = snap_payroll_period(body.date_from, body.date_to)
+    keys = period_lookup_keys(body.date_from, body.date_to)
 
     existing = (
         db.query(TimesheetSubmission)
         .filter(
             TimesheetSubmission.va_id == current.va_id,
-            TimesheetSubmission.period_start == body.date_from,
-            TimesheetSubmission.period_end == body.date_to,
+            or_(*[
+                and_(TimesheetSubmission.period_start == start, TimesheetSubmission.period_end == end)
+                for start, end in keys
+            ]),
         )
         .first()
     )
@@ -712,12 +724,16 @@ def submit_timesheet(
     from app.models import PayrollRun
     if db.query(PayrollRun).filter(
         PayrollRun.va_id == current.va_id,
-        PayrollRun.period_start == body.date_from,
-        PayrollRun.period_end == body.date_to,
+        or_(*[
+            and_(PayrollRun.period_start == start, PayrollRun.period_end == end)
+            for start, end in keys
+        ]),
     ).first():
         raise HTTPException(status_code=400, detail="Payroll for this period was already paid — timesheet is locked.")
 
     if existing:
+        existing.period_start = body.date_from
+        existing.period_end = body.date_to
         existing.notes = body.notes
         existing.status = TimesheetStatus.submitted
         existing.review_note = None

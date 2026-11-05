@@ -14,15 +14,17 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
-export function avifSupported(): boolean {
-  const canvas = document.createElement("canvas")
-  canvas.width = 1
-  canvas.height = 1
-  return canvas.toDataURL("image/avif").startsWith("data:image/avif")
+const PHOTO_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic", ".heif"]
+
+export function isPhotoFile(file: File): boolean {
+  const type = (file.type || "").toLowerCase()
+  if (type.startsWith("image/")) return true
+  const name = file.name.toLowerCase()
+  return PHOTO_EXTENSIONS.some((ext) => name.endsWith(ext))
 }
 
-/** Crop image to square and encode as AVIF. */
-export async function cropToAvif(imageSrc: string, crop: Area, size = 320): Promise<Blob> {
+/** Crop to a square JPEG. Every current browser can encode JPEG, including when AVIF export is missing. */
+export async function cropToJpeg(imageSrc: string, crop: Area, size = 512): Promise<Blob> {
   const image = await loadImage(imageSrc)
   const canvas = document.createElement("canvas")
   canvas.width = size
@@ -33,12 +35,9 @@ export async function cropToAvif(imageSrc: string, crop: Area, size = 320): Prom
   ctx.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, size, size)
 
   const blob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, "image/avif", 0.82)
+    canvas.toBlob(resolve, "image/jpeg", 0.86)
   })
-
-  if (!blob) {
-    throw new Error("AVIF encoding is not supported in this browser. Try Chrome or Safari.")
-  }
+  if (!blob) throw new Error("Could not prepare that photo. Try a JPG or PNG.")
   return blob
 }
 

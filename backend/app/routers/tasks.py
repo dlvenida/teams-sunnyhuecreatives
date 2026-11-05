@@ -221,9 +221,8 @@ def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_cu
     payload = body.model_dump(exclude={"assignee_va_id"})
     _normalize_recurrence(payload)
     assignee = body.assignee_va_id
-    if is_va(current):
-        if assignee and assignee != current.va_id:
-            raise HTTPException(403, "VAs can only assign tasks to themselves")
+    # A VA owns the task. An admin viewing as that VA uses the VA's token, so the task is theirs, not the admin's.
+    if is_va(current) or (current.is_impersonating and current.va_id):
         assignee = current.va_id
         ensure_va_scope(db, current.va_id, body.client_id, body.project_id)
         if payload.get("status") is None:

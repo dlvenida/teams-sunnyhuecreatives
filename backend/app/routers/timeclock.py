@@ -35,6 +35,7 @@ from app.schemas import (
 )
 from app.services.calculations import calculate_pay
 from app.services.notifications import push
+from app.services.va_scope import ensure_va_scope, is_va
 
 router = APIRouter(prefix="/time-clock", tags=["time-clock"])
 DEFAULT_TZ = "Asia/Manila"
@@ -175,6 +176,10 @@ def clock_in(body: ClockInRequest, current: Annotated[CurrentUser, Depends(requi
             raise HTTPException(403, "Task is assigned to another VA")
         client_id = client_id or task.client_id
         project_id = project_id or task.project_id
+    if is_va(current):
+        if not client_id:
+            raise HTTPException(400, "Choose a client to clock in.")
+        ensure_va_scope(db, current.va_id, client_id, project_id)
     if project_id:
         proj = db.query(Project).filter(Project.id == project_id).first()
         if not proj:
@@ -191,11 +196,51 @@ def clock_in(body: ClockInRequest, current: Annotated[CurrentUser, Depends(requi
     return _serialize(loaded)
 
 
+def _clock_target(db: Session, current: CurrentUser, entry: TimeClockEntry, body: ClockOutRequest) -> Task | None:
+    """Apply the client, project, and task chosen before clock-out. Task Name stays separate."""
+    sent = body.model_fields_set
+    if "client_id" in sent:
+        entry.client_id = body.client_id
+    if "project_id" in sent:
+        entry.project_id = body.project_id
+    if "task_id" in sent:
+        entry.task_id = body.task_id
+    task = None
+    if entry.task_id:
+        task = db.query(Task).filter(Task.id == entry.task_id).first()
+        if not task:
+            raise HTTPException(404, "Task not found")
+        if entry.client_id and task.client_id != entry.client_id:
+            raise HTTPException(400, "That task belongs to a different client")
+        if entry.project_id and task.project_id and task.project_id != entry.project_id:
+            raise HTTPException(400, "That task belongs to a different project")
+        if is_va(current) and task.assignee_va_id and task.assignee_va_id != current.va_id:
+            raise HTTPException(403, "Task is assigned to another VA")
+    if is_va(current) and entry.client_id:
+        ensure_va_scope(db, current.va_id, entry.client_id, entry.project_id)
+    return task
+
+
 @router.post("/clock-out", response_model=TimeClockResponse)
 def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(require_va)], db: Annotated[Session, Depends(get_db)]):
     entry = _active_entry(db, current.va_id)
     if not entry:
         raise HTTPException(400, "No active clock session")
+    task = _clock_target(db, current, entry, body)
+    task_name = (body.task_name or "").strip()
+    description = (body.description or "").strip()
+    comment = (body.comment or "").strip()
+    if body.create_work_log:
+        if not entry.client_id:
+            raise HTTPException(400, "Choose a client before clocking out.")
+        if not task_name and not description:
+            raise HTTPException(400, "Add a task name and describe what you worked on before clocking out.")
+        if not task_name:
+            raise HTTPException(400, "Add a task name before clocking out. It is typed by you and is not filled in from My Task.")
+        if not description:
+            raise HTTPException(400, "Describe what you worked on before clocking out.")
+    if comment and not entry.task_id:
+        raise HTTPException(400, "Choose My Task before posting a comment on the task thread.")
     now = datetime.now(timezone.utc)
     duration = _worked_seconds(entry, now)  # correctly excludes paused time, incl. a pause still in progress
     entry.clock_out = now
@@ -205,17 +250,22 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
     if body.notes:
         entry.notes = body.notes
 
-    # Optional task comment left at clock-out
-    if body.comment and body.comment.strip() and entry.task_id:
+    if comment and entry.task_id:
         from app.models import VA
 
         va = db.query(VA).filter(VA.id == current.va_id).first()
-        db.add(TaskComment(task_id=entry.task_id, author_user_id=current.user.id, author_name=va.name if va else current.user.email, body=body.comment.strip()))
+        db.add(TaskComment(
+            task_id=entry.task_id,
+            author_user_id=current.user.id,
+            author_name=va.name if va else current.user.email,
+            author_role=current.role.value if hasattr(current.role, "value") else str(current.role),
+            body=comment,
+        ))
 
-    # Record as a WorkLog when the session has a client and some time.
-    # A header Clock In has no client. Clock out still succeeds; the VA can log that time by hand.
-    if body.create_work_log and entry.client_id and duration > 0:
-        hours = (Decimal(duration) / Decimal(3600)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if body.create_work_log and entry.client_id:
+        # A very short session still has to keep the description the VA typed.
+        worked = duration if duration > 0 else 1
+        hours = (Decimal(worked) / Decimal(3600)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         if hours == 0:
             hours = Decimal("0.01")
         from app.services.va_rates import resolve_log_pay
@@ -234,16 +284,15 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
             start_time=start_t,
             end_time=end_t,
         )
-        desc = (body.description or "").strip() or (entry.task.title if entry.task else None) or (body.notes or "").strip() or "Clocked work"
         from app.services.payroll_calendar import resolve_payable_on
         work_date = local_in.date()
         payable_on = resolve_payable_on(db, current.va_id, work_date)
         log = WorkLog(
             work_date=work_date, va_id=current.va_id, client_id=entry.client_id,
-            sub_client_id=entry.task.sub_client_id if entry.task else None,
+            sub_client_id=task.sub_client_id if task else None,
             project_id=entry.project_id, task_id=entry.task_id,
-            task_name=entry.task.title if entry.task else None,
-            description_plain=desc, entry_mode="range", start_time=start_t, end_time=end_t,
+            task_name=task_name,
+            description_plain=description, entry_mode="range", start_time=start_t, end_time=end_t,
             hours=hours, va_rate=rate, va_pay=pay,
             notes=entry.notes, status=WorkLogStatus.submitted, clock_in_at=entry.clock_in, clock_out_at=now, source="clock",
             payable_on=payable_on,

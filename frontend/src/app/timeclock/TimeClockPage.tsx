@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { formatDuration } from "@/components/tasks/task-utils"
-import { History, Pause, Pencil, Play, Square, Timer, X } from "lucide-react"
+import { History, Pause, Pencil, Play, Plus, Square, Timer, X } from "lucide-react"
 
 function toLocalInput(iso?: string | null) {
   if (!iso) return ""
@@ -38,7 +38,16 @@ export function TimeClockPage() {
   const [projectId, setProjectId] = useState("")
   const [notes, setNotes] = useState("")
   const [outDesc, setOutDesc] = useState("")
+  const [outTaskName, setOutTaskName] = useState("")
   const [outComment, setOutComment] = useState("")
+  const [outClientId, setOutClientId] = useState("")
+  const [outProjectId, setOutProjectId] = useState("")
+  const [outTaskId, setOutTaskId] = useState("")
+  const [taskQuery, setTaskQuery] = useState("")
+  const [taskOpen, setTaskOpen] = useState(false)
+  const [newTaskOpen, setNewTaskOpen] = useState(false)
+  const [newTaskTitle, setNewTaskTitle] = useState("")
+  const [taskCreateError, setTaskCreateError] = useState("")
   const [createLog, setCreateLog] = useState(true)
   const [quickComment, setQuickComment] = useState("")
   const [error, setError] = useState("")
@@ -76,6 +85,14 @@ export function TimeClockPage() {
   })
 
   useEffect(() => { if (current) { setBaseElapsed(current.elapsed_seconds); setStartedAt(Date.now()) } else { setStartedAt(null); setBaseElapsed(0) } }, [current])
+  useEffect(() => {
+    if (!current) return
+    setOutClientId(current.client_id || "")
+    setOutProjectId(current.project_id || "")
+    setOutTaskId(current.task_id || "")
+    setOutTaskName("")
+    setOutDesc("")
+  }, [current?.id])
   const ticking = !!current && current.status === "running"
   useTick(ticking)
   const displaySecs = current ? (ticking && startedAt ? baseElapsed + Math.floor((Date.now() - startedAt) / 1000) : baseElapsed) : 0
@@ -94,10 +111,28 @@ export function TimeClockPage() {
   const act = useMutation({
     mutationFn: (action: string) => {
       if (action === "clock-in") return apiFetch("/time-clock/clock-in", { method: "POST", body: JSON.stringify({ task_id: taskId || null, client_id: clientId || null, project_id: projectId || null, notes: notes || null }) })
-      if (action === "clock-out") return apiFetch("/time-clock/clock-out", { method: "POST", body: JSON.stringify({ notes: notes || null, create_work_log: createLog, description: outDesc || null, comment: outComment || null }) })
+      if (action === "clock-out") {
+        if (createLog && (!outTaskName.trim() || !outDesc.trim())) {
+          throw new Error(outTaskName.trim()
+            ? "Describe what you worked on before clocking out."
+            : outDesc.trim()
+              ? "Add a task name before clocking out. It is typed by you and is not filled in from My Task."
+              : "Add a task name and describe what you worked on before clocking out.")
+        }
+        return apiFetch("/time-clock/clock-out", { method: "POST", body: JSON.stringify({
+          notes: notes || null,
+          create_work_log: createLog,
+          description: outDesc.trim() || null,
+          task_name: outTaskName.trim() || null,
+          comment: outComment.trim() || null,
+          client_id: outClientId || null,
+          project_id: outProjectId || null,
+          task_id: outTaskId || null,
+        }) })
+      }
       return apiFetch(`/time-clock/${action}`, { method: "POST", body: JSON.stringify({}) })
     },
-    onSuccess: () => { invalidate(); setError("") }, onError: (e: Error) => setError(e.message),
+    onSuccess: () => { invalidate(); setError(""); setOutDesc(""); setOutTaskName(""); setOutComment("") }, onError: (e: Error) => setError(e.message),
   })
 
   const openAdjust = (e: TimeClockEntry, fromRequest?: TimeClockCorrectionRequest) => {
@@ -219,6 +254,28 @@ export function TimeClockPage() {
   const activeTaskId = current?.task_id || taskId
   const { data: taskComments = [] } = useQuery({ queryKey: ["clock-task-comments", activeTaskId], queryFn: () => apiFetch<{ id: string; author_name: string; body: string; created_at: string }[]>(`/tasks/${activeTaskId}/comments`), enabled: showMine && !!activeTaskId })
   const postComment = useMutation({ mutationFn: () => apiFetch(`/tasks/${activeTaskId}/comments`, { method: "POST", body: JSON.stringify({ body: quickComment }) }), onSuccess: () => { setQuickComment(""); qc.invalidateQueries({ queryKey: ["clock-task-comments"] }) } })
+  const createTask = useMutation({
+    mutationFn: () => apiFetch<TaskItem>("/tasks", {
+      method: "POST",
+      body: JSON.stringify({ title: newTaskTitle.trim(), client_id: outClientId, project_id: outProjectId, status: "todo" }),
+    }),
+    onSuccess: (task) => {
+      setOutTaskId(task.id)
+      setNewTaskOpen(false)
+      setNewTaskTitle("")
+      setTaskCreateError("")
+      qc.invalidateQueries({ queryKey: ["tasks-mine"] })
+    },
+    onError: (e: Error) => setTaskCreateError(e.message),
+  })
+  const clockOutReady = !createLog || (!!outClientId && !!outTaskName.trim() && !!outDesc.trim())
+  const clockOutHint = !createLog ? "" : !outTaskName.trim() && !outDesc.trim()
+    ? "Add a task name and describe what you worked on before clocking out."
+    : !outTaskName.trim()
+      ? "Add a task name before clocking out. It is typed by you and is not filled in from My Task."
+      : !outDesc.trim()
+        ? "Describe what you worked on before clocking out."
+        : ""
 
   const staffTabs = isStaff && (
     <div className="flex flex-wrap gap-1.5">
@@ -356,13 +413,78 @@ export function TimeClockPage() {
                   ) : (
                     <div className="w-full space-y-3 text-left">
                       <div className="grid gap-3 sm:grid-cols-2">
-                        <div><Label>What did you work on? (becomes your log description)</Label><Input value={outDesc} onChange={e => setOutDesc(e.target.value)} placeholder={current.task_title || "Describe the work…"} /></div>
-                        <div><Label>Comment for the task thread (optional)</Label><Input value={outComment} onChange={e => setOutComment(e.target.value)} placeholder="Progress update for admin / team…" /></div>
+                        <div>
+                          <Label>Client</Label>
+                          <Select aria-label="Client" value={outClientId} onChange={(e) => { setOutClientId(e.target.value); setOutProjectId(""); setOutTaskId("") }}>
+                            <option value="">Select client</option>
+                            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </Select>
+                        </div>
+                        <div>
+                          <Label>Project</Label>
+                          <Select aria-label="Project" value={outProjectId} disabled={!outClientId} onChange={(e) => { setOutProjectId(e.target.value); setOutTaskId("") }}>
+                            <option value="">{outClientId ? "No project" : "Choose a client first"}</option>
+                            {projects.filter((p) => p.client_id === outClientId).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </Select>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <Label>My Task</Label>
+                            <button type="button" className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline disabled:cursor-not-allowed disabled:text-muted-foreground disabled:no-underline" disabled={!outClientId || !outProjectId} onClick={() => { setTaskCreateError(""); setNewTaskOpen((open) => !open) }}>
+                              <Plus className="h-3 w-3" /> New Task
+                            </button>
+                          </div>
+                          {(!outClientId || !outProjectId) && <p className="mb-1 text-[11px] text-muted-foreground">Choose a client and project before adding a task.</p>}
+                          <div className="relative">
+                            <Input
+                              aria-label="My Task"
+                              autoComplete="off"
+                              value={taskOpen ? taskQuery : (tasks.find((t) => t.id === outTaskId)?.title || "")}
+                              onFocus={() => { setTaskOpen(true); setTaskQuery("") }}
+                              onBlur={() => window.setTimeout(() => setTaskOpen(false), 150)}
+                              onChange={(e) => { setTaskQuery(e.target.value); setTaskOpen(true) }}
+                            />
+                            {taskOpen && (
+                              <ul className="absolute z-20 mt-1 max-h-40 w-full overflow-auto rounded-xl border bg-card shadow-lg">
+                                {tasks
+                                  .filter((t) => t.status !== "done")
+                                  .filter((t) => !outClientId || t.client_id === outClientId)
+                                  .filter((t) => !outProjectId || t.project_id === outProjectId)
+                                  .filter((t) => !taskQuery.trim() || t.title.toLowerCase().includes(taskQuery.trim().toLowerCase()))
+                                  .sort((a, b) => a.title.localeCompare(b.title))
+                                  .map((t) => (
+                                    <li key={t.id}>
+                                      <button type="button" className="w-full px-3 py-2 text-left text-xs hover:bg-muted" onMouseDown={() => { setOutTaskId(t.id); setTaskOpen(false); setTaskQuery("") }}>{t.title}</button>
+                                    </li>
+                                  ))}
+                              </ul>
+                            )}
+                          </div>
+                          {newTaskOpen && (
+                            <div className="mt-2 space-y-2 rounded-xl border p-3">
+                              <Label>New task title</Label>
+                              <Input aria-label="New task title" autoComplete="off" value={newTaskTitle} onChange={(e) => setNewTaskTitle(e.target.value)} />
+                              <Button type="button" size="sm" variant="outline" disabled={!newTaskTitle.trim() || createTask.isPending} onClick={() => createTask.mutate()}>{createTask.isPending ? "Adding..." : "Add task"}</Button>
+                              {taskCreateError && <p className="text-[11px] text-red-600">{taskCreateError}</p>}
+                            </div>
+                          )}
+                        </div>
+                        <div>
+                          <Label>Task name</Label>
+                          <Input aria-label="Task name" value={outTaskName} onChange={(e) => setOutTaskName(e.target.value)} placeholder="e.g. Created 5 graphics" />
+                          <p className="mt-1 text-[11px] text-muted-foreground">Typed by you. Choosing My Task does not fill this in.</p>
+                        </div>
+                        <div>
+                          <Label>What did you work on? (becomes your log description)</Label>
+                          <Input aria-label="What did you work on?" value={outDesc} onChange={(e) => setOutDesc(e.target.value)} placeholder="Describe the work…" />
+                        </div>
+                        <div className="sm:col-span-2"><Label>Comment for the task thread (optional)</Label><Input aria-label="Comment for the task thread" value={outComment} onChange={(e) => setOutComment(e.target.value)} placeholder="Progress update for admin / team…" /></div>
                       </div>
                       <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={createLog} onChange={e => setCreateLog(e.target.checked)} /> Create a work log from this session (recommended)</label>
+                      {clockOutHint && <p className="text-[11px] text-amber-800">{clockOutHint}</p>}
                       <div className="flex flex-wrap gap-2 pt-1">
                         {current.status === "running" ? <Button variant="outline" onClick={() => act.mutate("pause")} disabled={act.isPending}><Pause className="h-4 w-4" /> Pause</Button> : <Button variant="outline" onClick={() => act.mutate("resume")} disabled={act.isPending}><Play className="h-4 w-4" /> Resume</Button>}
-                        <Button variant="gold" onClick={() => act.mutate("clock-out")} disabled={act.isPending}><Square className="h-4 w-4" /> Clock Out{createLog ? " & Log Time" : ""}</Button>
+                        <Button variant="gold" onClick={() => act.mutate("clock-out")} disabled={act.isPending || !clockOutReady}><Square className="h-4 w-4" /> Clock Out{createLog ? " & Log Time" : ""}</Button>
                       </div>
                     </div>
                   )}

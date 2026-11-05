@@ -5,6 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -43,7 +44,7 @@ from app.schemas import (
 from app.services.log_display import approval_task_label, log_task_name
 from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
-from app.services.payroll_calendar import filter_logs_in_pay_period
+from app.services.payroll_calendar import filter_logs_in_pay_period, period_lookup_keys, snap_payroll_period
 from app.services.package_overrides import (
     describe_package_review,
     effective_package_amount,
@@ -89,7 +90,7 @@ def calculate_payroll(
     current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    period_start, period_end = _period(body)
+    period_start, period_end = snap_payroll_period(*_period(body))
     span = (period_end - period_start).days + 1
     prev_end = period_start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=span - 1)
@@ -382,13 +383,14 @@ def list_timesheets(
     rows = q.limit(min(limit, 100)).all()
     out: list[TimesheetSubmissionResponse] = []
     for row in rows:
+        shown_start, shown_end = snap_payroll_period(row.period_start, row.period_end)
         logs = filter_logs_in_pay_period(
             db.query(WorkLog).filter(
                 WorkLog.va_id == row.va_id,
                 WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
             ),
-            row.period_start,
-            row.period_end,
+            shown_start,
+            shown_end,
         ).all()
         full_name = (
             (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
@@ -399,8 +401,8 @@ def list_timesheets(
                 id=row.id,
                 va_id=row.va_id,
                 va_name=full_name,
-                period_start=row.period_start,
-                period_end=row.period_end,
+                period_start=shown_start,
+                period_end=shown_end,
                 status=row.status.value if hasattr(row.status, "value") else str(row.status),
                 notes=row.notes,
                 review_note=row.review_note,
@@ -475,6 +477,7 @@ def timesheet_entries(
     )
     if not row:
         raise HTTPException(404, "Timesheet not found")
+    shown_start, shown_end = snap_payroll_period(row.period_start, row.period_end)
     logs = filter_logs_in_pay_period(
         db.query(WorkLog)
         .options(
@@ -487,15 +490,18 @@ def timesheet_entries(
             WorkLog.va_id == row.va_id,
             WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted, WorkLogStatus.rejected]),
         ),
-        row.period_start,
-        row.period_end,
+        shown_start,
+        shown_end,
     ).order_by(WorkLog.work_date, WorkLog.start_time).all()
     redact = hide_team_money(current.role)
     package_pay = None
     if include_package_pay(current.role.value):
-        saved = load_overrides(db, {row.va_id}, row.period_start, row.period_end)
+        saved = load_overrides(db, {row.va_id}, shown_start, shown_end)
+        if (shown_start, shown_end) != (row.period_start, row.period_end):
+            for key, value in load_overrides(db, {row.va_id}, row.period_start, row.period_end).items():
+                saved.setdefault(key, value)
         clients = []
-        for cid, name, calculated in package_period_amounts(db, row.va_id, row.period_start, row.period_end):
+        for cid, name, calculated in package_period_amounts(db, row.va_id, shown_start, shown_end):
             override = saved.get((row.va_id, cid))
             described = describe_package_review(
                 calculated,
@@ -517,7 +523,7 @@ def timesheet_entries(
         if clients:
             currency = row.va.currency.value if row.va and hasattr(row.va.currency, "value") else "PHP"
             package_pay = {
-                "locked": period_is_paid(db, row.va_id, row.period_start, row.period_end),
+                "locked": period_is_paid(db, row.va_id, shown_start, shown_end) or period_is_paid(db, row.va_id, row.period_start, row.period_end),
                 "currency": currency,
                 "clients": clients,
             }
@@ -530,8 +536,8 @@ def timesheet_entries(
             id=row.id,
             va_id=row.va_id,
             va_name=full_name,
-            period_start=row.period_start,
-            period_end=row.period_end,
+            period_start=shown_start,
+            period_end=shown_end,
             status=row.status.value if hasattr(row.status, "value") else str(row.status),
             notes=row.notes,
             review_note=row.review_note,
@@ -572,42 +578,18 @@ def review_timesheet(
     db.commit()
     db.refresh(row)
     _notify_timesheet_va(db, row, current, approved=True, note=None)
-    logs = filter_logs_in_pay_period(
-        db.query(WorkLog).filter(
-            WorkLog.va_id == row.va_id,
-            WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
-        ),
-        row.period_start,
-        row.period_end,
-    ).all()
-    full_name = (
-        (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
-        or (row.va.name if row.va else None)
-    )
-    return TimesheetSubmissionResponse(
-        id=row.id,
-        va_id=row.va_id,
-        va_name=full_name,
-        period_start=row.period_start,
-        period_end=row.period_end,
-        status=row.status.value,
-        notes=row.notes,
-        review_note=row.review_note,
-        submitted_at=row.submitted_at,
-        reviewed_at=row.reviewed_at,
-        entry_count=len(logs),
-        total_hours=sum((l.hours for l in logs), Decimal("0")),
-    )
+    return _sheet_response(db, row)
 
 
 def _sheet_response(db: Session, row: TimesheetSubmission) -> TimesheetSubmissionResponse:
+    shown_start, shown_end = snap_payroll_period(row.period_start, row.period_end)
     logs = filter_logs_in_pay_period(
         db.query(WorkLog).filter(
             WorkLog.va_id == row.va_id,
             WorkLog.status.in_(PAYABLE + [WorkLogStatus.submitted]),
         ),
-        row.period_start,
-        row.period_end,
+        shown_start,
+        shown_end,
     ).all()
     full_name = (
         (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
@@ -618,8 +600,8 @@ def _sheet_response(db: Session, row: TimesheetSubmission) -> TimesheetSubmissio
         id=row.id,
         va_id=row.va_id,
         va_name=full_name,
-        period_start=row.period_start,
-        period_end=row.period_end,
+        period_start=shown_start,
+        period_end=shown_end,
         status=status_val,
         notes=row.notes,
         review_note=row.review_note,
@@ -675,7 +657,8 @@ def _notify_timesheet_va(db: Session, row: TimesheetSubmission, current: Current
 
     reviewer = first_name_of(current.user)
     title = f"{reviewer} approved your timesheet" if approved else f"{reviewer} rejected your timesheet"
-    lines = [f"{row.period_start} to {row.period_end}."]
+    shown_start, shown_end = snap_payroll_period(row.period_start, row.period_end)
+    lines = [f"{shown_start} to {shown_end}."]
     if note:
         lines.append(note)
     elif not approved:
@@ -713,7 +696,9 @@ def upsert_package_override(
     """Skip or replace one Fixed Package for this payroll period. The VA Rate is not changed."""
     if body.period_end < body.period_start:
         raise HTTPException(status_code=400, detail="period_end must be on or after period_start")
-    if period_is_paid(db, body.va_id, body.period_start, body.period_end):
+    raw_start, raw_end = body.period_start, body.period_end
+    body.period_start, body.period_end = snap_payroll_period(raw_start, raw_end)
+    if period_is_paid(db, body.va_id, body.period_start, body.period_end) or period_is_paid(db, body.va_id, raw_start, raw_end):
         raise HTTPException(
             status_code=400,
             detail="This period is already marked paid. Undo Paid before changing the package.",
@@ -738,6 +723,20 @@ def upsert_package_override(
         )
         .first()
     )
+    if existing is None and (raw_start, raw_end) != (body.period_start, body.period_end):
+        existing = (
+            db.query(PackagePeriodOverride)
+            .filter(
+                PackagePeriodOverride.va_id == body.va_id,
+                PackagePeriodOverride.client_id == body.client_id,
+                PackagePeriodOverride.period_start == raw_start,
+                PackagePeriodOverride.period_end == raw_end,
+            )
+            .first()
+        )
+        if existing:
+            existing.period_start = body.period_start
+            existing.period_end = body.period_end
     if plan.action == "delete":
         if existing:
             db.delete(existing)
@@ -803,12 +802,16 @@ def mark_paid(
     current: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ):
+    body.period_start, body.period_end = snap_payroll_period(body.period_start, body.period_end)
+    keys = period_lookup_keys(body.period_start, body.period_end)
     sheet = (
         db.query(TimesheetSubmission)
         .filter(
             TimesheetSubmission.va_id == body.va_id,
-            TimesheetSubmission.period_start == body.period_start,
-            TimesheetSubmission.period_end == body.period_end,
+            or_(*[
+                and_(TimesheetSubmission.period_start == start, TimesheetSubmission.period_end == end)
+                for start, end in keys
+            ]),
         )
         .first()
     )

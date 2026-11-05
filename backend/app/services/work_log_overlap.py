@@ -23,10 +23,14 @@ def ranges_overlap(start_a: time, end_a: time, start_b: time, end_b: time) -> bo
     """True when [start, end) intervals overlap. Overnight spans are expanded past midnight."""
     a0, a1 = _to_minutes(start_a), _to_minutes(end_a)
     b0, b1 = _to_minutes(start_b), _to_minutes(end_b)
-    if a1 <= a0:
+    if a1 < a0:
         a1 += 24 * 60
-    if b1 <= b0:
+    elif a1 == a0:
+        a1 = a0 + 1
+    if b1 < b0:
         b1 += 24 * 60
+    elif b1 == b0:
+        b1 = b0 + 1
     return a0 < b1 and b0 < a1
 
 

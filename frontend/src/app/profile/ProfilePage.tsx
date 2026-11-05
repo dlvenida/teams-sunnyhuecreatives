@@ -219,7 +219,7 @@ export function ProfilePage() {
 
       {profile.must_change_password && (
         <p className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-foreground">
-          Please set a new password before continuing.
+          Please set a new password before continuing. You can still upload a profile photo while you do that.
         </p>
       )}
 

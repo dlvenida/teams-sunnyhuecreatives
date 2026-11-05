@@ -1,13 +1,11 @@
 import random
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user
 from app.models import User, UserRole, VA
@@ -23,31 +21,30 @@ from app.schemas import (
 )
 from app.services import storage
 from app.services.email import send_email_verification
+from app.services.profile_photo import photo_media_type, prepare_profile_photo
 from app.services.tenure import tenure_label, tenure_parts
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
-PROFILE_PHOTO_SIZE = 512 * 1024  # 512 KB max
+def _photo_keys(user_id: UUID) -> list[str]:
+    """JPEG is what we store now. Older photos may still be WebP or AVIF."""
+    return [f"profiles/{user_id}.jpg", f"profiles/{user_id}.webp", f"profiles/{user_id}.avif"]
 
 
-def _profile_dir() -> Path:
-    path = Path(settings.uploads_dir) / "profiles"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def _stored_photo(user_id: UUID) -> tuple[str | None, bytes | None]:
+    for key in _photo_keys(user_id):
+        data = storage.read_bytes(key)
+        if data:
+            return key, data
+    return None, None
 
 
-def _photo_path(user_id: UUID) -> Path:
-    return _profile_dir() / f"{user_id}.avif"
-
-
-def _photo_key(user_id: UUID) -> str:
-    return f"profiles/{user_id}.avif"
-
-
-def _is_avif(data: bytes) -> bool:
-    if len(data) < 12:
+def _has_stored_photo(user: User) -> bool:
+    if not user.profile_photo_path:
         return False
-    return data[4:8] == b"ftyp" and (b"avif" in data[8:16] or b"avis" in data[8:16])
+    if storage.bucket_enabled():
+        return True
+    return _stored_photo(user.id)[1] is not None
 
 
 def _display_name(user: User, va: VA | None) -> str:
@@ -67,8 +64,7 @@ def _serialize_profile(user: User, va: VA | None) -> ProfileResponse:
         pending_email=user.pending_email,
         role=user.role,
         display_name=_display_name(user, va),
-        has_profile_photo=user.profile_photo_path is not None
-        and (storage.bucket_enabled() or _photo_path(user.id).exists()),
+        has_profile_photo=_has_stored_photo(user),
         phone=user.phone,
         address=user.address,
         wise_email=user.wise_email,
@@ -172,16 +168,17 @@ async def upload_profile_photo(
     db: Annotated[Session, Depends(get_db)],
     file: UploadFile = File(...),
 ):
-    if file.content_type not in ("image/avif", "application/octet-stream"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Photo must be AVIF format")
-
+    """Save the signed-in person's photo. A forced password change does not block this."""
     data = await file.read()
-    if len(data) > PROFILE_PHOTO_SIZE:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Photo must be under 512 KB")
-    if not _is_avif(data):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid AVIF file")
+    try:
+        jpeg = prepare_profile_photo(data, file.content_type, file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    ref = storage.save_bytes(_photo_key(current.user.id), data, "image/avif")
+    jpg_key = _photo_keys(current.user.id)[0]
+    for key in _photo_keys(current.user.id)[1:]:
+        storage.delete(key)
+    ref = storage.save_bytes(jpg_key, jpeg, "image/jpeg")
     current.user.profile_photo_path = ref
     db.commit()
     return {"message": "Photo updated", "has_profile_photo": True}
@@ -192,17 +189,18 @@ def delete_profile_photo(
     current: Annotated[CurrentUser, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
-    storage.delete(_photo_key(current.user.id))
+    for key in _photo_keys(current.user.id):
+        storage.delete(key)
     current.user.profile_photo_path = None
     db.commit()
 
 
 @router.get("/photo")
 def get_profile_photo(current: Annotated[CurrentUser, Depends(get_current_user)]):
-    data = storage.read_bytes(_photo_key(current.user.id))
+    _key, data = _stored_photo(current.user.id)
     if data is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No profile photo")
-    return Response(content=data, media_type="image/avif")
+    return Response(content=data, media_type=photo_media_type(data))
 
 
 @router.post("/set-pin")

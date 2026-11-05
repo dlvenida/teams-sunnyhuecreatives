@@ -7,7 +7,7 @@ import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { StatusBadge } from "@/components/ui/badge"
 import { RichTextEditor } from "@/components/lexical/RichTextEditor"
-import { formatCurrency, formatDate } from "@/lib/utils"
+import { formatCurrency, formatDate, localISODate } from "@/lib/utils"
 import { formatEnteredDuration, isDurationEntry } from "@/lib/approvalEntry"
 import { TimeEntryModeFields, durationError, entryHours, splitStoredHours, timingBody, type EntryMode } from "@/components/logs/TimeEntryModeFields"
 import { groupByWeek } from "@/lib/weeks"
@@ -53,7 +53,7 @@ export function VATimeLogPage() {
   const showMoney = role !== "auditor"
   const fileRef = useRef<HTMLInputElement>(null)
   const [form, setForm] = useState({
-    work_date: new Date().toISOString().split("T")[0],
+    work_date: localISODate(new Date()),
     client_id: "",
     task_name: "",
     sub_client_id: "",

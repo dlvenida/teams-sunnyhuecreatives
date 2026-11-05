@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
-import { cn, formatCurrency, formatDate, formatInvoiceDate, payrollPdfFilename } from "@/lib/utils"
+import { cn, formatCurrency, formatDate, formatInvoiceDate, localISODate, payrollPdfFilename } from "@/lib/utils"
 import { VAEarningsDocument } from "@/components/pdf/VAEarningsDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { generatePdfBlob } from "@/lib/pdf"
@@ -162,12 +162,17 @@ function WeekedEntries({
 function defaultRange() {
   const now = new Date()
   const mid = 15
-  const iso = (d: Date) => d.toISOString().slice(0, 10)
   if (now.getDate() <= mid) {
-    return { from: iso(new Date(now.getFullYear(), now.getMonth(), 1)), to: iso(new Date(now.getFullYear(), now.getMonth(), mid)) }
+    return {
+      from: localISODate(new Date(now.getFullYear(), now.getMonth(), 1)),
+      to: localISODate(new Date(now.getFullYear(), now.getMonth(), mid)),
+    }
   }
   const last = new Date(now.getFullYear(), now.getMonth() + 1, 0)
-  return { from: iso(new Date(now.getFullYear(), now.getMonth(), mid + 1)), to: iso(last) }
+  return {
+    from: localISODate(new Date(now.getFullYear(), now.getMonth(), mid + 1)),
+    to: localISODate(last),
+  }
 }
 
 export function VAPayrollPage() {

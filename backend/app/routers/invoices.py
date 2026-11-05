@@ -11,21 +11,37 @@ from app.deps import CurrentUser, require_admin
 from app.models import (
     BillingType,
     Client,
+    ClientBillingLine,
     ClientPackage,
     Invoice,
     InvoiceLineItem,
     InvoiceStatus,
+    Project,
     WorkLog,
     WorkLogStatus,
 )
 from app.schemas import (
+    ClientBillingLineResponse,
+    ClientBillingLineWrite,
+    InvoiceDraftLineResponse,
     InvoiceGenerateRequest,
     InvoiceLineItemResponse,
     InvoiceLineItemUpdate,
+    InvoicePrepareResponse,
     InvoicePreviewResponse,
     InvoiceResponse,
 )
 from app.services.billing import get_billing_period, next_invoice_number
+from app.services.client_billing import (
+    MANUAL_TYPES,
+    ONE_OFF_TYPES,
+    PROJECT_TYPES,
+    SETUP_TYPES,
+    build_setup_drafts,
+    clean_invoice_text,
+    normalize_invoice_line,
+    quantize_money,
+)
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -53,7 +69,12 @@ def _serialize_invoice(inv: Invoice) -> InvoiceResponse:
         id=inv.id,
         invoice_number=inv.invoice_number,
         client_id=inv.client_id,
-        client_name=inv.client.name if inv.client else None,
+        client_name=(inv.client.name if inv.client else None) or inv.one_off_name,
+        one_off_name=inv.one_off_name,
+        one_off_email=inv.one_off_email,
+        one_off_business=inv.one_off_business,
+        one_off_address=inv.one_off_address,
+        currency=inv.currency or "USD",
         period_label=inv.period_label,
         period_start=inv.period_start,
         period_end=inv.period_end,
@@ -72,10 +93,12 @@ def _serialize_invoice(inv: Invoice) -> InvoiceResponse:
             InvoiceLineItemResponse(
                 id=li.id,
                 line_date=li.line_date,
-                description=li.description,
+                description=clean_invoice_text(li.description),
                 hours=li.hours,
                 rate=li.rate,
                 amount=li.amount,
+                line_kind=li.line_kind,
+                project_id=li.project_id,
             )
             for li in inv.line_items
         ],
@@ -242,12 +265,287 @@ def preview_invoice(
     )
 
 
+def _billing_line_response(line: ClientBillingLine) -> ClientBillingLineResponse:
+    return ClientBillingLineResponse(
+        id=line.id,
+        client_id=line.client_id,
+        project_id=line.project_id,
+        project_name=line.project.name if line.project else None,
+        billing_type=line.billing_type,
+        description=line.description,
+        default_hours=line.default_hours,
+        default_rate=line.default_rate,
+        default_amount=line.default_amount,
+        sort_order=line.sort_order,
+    )
+
+
+def _load_billing_lines(db: Session, client_id: UUID) -> list[ClientBillingLine]:
+    return (
+        db.query(ClientBillingLine)
+        .options(joinedload(ClientBillingLine.project))
+        .filter(ClientBillingLine.client_id == client_id)
+        .order_by(ClientBillingLine.sort_order, ClientBillingLine.created_at)
+        .all()
+    )
+
+
+def _project_for_client(db: Session, client_id: UUID, project_id: UUID) -> Project:
+    project = db.query(Project).filter(Project.id == project_id, Project.client_id == client_id).first()
+    if not project:
+        raise HTTPException(status_code=400, detail="Choose a project that belongs to this client")
+    return project
+
+
+@router.get("/clients/{client_id}/billing-lines", response_model=list[ClientBillingLineResponse])
+def list_billing_lines(
+    client_id: UUID,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if not db.query(Client.id).filter(Client.id == client_id).first():
+        raise HTTPException(status_code=404, detail="Client not found")
+    return [_billing_line_response(line) for line in _load_billing_lines(db, client_id)]
+
+
+@router.put("/clients/{client_id}/billing-lines", response_model=list[ClientBillingLineResponse])
+def save_billing_lines(
+    client_id: UUID,
+    body: list[ClientBillingLineWrite],
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Replace the saved setup. This does not change invoices already created."""
+    if not db.query(Client.id).filter(Client.id == client_id).first():
+        raise HTTPException(status_code=404, detail="Client not found")
+    for item in body:
+        if item.billing_type not in SETUP_TYPES:
+            raise HTTPException(status_code=400, detail="Billing type is not supported")
+        if item.billing_type in PROJECT_TYPES:
+            if item.project_id is None:
+                raise HTTPException(status_code=400, detail="Choose a project that belongs to this client")
+            _project_for_client(db, client_id, item.project_id)
+        elif item.project_id is not None:
+            _project_for_client(db, client_id, item.project_id)
+        if item.billing_type == "entered_hours" and (item.default_hours is None or item.default_hours < 0):
+            raise HTTPException(status_code=400, detail="Entered hours need a default hour amount")
+        if item.billing_type in ("flat_fee", "package") and (item.default_amount is None or item.default_amount < 0):
+            raise HTTPException(status_code=400, detail="This line needs an amount")
+    db.query(ClientBillingLine).filter(ClientBillingLine.client_id == client_id).delete(synchronize_session=False)
+    for index, item in enumerate(body):
+        db.add(
+            ClientBillingLine(
+                client_id=client_id,
+                project_id=item.project_id,
+                billing_type=item.billing_type,
+                description=clean_invoice_text(item.description) if item.description else None,
+                default_hours=quantize_money(item.default_hours) if item.default_hours is not None else None,
+                default_rate=quantize_money(item.default_rate) if item.default_rate is not None else None,
+                default_amount=quantize_money(item.default_amount) if item.default_amount is not None else None,
+                sort_order=index,
+            )
+        )
+    db.commit()
+    return [_billing_line_response(line) for line in _load_billing_lines(db, client_id)]
+
+
+@router.post("/clients/{client_id}/billing-lines", response_model=ClientBillingLineResponse, status_code=status.HTTP_201_CREATED)
+def add_billing_preset(
+    client_id: UUID,
+    body: ClientBillingLineWrite,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Append one preset. Existing presets and any open invoice stay as they are."""
+    if not db.query(Client.id).filter(Client.id == client_id).first():
+        raise HTTPException(status_code=404, detail="Client not found")
+    if body.billing_type not in SETUP_TYPES:
+        raise HTTPException(status_code=400, detail="Billing type is not supported")
+    if body.billing_type in PROJECT_TYPES:
+        if body.project_id is None:
+            raise HTTPException(status_code=400, detail="Choose a project that belongs to this client")
+        _project_for_client(db, client_id, body.project_id)
+    elif body.project_id is not None:
+        _project_for_client(db, client_id, body.project_id)
+    if body.billing_type in ("flat_fee", "package") and (body.default_amount is None or body.default_amount < 0):
+        raise HTTPException(status_code=400, detail="This line needs an amount")
+    current = _load_billing_lines(db, client_id)
+    row = ClientBillingLine(
+        client_id=client_id,
+        project_id=body.project_id,
+        billing_type=body.billing_type,
+        description=clean_invoice_text(body.description) if body.description else None,
+        default_hours=quantize_money(body.default_hours) if body.default_hours is not None else None,
+        default_rate=quantize_money(body.default_rate) if body.default_rate is not None else None,
+        default_amount=quantize_money(body.default_amount) if body.default_amount is not None else None,
+        sort_order=len(current),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    row = (
+        db.query(ClientBillingLine)
+        .options(joinedload(ClientBillingLine.project))
+        .filter(ClientBillingLine.id == row.id)
+        .first()
+    )
+    return _billing_line_response(row)
+
+
+@router.delete("/clients/{client_id}/billing-lines/{line_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_billing_preset(
+    client_id: UUID,
+    line_id: UUID,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    row = db.query(ClientBillingLine).filter(
+        ClientBillingLine.id == line_id,
+        ClientBillingLine.client_id == client_id,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    db.delete(row)
+    db.commit()
+
+
+@router.get("/prepare", response_model=InvoicePrepareResponse)
+def prepare_invoice(
+    client_id: UUID,
+    year: int,
+    month: int,
+    cutoff: int,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Pre-fill one period from the saved setup. Nothing is stored."""
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    period_start, period_end, period_label = get_billing_period(year, month, cutoff)
+    approved, _submitted = _period_logs(db, client_id, period_start, period_end)
+    setup = _load_billing_lines(db, client_id)
+    drafts = build_setup_drafts(setup, approved, client.default_rate or 0)
+    if setup:
+        message = "Lines are filled from this client's billing setup. Changes here stay on this invoice."
+    else:
+        message = "This client has no saved billing lines yet. Add lines for this invoice, or save a setup on the client."
+    return InvoicePrepareResponse(
+        period_label=period_label,
+        period_start=period_start,
+        period_end=period_end,
+        client_rate=quantize_money(client.default_rate or 0),
+        lines=[InvoiceDraftLineResponse(**row) for row in drafts],
+        message=message,
+    )
+
+
+def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client | None, period_start, period_end, period_label) -> Invoice:
+    """Create an invoice from the reviewed lines. Logs, presets, and the client list stay as they are."""
+    one_off = bool((body.one_off_name or "").strip())
+    if one_off and client is not None:
+        raise HTTPException(status_code=400, detail="A one-off invoice does not use a saved client")
+    if not one_off and client is None:
+        raise HTTPException(status_code=400, detail="Choose a client or type a one-off client name")
+    if not body.lines:
+        raise HTTPException(status_code=400, detail="Add at least one billing line or extra charge")
+    currency = (body.currency or "USD").upper()
+    if currency not in ("USD", "PHP"):
+        raise HTTPException(status_code=400, detail="Currency must be USD or PHP")
+    normalized = []
+    for raw in body.lines:
+        project_name = "Project"
+        if raw.billing_type in PROJECT_TYPES:
+            if one_off or client is None or raw.project_id is None:
+                raise HTTPException(status_code=400, detail="A one-off invoice can only use manual lines and extra charges")
+            project_name = _project_for_client(db, client.id, raw.project_id).name
+        try:
+            normalized.append(normalize_invoice_line(raw, project_name, one_off=one_off, currency=currency))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    hour_kinds = {"entered_hours", "actual_hours", "hourly", "manual"}
+    kinds = {row["billing_type"] for row in normalized if row["billing_type"] != "extra"}
+    if kinds <= {"flat_fee", "package", "extra"} or not kinds:
+        billing_type = BillingType.fixed
+    else:
+        billing_type = BillingType.hourly
+    total_hours = sum((row["hours"] for row in normalized if row["billing_type"] in hour_kinds), Decimal("0"))
+    amount = sum((row["amount"] for row in normalized), Decimal("0")).quantize(Decimal("0.01"))
+    rate = next((row["rate"] for row in normalized if row["billing_type"] in hour_kinds), amount)
+    numbers = [inv.invoice_number for inv in db.query(Invoice.invoice_number).all()]
+    invoice_number = body.invoice_number or next_invoice_number(numbers, body.year)
+    if db.query(Invoice).filter(Invoice.invoice_number == invoice_number).first():
+        raise HTTPException(status_code=400, detail="Invoice number already exists")
+    issue_date = date.today()
+    invoice = Invoice(
+        invoice_number=invoice_number,
+        client_id=None if one_off else client.id,
+        one_off_name=clean_invoice_text(body.one_off_name) if one_off else None,
+        one_off_email=(body.one_off_email or "").strip() or None if one_off else None,
+        one_off_business=clean_invoice_text(body.one_off_business) if one_off and body.one_off_business else None,
+        one_off_address=clean_invoice_text(body.one_off_address) if one_off and body.one_off_address else None,
+        currency=currency,
+        period_label=period_label,
+        period_start=period_start,
+        period_end=period_end,
+        total_hours=quantize_money(total_hours),
+        billing_type=billing_type,
+        rate=quantize_money(rate or 0),
+        amount=amount,
+        status=InvoiceStatus.unpaid,
+        payment_method=body.payment_method,
+        bank_details=body.bank_details,
+        payment_terms_days=body.payment_terms_days,
+        issue_date=issue_date,
+        due_date=issue_date + timedelta(days=body.payment_terms_days),
+    )
+    db.add(invoice)
+    db.flush()
+    for row in normalized:
+        db.add(
+            InvoiceLineItem(
+                invoice_id=invoice.id,
+                work_log_id=None,
+                project_id=row["project_id"],
+                line_kind=row["billing_type"],
+                line_date=period_end,
+                description=row["description"],
+                hours=row["hours"],
+                rate=row["rate"],
+                amount=row["amount"],
+            )
+        )
+    db.commit()
+    return (
+        db.query(Invoice)
+        .options(joinedload(Invoice.client), joinedload(Invoice.line_items))
+        .filter(Invoice.id == invoice.id)
+        .first()
+    )
+
+
 @router.post("/generate", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 def generate_invoice(
     body: InvoiceGenerateRequest,
     _: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
 ):
+    one_off_name = (body.one_off_name or "").strip()
+    if one_off_name or body.lines is not None:
+        client = None
+        if not one_off_name:
+            client = db.query(Client).filter(Client.id == body.client_id).first()
+            if not client:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
+        elif body.client_id is not None:
+            raise HTTPException(status_code=400, detail="A one-off invoice does not use a saved client")
+        before_clients = db.query(Client).count()
+        period_start, period_end, period_label = get_billing_period(body.year, body.month, body.cutoff)
+        invoice = _generate_flexible(db, body, client, period_start, period_end, period_label)
+        if db.query(Client).count() != before_clients:
+            raise HTTPException(status_code=500, detail="A one-off invoice must not create a client")
+        return _serialize_invoice(invoice)
+
     client = db.query(Client).filter(Client.id == body.client_id).first()
     if not client:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
@@ -269,6 +567,9 @@ def generate_invoice(
             if body.overage_rate is None:
                 overage_rate = pkg.overage_rate
             # body.rate is Jane's override (auto-filled from package in UI)
+
+    if billing_type is None or rate is None:
+        raise HTTPException(status_code=400, detail="Choose a billing type and a rate")
 
     # Client invoices are independent of VA timesheet / payroll approval.
     # Fixed & package invoices can be created with no work logs.
@@ -318,7 +619,7 @@ def generate_invoice(
 
     custom = (body.service_description or "").strip()
     # Never invent package marketing copy. Blank → service title + period only.
-    default_service = f"Social Media VA Services — {period_label}"
+    default_service = f"Social Media VA Services - {period_label}"
 
     def _client_desc(fallback_title: str) -> str:
         if custom:
@@ -357,7 +658,7 @@ def generate_invoice(
                         invoice_id=invoice.id,
                         work_log_id=None,
                         line_date=period_end,
-                        description=_client_desc(f"Social Media VA Services — {label} — {period_label}"),
+                        description=_client_desc(f"Social Media VA Services - {label} - {period_label}"),
                         hours=group_hours,
                         rate=rate,
                         amount=group_amount,
@@ -408,7 +709,7 @@ def generate_invoice(
                     invoice_id=invoice.id,
                     work_log_id=None,
                     line_date=period_end,
-                    description=f"Additional services — {period_label}",
+                    description=f"Additional services - {period_label}",
                     hours=overage_hrs,
                     rate=overage_rate or Decimal("0"),
                     amount=overage_amt or Decimal("0"),
@@ -423,6 +724,43 @@ def generate_invoice(
         .first()
     )
     return _serialize_invoice(invoice)
+
+
+@router.post("/{invoice_id}/send")
+def send_invoice(
+    invoice_id: UUID,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Email the invoice. A one-off invoice goes to the address typed on it."""
+    import html as html_lib
+
+    from app.services.email import send_email
+
+    invoice = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.client), joinedload(Invoice.line_items))
+        .filter(Invoice.id == invoice_id)
+        .first()
+    )
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    to_email = (invoice.one_off_email or "").strip()
+    if not to_email:
+        raise HTTPException(status_code=400, detail="Type an email address on this invoice before sending")
+    name = (invoice.client.name if invoice.client else None) or invoice.one_off_name or "there"
+    rows = []
+    for line in invoice.line_items:
+        text = html_lib.escape(clean_invoice_text(line.description)).replace("\n", "<br>")
+        rows.append(f"<p><strong>{text}</strong><br>{invoice.currency} {line.amount}</p>")
+    body = (
+        f"<p>Hello {html_lib.escape(name)},</p>"
+        f"<p>Invoice {html_lib.escape(invoice.invoice_number)} for {html_lib.escape(invoice.period_label)}.</p>"
+        + "".join(rows)
+        + f"<p>Total due: {invoice.currency} {invoice.amount}</p>"
+    )
+    sent = send_email(to_email, f"Invoice {invoice.invoice_number}", body, "invoice_sent")
+    return {"sent": sent, "to": to_email}
 
 
 @router.patch("/{invoice_id}/line-items/{line_id}", response_model=InvoiceResponse)

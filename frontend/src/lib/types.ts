@@ -100,8 +100,13 @@ export interface WorkLog {
 export interface Invoice {
   id: string
   invoice_number: string
-  client_id: string
+  client_id?: string | null
   client_name?: string
+  one_off_name?: string | null
+  one_off_email?: string | null
+  one_off_business?: string | null
+  one_off_address?: string | null
+  currency?: "USD" | "PHP" | string
   period_label: string
   period_start: string
   period_end: string
@@ -126,6 +131,8 @@ export interface InvoiceLineItem {
   hours: string
   rate: string
   amount: string
+  line_kind?: string | null
+  project_id?: string | null
 }
 
 export interface InvoicePreview {

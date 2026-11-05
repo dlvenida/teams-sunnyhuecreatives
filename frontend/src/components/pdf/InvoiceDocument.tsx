@@ -214,7 +214,7 @@ export function InvoiceDocument({
           </View>
           <View>
             <Text style={styles.bannerPeriodLabel}>Service period</Text>
-            <Text style={styles.bannerPeriod}>{invoice.period_label}</Text>
+            <Text style={styles.bannerPeriod}>{cleanInvoiceText(invoice.period_label)}</Text>
           </View>
         </View>
 
@@ -282,7 +282,7 @@ export function InvoiceDocument({
         </View>
 
         <Text style={styles.footer}>
-          {settings.company_name} · Invoice {invoice.invoice_number} · {invoice.period_label}
+          {settings.company_name} · Invoice {invoice.invoice_number} · {cleanInvoiceText(invoice.period_label)}
         </Text>
       </Page>
     </Document>

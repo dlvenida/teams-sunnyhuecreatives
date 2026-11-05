@@ -62,6 +62,15 @@ export function InvoicesPage() {
   const [generateSuccess, setGenerateSuccess] = useState("")
   const [source, setSource] = useState<"saved" | "oneoff">("saved")
   const [oneOff, setOneOff] = useState({ name: "", email: "", business: "", address: "", currency: "USD" as "USD" | "PHP" })
+  type PeriodLog = {
+    id: string
+    work_date: string
+    task_name: string
+    description: string
+    hours: string
+    va_name?: string | null
+    project_id?: string | null
+  }
   type DraftLine = {
     key: string
     description: string
@@ -72,6 +81,8 @@ export function InvoicesPage() {
     project_id?: string | null
     project_name?: string | null
     preset_id?: string | null
+    pulled_log_ids?: string[]
+    pullOpen?: boolean
   }
   const [presetLines, setPresetLines] = useState<DraftLine[]>([])
   const [manualLines, setManualLines] = useState<DraftLine[]>([])
@@ -96,6 +107,35 @@ export function InvoicesPage() {
   const rateNum = parseFloat(form.rate)
   const effectiveRate = rateNum
   const previewEnabled = !!form.client_id && !Number.isNaN(effectiveRate) && effectiveRate > 0
+
+  const { data: periodLogs = [] } = useQuery({
+    queryKey: ["invoice-period-logs", form.client_id, form.year, form.month, form.cutoff],
+    queryFn: () => {
+      const qs = new URLSearchParams({
+        client_id: form.client_id,
+        year: String(form.year),
+        month: String(form.month),
+        cutoff: String(form.cutoff),
+      })
+      return apiFetch<PeriodLog[]>(`/invoices/period-logs?${qs}`)
+    },
+    enabled: source === "saved" && !!form.client_id,
+  })
+  const pulledLogIds = useMemo(
+    () => new Set(manualLines.flatMap((line) => line.pulled_log_ids || [])),
+    [manualLines],
+  )
+  const remainingLogs = periodLogs.filter((log) => !pulledLogIds.has(log.id))
+  const remainingHours = remainingLogs.reduce((sum, log) => sum + Number(log.hours || 0), 0)
+  const hourlyAmount = !Number.isNaN(rateNum) && rateNum > 0 ? Math.round(remainingHours * rateNum * 100) / 100 : 0
+  const hasHourPreset = presetLines.some((line) => line.billing_type === "actual_hours" || line.billing_type === "hourly" || line.billing_type === "entered_hours")
+  const hoursLeftOnPreset = (line: DraftLine) => {
+    if (line.billing_type !== "actual_hours") return Number(line.hours || 0)
+    const pulledHours = periodLogs
+      .filter((log) => pulledLogIds.has(log.id) && log.project_id && log.project_id === line.project_id)
+      .reduce((sum, log) => sum + Number(log.hours || 0), 0)
+    return Math.max(0, Math.round((Number(line.hours || 0) - pulledHours) * 100) / 100)
+  }
 
   const { data: packages = [] } = useQuery({
     queryKey: ["client-packages", form.client_id],
@@ -217,21 +257,39 @@ export function InvoicesPage() {
   const generate = useMutation({
     mutationFn: () => {
       const currency = source === "oneoff" ? oneOff.currency : "USD"
+      const hasPulls = manualLines.some((line) => (line.pulled_log_ids || []).length > 0)
       const pack = (line: DraftLine) => {
-        const hours = line.hours.trim() === "" ? null : Number(line.hours)
-        const rate = line.rate.trim() === "" ? null : Number(line.rate)
-        const both = hours != null && rate != null && line.billing_type !== "package" && line.billing_type !== "extra" && line.billing_type !== "flat_fee"
+        if (line.billing_type === "actual_hours" && hasPulls) {
+          const hours = hoursLeftOnPreset(line)
+          if (hours <= 0) return null
+          const rate = line.rate.trim() === "" ? null : Number(line.rate)
+          const amount = rate == null ? 0 : Math.round(hours * rate * 100) / 100
+          return {
+            project_id: line.project_id || null,
+            billing_type: line.billing_type,
+            description: line.description,
+            hours,
+            rate,
+            amount,
+            pulled_log_ids: [],
+          }
+        }
+        const pulled = (line.pulled_log_ids || []).length > 0
+        const hours = pulled || line.hours.trim() === "" ? null : Number(line.hours)
+        const rate = pulled || line.rate.trim() === "" ? null : Number(line.rate)
+        const both = !pulled && hours != null && rate != null && line.billing_type !== "package" && line.billing_type !== "extra" && line.billing_type !== "flat_fee"
         const amount = both ? Math.round(hours * rate * 100) / 100 : (line.amount.trim() === "" ? 0 : Number(line.amount))
         return {
           project_id: line.project_id || null,
           billing_type: line.billing_type,
           description: line.description,
-          hours: line.billing_type === "package" ? null : hours,
-          rate: line.billing_type === "package" ? null : rate,
+          hours: line.billing_type === "package" || pulled ? null : hours,
+          rate: line.billing_type === "package" || pulled ? null : rate,
           amount,
+          pulled_log_ids: line.pulled_log_ids || [],
         }
       }
-      const lines = [...presetLines, ...manualLines, ...extras].map(pack)
+      const lines = [...presetLines, ...manualLines, ...extras].map(pack).filter((line): line is NonNullable<typeof line> => line != null)
       return apiFetch<Invoice>("/invoices/generate", {
         method: "POST",
         body: JSON.stringify({
@@ -239,8 +297,8 @@ export function InvoicesPage() {
           year: form.year,
           month: form.month,
           cutoff: form.cutoff,
-          billing_type: lines.length ? null : form.billing_type,
-          rate: lines.length ? null : rateNum,
+          billing_type: hasPulls ? form.billing_type : (lines.length ? null : form.billing_type),
+          rate: hasPulls ? rateNum : (lines.length ? null : rateNum),
           invoice_number: form.invoice_number || null,
           payment_method: form.payment_method,
           bank_details: form.bank_details || null,
@@ -567,11 +625,22 @@ export function InvoicesPage() {
               <Button type="button" size="sm" variant="outline" onClick={() => setExtras((rows) => [...rows, { key: crypto.randomUUID(), description: "", billing_type: "extra", hours: "", rate: "", amount: "" }])}>Add extra charge</Button>
             </div>
           </div>
-          {source === "saved" && presetLines.map((line) => (
+          {source === "saved" && presetLines.map((line) => {
+            const left = line.billing_type === "actual_hours" ? hoursLeftOnPreset(line) : Number(line.hours || 0)
+            const reduced = line.billing_type === "actual_hours" && pulledLogIds.size > 0
+            const rate = Number(line.rate || 0)
+            const reducedAmount = Math.round(left * rate * 100) / 100
+            return (
             <div key={line.key} className="rounded-xl border p-3">
               <p className="text-[11px] font-semibold text-muted-foreground">Preset · {line.project_name || line.billing_type}</p>
-              <p className="mt-1 whitespace-pre-wrap text-sm">{line.description}</p>
-              <p className="text-xs text-muted-foreground">{line.amount ? formatCurrency(line.amount, "USD") : ""}</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm">
+                {reduced
+                  ? left <= 0
+                    ? `${line.project_name || "Project"} - no hours left. Those tasks are on the manual line.`
+                    : `${line.project_name || "Project"} - ${left} hrs x ${formatCurrency(rate)}/hr = ${formatCurrency(reducedAmount)}`
+                  : line.description}
+              </p>
+              <p className="text-xs text-muted-foreground">{reduced ? (left <= 0 ? "" : formatCurrency(reducedAmount, "USD")) : (line.amount ? formatCurrency(line.amount, "USD") : "")}</p>
               {line.preset_id && form.client_id && (
                 <Button type="button" size="sm" variant="ghost" onClick={() => {
                   apiFetch(`/invoices/clients/${form.client_id}/billing-lines/${line.preset_id}`, { method: "DELETE" })
@@ -580,13 +649,36 @@ export function InvoicesPage() {
                 }}>Delete preset</Button>
               )}
             </div>
-          ))}
+            )
+          })}
+          {pulledLogIds.size > 0 && form.billing_type === "hourly" && source === "saved" && !hasHourPreset && (
+            <div className="rounded-xl border border-primary/30 bg-primary/5 px-3 py-2 text-xs" aria-label="Hourly line after pull">
+              <p className="font-semibold">Hourly line, tasks not pulled</p>
+              <p className="mt-1">{remainingHours.toFixed(2)} hrs x {formatCurrency(rateNum || 0)} = {formatCurrency(hourlyAmount)}</p>
+              <ul className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
+                {remainingLogs.map((log) => (
+                  <li key={log.id}>{formatDate(log.work_date)} · {log.task_name} · {log.hours} hrs</li>
+                ))}
+                {remainingLogs.length === 0 && <li>No approved logs left on the hourly line.</li>}
+              </ul>
+            </div>
+          )}
           {manualLines.map((line) => {
-            const both = line.billing_type !== "package" && line.hours.trim() !== "" && line.rate.trim() !== ""
+            const pulledIds = line.pulled_log_ids || []
+            const pulled = pulledIds.length > 0
+            const both = !pulled && line.billing_type !== "package" && line.hours.trim() !== "" && line.rate.trim() !== ""
             const shownAmount = both ? (Math.round(Number(line.hours) * Number(line.rate) * 100) / 100).toFixed(2) : line.amount
+            const pulledLogs = periodLogs.filter((log) => pulledIds.includes(log.id))
             return (
               <div key={line.key} className="rounded-xl border p-3">
-                <Label>Description</Label>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <Label>Description</Label>
+                  {line.billing_type === "manual" && source === "saved" && (
+                    <Button type="button" size="sm" variant="outline" aria-label="Pull from time logs" onClick={() => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, pullOpen: !row.pullOpen } : row))}>
+                      Pull from time logs
+                    </Button>
+                  )}
+                </div>
                 <Textarea
                   rows={4}
                   className="mt-1"
@@ -594,6 +686,43 @@ export function InvoicesPage() {
                   autoComplete="off"
                   onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, description: e.target.value } : row))}
                 />
+                {line.pullOpen && (
+                  <div className="mt-2 rounded-xl border bg-muted/20 p-2" aria-label="Approved time logs">
+                    {periodLogs.length === 0 && <p className="text-[11px] text-muted-foreground">No approved time logs in this period.</p>}
+                    <ul className="space-y-1">
+                      {periodLogs.map((log) => {
+                        const takenElsewhere = pulledLogIds.has(log.id) && !pulledIds.includes(log.id)
+                        return (
+                          <li key={log.id}>
+                            <label className={`flex items-start gap-2 text-xs ${takenElsewhere ? "text-muted-foreground" : ""}`}>
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                aria-label={`Pull ${log.task_name}`}
+                                disabled={takenElsewhere}
+                                checked={pulledIds.includes(log.id)}
+                                onChange={(e) => {
+                                  const next = e.target.checked ? [...pulledIds, log.id] : pulledIds.filter((id) => id !== log.id)
+                                  setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, pulled_log_ids: next } : row))
+                                }}
+                              />
+                              <span>
+                                <span className="font-semibold">{formatDate(log.work_date)} · {log.task_name}</span>
+                                {log.description && <span className="mt-0.5 block text-[11px] text-muted-foreground">{log.description}</span>}
+                                <span className="block text-[11px]">{log.hours} hrs{log.va_name ? ` · ${log.va_name}` : ""}{takenElsewhere ? " · already on another line" : ""}</span>
+                              </span>
+                            </label>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )}
+                {pulled && (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Reference only: {pulledLogs.reduce((sum, log) => sum + Number(log.hours || 0), 0).toFixed(2)} hrs logged. These hours are not added to the invoice total.
+                  </p>
+                )}
                 <div className="mt-2 grid gap-2 sm:grid-cols-4">
                   <div>
                     <Label>Type</Label>
@@ -603,14 +732,14 @@ export function InvoicesPage() {
                       <option value="manual">Manual</option>
                     </Select>
                   </div>
-                  {line.billing_type !== "package" && (
+                  {line.billing_type !== "package" && !pulled && (
                     <>
                       <div><Label>Hours</Label><Input type="number" step="0.01" value={line.hours} onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, hours: e.target.value } : row))} /></div>
                       <div><Label>Rate</Label><Input type="number" step="0.01" value={line.rate} onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, rate: e.target.value } : row))} /></div>
                     </>
                   )}
                   <div>
-                    <Label>Amount</Label>
+                    <Label>{pulled ? "Flat amount" : "Amount"}</Label>
                     <Input type="number" step="0.01" value={shownAmount} readOnly={both} onChange={(e) => setManualLines((rows) => rows.map((row) => row.key === line.key ? { ...row, amount: e.target.value } : row))} />
                   </div>
                 </div>

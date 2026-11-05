@@ -242,26 +242,46 @@ export function InvoiceDocument({
           <Text style={[styles.th, styles.colAmt]}>Amount</Text>
         </View>
 
-        {lines.map((item) => {
-          const typed = cleanInvoiceText(item.description || "")
-          const keepBreaks = item.line_kind === "manual" || item.line_kind === "hourly" || item.line_kind === "package" || item.line_kind === "extra"
-          const parts = keepBreaks ? typed.split("\n") : [lineParts({ ...item, description: typed }).title]
+        {(() => {
           const currency = invoice.currency || "USD"
-          const showRate = item.line_kind === "entered_hours" || item.line_kind === "actual_hours" || item.line_kind === "hourly" || (!item.line_kind && invoice.billing_type === "hourly")
-          return (
-            <View key={item.id} style={styles.tableRow} wrap={false}>
-              <View style={styles.colDesc}>
-                {parts.map((line, index) => (
-                  <Text key={index} style={index === 0 ? styles.rowTitle : styles.rowSub}>{line || " "}</Text>
-                ))}
+          const hourlyTasks = lines.filter((item) => item.line_kind === "hourly_task")
+          const otherLines = lines.filter((item) => item.line_kind !== "hourly_task")
+          const hourlySubtotal = hourlyTasks.reduce((sum, item) => sum + Number(item.amount), 0)
+          const row = (item: InvoiceLineItem, key: string) => {
+            const typed = cleanInvoiceText(item.description || "")
+            const keepBreaks = item.line_kind === "manual" || item.line_kind === "hourly" || item.line_kind === "package" || item.line_kind === "extra" || item.line_kind === "hourly_task" || item.line_kind === "hourly_summary" || item.line_kind === "flat_fee"
+            const parts = keepBreaks ? typed.split("\n") : [lineParts({ ...item, description: typed }).title]
+            const showRate = item.line_kind === "entered_hours" || item.line_kind === "actual_hours" || item.line_kind === "hourly" || item.line_kind === "hourly_task" || (!item.line_kind && invoice.billing_type === "hourly")
+            return (
+              <View key={key} style={styles.tableRow} wrap={false}>
+                <View style={styles.colDesc}>
+                  {parts.map((line, index) => (
+                    <Text key={index} style={index === 0 ? styles.rowTitle : styles.rowSub}>{line || " "}</Text>
+                  ))}
+                </View>
+                <Text style={[styles.rowRate, styles.colRate]}>
+                  {showRate && Number(item.rate) > 0 ? formatInvoiceRate(item.rate).replace("$", currency === "PHP" ? "₱" : "$") : ""}
+                </Text>
+                <Text style={[styles.rowAmt, styles.colAmt]}>{formatCurrency(item.amount, currency)}</Text>
               </View>
-              <Text style={[styles.rowRate, styles.colRate]}>
-                {showRate && Number(item.rate) > 0 ? formatInvoiceRate(item.rate).replace("$", currency === "PHP" ? "₱" : "$") : ""}
-              </Text>
-              <Text style={[styles.rowAmt, styles.colAmt]}>{formatCurrency(item.amount, currency)}</Text>
+            )
+          }
+          return (
+            <View>
+              {hourlyTasks.map((item) => row(item, item.id))}
+              {hourlyTasks.length > 0 && (
+                <View style={styles.tableRow} wrap={false}>
+                  <View style={styles.colDesc}>
+                    <Text style={styles.rowTitle}>Hourly subtotal</Text>
+                  </View>
+                  <Text style={[styles.rowRate, styles.colRate]} />
+                  <Text style={[styles.rowAmt, styles.colAmt]}>{formatCurrency(hourlySubtotal, currency)}</Text>
+                </View>
+              )}
+              {otherLines.map((item) => row(item, item.id))}
             </View>
           )
-        })}
+        })()}
 
         <View style={styles.totalBlock}>
           <Text style={styles.totalLabel}>Total due</Text>

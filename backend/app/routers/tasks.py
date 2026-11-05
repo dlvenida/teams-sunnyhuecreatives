@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin_or_auditor
-from app.models import Client, CommentAttachment, CommentReaction, Project, SubClient, Task, TaskComment, TaskNoteRevision, TaskPriority, TaskRecurrence, TaskStatus, UserRole, VA, WorkLog
+from app.models import Client, ClientBillingLine, CommentAttachment, CommentReaction, Project, SubClient, Task, TaskComment, TaskNoteRevision, TaskPriority, TaskRecurrence, TaskStatus, UserRole, VA, WorkLog
 from app.schemas import (
     LinkAttachmentCreate,
     ReactionToggle,
@@ -74,9 +74,33 @@ def _normalize_recurrence(data: dict) -> None:
             data["recurrence_weekdays"] = [0, 1, 2, 3, 4]
 
 
-def _serialize(db: Session, t: Task) -> TaskResponse:
+def _reject_unprivileged_billing(current: CurrentUser, body) -> None:
+    if current.role == UserRole.admin:
+        return
+    if {"billing_mode", "package_line_id"} & set(getattr(body, "model_fields_set", set())):
+        raise HTTPException(403, "Only an Admin can set task billing")
+
+
+def _clean_billing(db: Session, client_id, mode: str, line_id):
+    if mode not in ("hourly", "package"):
+        raise HTTPException(400, "Task billing is Hourly or Package")
+    if mode != "package":
+        return "hourly", None
+    if line_id is None:
+        return "package", None
+    line = db.query(ClientBillingLine).filter(
+        ClientBillingLine.id == line_id,
+        ClientBillingLine.client_id == client_id,
+    ).first()
+    if not line or line.billing_type not in ("package", "flat_fee"):
+        raise HTTPException(400, "Link the task to a package or flat fee line for this client")
+    return "package", line.id
+
+
+def _serialize(db: Session, t: Task, current: CurrentUser) -> TaskResponse:
     logged = db.query(func.coalesce(func.sum(WorkLog.hours), 0)).filter(WorkLog.task_id == t.id).scalar() or Decimal("0")
     rec = t.recurrence or TaskRecurrence.none
+    show_billing = current.role in (UserRole.admin, UserRole.auditor)
     return TaskResponse(
         id=t.id, title=t.title, description=t.description, client_id=t.client_id,
         client_name=t.client.name if t.client else None, sub_client_id=t.sub_client_id,
@@ -101,6 +125,8 @@ def _serialize(db: Session, t: Task) -> TaskResponse:
         parent_task_id=t.parent_task_id,
         completed_at=t.completed_at,
         created_at=t.created_at, updated_at=t.updated_at,
+        billing_mode=(t.billing_mode or "hourly") if show_billing else None,
+        package_line_id=t.package_line_id if current.role == UserRole.admin else None,
     )
 
 
@@ -197,7 +223,7 @@ def list_tasks(
     if due_to: q = q.filter(Task.due_date <= due_to)
     if overdue: q = q.filter(Task.due_date < date.today(), Task.status != TaskStatus.done)
     tasks = q.order_by(Task.status, Task.position, Task.due_date.asc().nullslast(), Task.created_at.desc()).all()
-    return [_serialize(db, t) for t in tasks]
+    return [_serialize(db, t, current) for t in tasks]
 
 
 @router.get("/stats")
@@ -218,7 +244,8 @@ def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_cu
         raise HTTPException(400, "Deadline cannot be before start date")
     if body.recurrence_until and body.due_date and body.recurrence_until < body.due_date:
         raise HTTPException(400, "Repeat until cannot be before the deadline")
-    payload = body.model_dump(exclude={"assignee_va_id"})
+    _reject_unprivileged_billing(current, body)
+    payload = body.model_dump(exclude={"assignee_va_id", "billing_mode", "package_line_id"})
     _normalize_recurrence(payload)
     assignee = body.assignee_va_id
     if is_va(current):
@@ -228,8 +255,22 @@ def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_cu
         ensure_va_scope(db, current.va_id, body.client_id, body.project_id)
         if payload.get("status") is None:
             payload["status"] = TaskStatus.todo
+    billing_mode, package_line_id = "hourly", None
+    if current.role == UserRole.admin:
+        mode = body.billing_mode or "hourly"
+        line_id = body.package_line_id
+        if line_id and mode != "package":
+            mode = "package"
+        billing_mode, package_line_id = _clean_billing(db, body.client_id, mode, line_id)
     max_pos = db.query(func.coalesce(func.max(Task.position), 0)).filter(Task.status == body.status).scalar() or 0
-    t = Task(**payload, assignee_va_id=assignee, created_by=current.user.id, position=int(max_pos) + 1)
+    t = Task(
+        **payload,
+        assignee_va_id=assignee,
+        created_by=current.user.id,
+        position=int(max_pos) + 1,
+        billing_mode=billing_mode,
+        package_line_id=package_line_id,
+    )
     if t.status == TaskStatus.done:
         t.completed_at = datetime.now(timezone.utc)
     db.add(t)
@@ -250,14 +291,14 @@ def create_task(body: TaskCreate, current: Annotated[CurrentUser, Depends(get_cu
             actor_name=current.user.display_name or current.user.email,
             actor_user_id=current.user.id,
         )
-    return _serialize(db, t)
+    return _serialize(db, t, current)
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
 def get_task(task_id: UUID, current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
     t = _visible(_base_query(db), current).filter(Task.id == task_id).first()
     if not t: raise HTTPException(404, "Task not found")
-    return _serialize(db, t)
+    return _serialize(db, t, current)
 
 
 @router.patch("/{task_id}", response_model=TaskResponse)
@@ -268,7 +309,18 @@ def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser,
         raise HTTPException(403, "You can only update your own tasks")
     if current.role == UserRole.va and body.assignee_va_id and body.assignee_va_id != current.va_id:
         raise HTTPException(403, "VAs cannot reassign tasks")
+    _reject_unprivileged_billing(current, body)
     data = body.model_dump(exclude_unset=True)
+    data.pop("billing_mode", None)
+    data.pop("package_line_id", None)
+    if current.role == UserRole.admin and ({"billing_mode", "package_line_id"} & set(body.model_fields_set)):
+        mode = body.billing_mode if "billing_mode" in body.model_fields_set else (t.billing_mode or "hourly")
+        line_id = body.package_line_id if "package_line_id" in body.model_fields_set else t.package_line_id
+        if line_id and mode != "package":
+            mode = "package"
+        mode, line_id = _clean_billing(db, data.get("client_id", t.client_id), mode or "hourly", line_id)
+        data["billing_mode"] = mode
+        data["package_line_id"] = line_id
     _normalize_recurrence(data)
     _validate_links(db, data.get("client_id", t.client_id), data.get("sub_client_id", t.sub_client_id), data.get("project_id", t.project_id), data.get("assignee_va_id", t.assignee_va_id))
     old_status = t.status
@@ -320,7 +372,7 @@ def update_task(task_id: UUID, body: TaskUpdate, current: Annotated[CurrentUser,
             db, t, "; ".join(changes) or "Task details updated", actor,
             actor_user_id=current.user.id, actor_is_staff=True,
         )
-    return _serialize(db, t)
+    return _serialize(db, t, current)
 
 
 @router.post("/{task_id}/move", response_model=TaskResponse)

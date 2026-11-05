@@ -353,6 +353,8 @@ class TaskCreate(BaseModel):
     recurrence_unit: str | None = None  # day|week|month|year when custom
     recurrence_weekdays: list[int] | None = None  # 0=Mon .. 6=Sun
     recurrence_until: date | None = None
+    billing_mode: str = "hourly"
+    package_line_id: UUID | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -375,6 +377,8 @@ class TaskUpdate(BaseModel):
     recurrence_unit: str | None = None
     recurrence_weekdays: list[int] | None = None
     recurrence_until: date | None = None
+    billing_mode: str | None = None
+    package_line_id: UUID | None = None
 
 
 class TaskResponse(BaseModel):
@@ -410,6 +414,8 @@ class TaskResponse(BaseModel):
     completed_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    billing_mode: str | None = None
+    package_line_id: UUID | None = None
 
     model_config = {"from_attributes": True}
 
@@ -917,6 +923,23 @@ class ClientBillingLineResponse(BaseModel):
     default_rate: Decimal | None = None
     default_amount: Decimal | None = None
     sort_order: int = 0
+    linked_task_ids: list[UUID] = Field(default_factory=list)
+    linked_task_titles: list[str] = Field(default_factory=list)
+
+
+class PackageTasksWrite(BaseModel):
+    task_ids: list[UUID] = Field(default_factory=list)
+
+
+class InvoiceTaskReview(BaseModel):
+    task_id: UUID | None = None
+    title: str
+    hours: Decimal
+    billing_mode: str = "hourly"
+    included: bool = True
+    package_line_id: UUID | None = None
+    project_id: UUID | None = None
+    amount: Decimal = Decimal("0")
 
 
 class InvoiceDraftLine(BaseModel):
@@ -946,6 +969,14 @@ class InvoicePrepareResponse(BaseModel):
     client_rate: Decimal
     lines: list[InvoiceDraftLineResponse]
     message: str
+    show_hourly_breakdown: bool = True
+    show_package_time: bool = False
+    hourly_subtotal: Decimal = Decimal("0")
+    package_total: Decimal = Decimal("0")
+    amount: Decimal = Decimal("0")
+    total_hours: Decimal = Decimal("0")
+    task_reviews: list[InvoiceTaskReview] = Field(default_factory=list)
+    package_tasks: list[InvoiceTaskReview] = Field(default_factory=list)
 
 
 # Invoices
@@ -971,6 +1002,12 @@ class InvoiceGenerateRequest(BaseModel):
     one_off_business: str | None = None
     one_off_address: str | None = None
     currency: str | None = None
+    compose_from_tasks: bool = False
+    show_hourly_breakdown: bool = True
+    show_package_time: bool = False
+    included_task_ids: list[UUID] | None = None
+    excluded_task_ids: list[UUID] | None = None
+    include_unassigned: bool = True
 
 
 class InvoiceLineItemUpdate(BaseModel):
@@ -1033,6 +1070,8 @@ class InvoiceResponse(BaseModel):
     issue_date: date
     due_date: date
     paid_at: datetime | None
+    show_hourly_breakdown: bool = True
+    show_package_time: bool = False
     line_items: list[InvoiceLineItemResponse] = []
 
     model_config = {"from_attributes": True}

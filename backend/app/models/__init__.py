@@ -299,6 +299,11 @@ class Task(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     staff_notes_updated_by_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # hourly (default) bills approved time. package is covered by a fixed line and is left off hourly charges.
+    billing_mode: Mapped[str] = mapped_column(String(20), default="hourly", server_default="hourly")
+    package_line_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("client_billing_lines.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -306,6 +311,7 @@ class Task(Base):
     sub_client: Mapped["SubClient | None"] = relationship()
     project: Mapped["Project | None"] = relationship(back_populates="tasks")
     assignee: Mapped["VA | None"] = relationship()
+    package_line: Mapped["ClientBillingLine | None"] = relationship()
     comments: Mapped[list["TaskComment"]] = relationship(back_populates="task", cascade="all, delete-orphan")
     note_revisions: Mapped[list["TaskNoteRevision"]] = relationship(back_populates="task", cascade="all, delete-orphan")
 
@@ -513,6 +519,8 @@ class Invoice(Base):
     one_off_business: Mapped[str | None] = mapped_column(String(255), nullable=True)
     one_off_address: Mapped[str | None] = mapped_column(Text, nullable=True)
     currency: Mapped[str] = mapped_column(String(10), default="USD", server_default="USD")
+    show_hourly_breakdown: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    show_package_time: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     period_label: Mapped[str] = mapped_column(String(100))
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)

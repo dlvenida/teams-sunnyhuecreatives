@@ -619,6 +619,7 @@ export interface Settings {
   booking_url: string
   booking_hide_pricing: boolean
   default_va_hourly_rate: string
+  usd_php_rate?: string | null
   resend_api_key?: string
   resend_from_email?: string
   admin_notify_email?: string

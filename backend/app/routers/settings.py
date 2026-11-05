@@ -142,6 +142,7 @@ def get_settings(
             "paypal_email": "",
             "hide_pricing": True,
             "default_va_hourly_rate": Decimal("0"),
+            "usd_php_rate": None,
             "resend_api_key": "",
             "admin_notify_email": "",
         }
@@ -158,6 +159,12 @@ def update_settings(
     updates = body.model_dump(exclude_unset=True)
     if "default_va_hourly_rate" in updates and updates["default_va_hourly_rate"] is not None:
         updates["default_va_hourly_rate"] = str(updates["default_va_hourly_rate"])
+    if "usd_php_rate" in updates:
+        rate = updates.pop("usd_php_rate")
+        if rate is not None and rate > 0:
+            current["usd_php_rate"] = str(rate)
+        else:
+            current.pop("usd_php_rate", None)
     current.update(updates)
 
     row = db.query(SystemSetting).filter(SystemSetting.key == "company").first()

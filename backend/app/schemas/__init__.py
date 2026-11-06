@@ -884,6 +884,7 @@ class WorkLogResponse(BaseModel):
     va_rate: Decimal | None = None
     va_pay: Decimal | None = None
     notes: str | None
+    review_reason: str | None = None
     status: WorkLogStatus
     invoice_id: UUID | None
     project_id: UUID | None = None

@@ -300,6 +300,8 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
         db.add(log)
         db.flush()
         entry.work_log_id = log.id
+        from app.services.work_log_review import hold_open_matches
+        hold_open_matches(db, log)
     db.commit()
     db.refresh(entry)
     return _serialize(_load(db, entry.id))

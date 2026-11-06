@@ -11,6 +11,7 @@ export interface ApprovalEntryView {
   description?: string | null
   description_plain?: string | null
   notes?: string | null
+  review_reason?: string | null
   start_time?: string | null
   end_time?: string | null
   hours: string | number
@@ -63,6 +64,9 @@ export function LogApprovalCard({ entry }: { entry: ApprovalEntryView }) {
         <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-[#3D2B33]">{description || "No description"}</p>
         {extraNote && <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-[#3D2B33]">Note: {extraNote}</p>}
       </div>
+      {entry.review_reason && (
+        <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">{entry.review_reason}</p>
+      )}
     </article>
   )
 }

@@ -25,6 +25,7 @@ interface ReviewEntry {
   task_name?: string | null
   description?: string | null
   notes?: string | null
+  review_reason?: string | null
   start_time?: string | null
   end_time?: string | null
   hours: string

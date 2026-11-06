@@ -28,7 +28,16 @@ from app.services.billing import get_week_period
 from app.services.payroll_calendar import period_lookup_keys, snap_payroll_period
 from app.services.notifications import push
 from app.services.package_overrides import effective_package_amount, load_overrides
-from app.services.va_rates import combine_period_pay, get_approved_rate, own_month_pay, package_flats_for_period, package_period_amounts, resolve_log_pay
+from app.services.va_rates import (
+    approved_rate_amounts,
+    combine_period_pay,
+    get_approved_rate,
+    own_month_pay,
+    package_flats_for_period,
+    package_period_amounts,
+    pay_from_approved_rate,
+    resolve_log_pay,
+)
 from app.services.work_log_entry import apply_work_log_timing, resolve_timing
 from app.services.va_scope import ensure_va_scope, is_va, load_va_scope
 from app.services.work_log_overlap import assert_no_time_overlap
@@ -38,7 +47,8 @@ router = APIRouter(prefix="/va", tags=["va"])
 BILLABLE = [WorkLogStatus.approved, WorkLogStatus.invoiced]
 
 
-def _serialize_log(log: WorkLog) -> WorkLogResponse:
+def _serialize_log(log: WorkLog, amounts=None) -> WorkLogResponse:
+    rate, pay = (log.va_rate, log.va_pay) if amounts is None else pay_from_approved_rate(log, amounts)
     return WorkLogResponse(
         id=log.id,
         work_date=log.work_date,
@@ -54,9 +64,10 @@ def _serialize_log(log: WorkLog) -> WorkLogResponse:
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
-        va_rate=log.va_rate,
-        va_pay=log.va_pay,
+        va_rate=rate,
+        va_pay=pay,
         notes=log.notes,
+        review_reason=getattr(log, "review_reason", None),
         status=log.status,
         invoice_id=log.invoice_id,
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
@@ -215,7 +226,8 @@ def list_my_work_logs(
         .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
         .all()
     )
-    return [_serialize_log(log) for log in logs]
+    amounts = approved_rate_amounts(db, [current.va_id])
+    return [_serialize_log(log, amounts) for log in logs]
 
 
 def _my_log_or_404(db: Session, log_id: UUID, va_id):
@@ -264,7 +276,8 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
             log.status = WorkLogStatus.submitted  # editing a rejected log resubmits it
     db.commit()
     db.refresh(log)
-    return _serialize_log(_my_log_or_404(db, log.id, current.va_id))
+    amounts = approved_rate_amounts(db, [current.va_id])
+    return _serialize_log(_my_log_or_404(db, log.id, current.va_id), amounts)
 
 
 @router.delete("/work-logs/{log_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -370,6 +383,11 @@ def my_earnings(
         (va.user.display_name.strip() if va and va.user and va.user.display_name else "")
         or (va.name if va else None)
     )
+    # This VA only. A stored $75 is the company default from before the rate was approved.
+    rate_amounts = approved_rate_amounts(db, [current.va_id])
+
+    def _line_pay(log):
+        return pay_from_approved_rate(log, rate_amounts)
 
     def _package_dues(start: date, end: date) -> dict:
         saved = load_overrides(db, {current.va_id}, start, end)
@@ -390,7 +408,8 @@ def my_earnings(
         hours = sum((l.hours for l in subset), Decimal("0"))
         log_pay: dict = {}
         for log in subset:
-            log_pay[log.client_id] = log_pay.get(log.client_id, Decimal("0")) + log.va_pay
+            _rate, pay = _line_pay(log)
+            log_pay[log.client_id] = log_pay.get(log.client_id, Decimal("0")) + pay
         if start is None or end is None:
             dates_by_client: dict = {}
             for log in subset:
@@ -419,8 +438,9 @@ def my_earnings(
             key,
             {"client_id": key, "client_name": l.client.name if l.client else "Client", "hours": Decimal("0"), "earned": Decimal("0"), "pay_type": "hourly", "currency": currency, "status": "Approved"},
         )
+        _rate, pay = _line_pay(l)
         row["hours"] += l.hours
-        row["earned"] += l.va_pay
+        row["earned"] += pay
     if range_start is None or range_end is None:
         range_dates: dict = {}
         for log in range_logs:
@@ -459,22 +479,24 @@ def my_earnings(
         for r in sorted(by_client_map.values(), key=lambda x: x["client_name"].lower())
     ]
 
-    entries = [
+    entries = []
+    for l in sorted(range_logs, key=lambda x: (x.work_date, x.start_time or time.min)):
+        rate, pay = _line_pay(l)
+        entries.append(
         {
             "id": str(l.id),
             "work_date": str(l.work_date),
             "client_name": l.client.name if l.client else "Client",
             "description": l.description_plain or "",
             "hours": str(l.hours),
-            "rate": str(l.va_rate),
-            "pay": str(l.va_pay),
+            "rate": str(rate),
+            "pay": str(pay),
             "project_name": l.project.name if getattr(l, "project", None) else None,
             "task_title": l.task.title if getattr(l, "task", None) else None,
             "task_name": (l.task_name or "").strip() or (l.task.title if getattr(l, "task", None) else None),
             "source": l.source or "manual",
         }
-        for l in sorted(range_logs, key=lambda x: (x.work_date, x.start_time or time.min))
-    ]
+        )
 
     from app.routers.settings import _get_settings
     company_name = _get_settings(db).get("company_name") or "Sunny Hue Creatives"
@@ -682,6 +704,9 @@ def submit_work_log(
         payable_on=payable_on,
     )
     db.add(log)
+    db.flush()
+    from app.services.work_log_review import hold_open_matches
+    hold_open_matches(db, log)
     db.commit()
     db.refresh(log)
     log = (
@@ -692,7 +717,7 @@ def submit_work_log(
     )
 
     # Routine time logs are not sent to Admin or Project Manager.
-    return _serialize_log(log)
+    return _serialize_log(log, approved_rate_amounts(db, [current.va_id]))
 
 
 @router.get("/timesheets", response_model=list[TimesheetSubmissionResponse])

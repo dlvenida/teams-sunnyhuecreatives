@@ -54,7 +54,16 @@ from app.services.package_overrides import (
     plan_override,
 )
 from app.services.pay_access import hide_team_money, may_review_timesheet, pay_notice_path, person_role_label, role_value
-from app.services.va_rates import combine_period_pay, currency_code, get_approved_rate, package_amount_for_window, package_period_amounts, resolved_frequency
+from app.services.va_rates import (
+    approved_rate_amounts,
+    combine_period_pay,
+    currency_code,
+    get_approved_rate,
+    package_amount_for_window,
+    package_period_amounts,
+    pay_from_approved_rate,
+    resolved_frequency,
+)
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
@@ -186,6 +195,7 @@ def calculate_payroll(
     total_php = Decimal("0")
     total_usd = Decimal("0")
     redact = hide_team_money(current.role)
+    rate_amounts = approved_rate_amounts(db, set(va_map) | {log.va_id for log in prev_logs})
     period_overrides = load_overrides(db, set(va_map), period_start, period_end)
     prev_overrides = load_overrides(db, set(va_map), prev_start, prev_end)
     for va_id, data in va_map.items():
@@ -218,17 +228,19 @@ def calculate_payroll(
                 "note": (saved.note or "").strip() or None if saved else None,
                 "currency": rate_currency,
             })
+        resolved = {entry.id: pay_from_approved_rate(entry, rate_amounts) for entry in data["entries"]}
         log_pay_by_client: dict = {}
         for entry in data["entries"]:
-            log_pay_by_client[entry.client_id] = log_pay_by_client.get(entry.client_id, Decimal("0")) + entry.va_pay
+            _rate, pay = resolved[entry.id]
+            log_pay_by_client[entry.client_id] = log_pay_by_client.get(entry.client_id, Decimal("0")) + pay
         data["total_pay"] = combine_period_pay(package_dues, log_pay_by_client)
 
         entries = [
             PayrollEntry(
                 id=e.id, work_date=e.work_date, client_name=e.client.name, description=e.description_plain,
                 hours=e.hours,
-                rate=None if redact else e.va_rate,
-                pay=None if redact else e.va_pay,
+                rate=None if redact else resolved[e.id][0],
+                pay=None if redact else resolved[e.id][1],
                 project_name=e.project.name if e.project else None,
                 task_title=e.task.title if e.task else None,
                 task_name=log_task_name(e),
@@ -245,15 +257,15 @@ def calculate_payroll(
         by_client: dict[str, dict] = {}
         daily_map: dict[date, Decimal] = {}
         for l in data["entries"]:
+            rate, pay = resolved[l.id]
             b = by_client.setdefault(l.client.name, {
                 "hours": Decimal("0"), "pay": Decimal("0"), "client_id": l.client_id,
-                "rate": l.va_rate, "pay_type": "hourly", "currency": currency_code(va.currency),
+                "rate": rate, "pay_type": "hourly", "currency": currency_code(va.currency),
                 "calculated_pay": None, "skipped": False, "adjusted": False, "note": None,
             })
             b["hours"] += l.hours
-            b["pay"] += l.va_pay
-            if l.va_rate is not None:
-                b["rate"] = l.va_rate
+            b["pay"] += pay
+            b["rate"] = rate
             daily_map[l.work_date] = daily_map.get(l.work_date, Decimal("0")) + l.hours
         for line in package_lines:
             b = by_client.setdefault(line["name"], {
@@ -299,7 +311,8 @@ def calculate_payroll(
             prev_dues[cid] = effective
         prev_log_pay: dict = {}
         for entry in va_prev:
-            prev_log_pay[entry.client_id] = prev_log_pay.get(entry.client_id, Decimal("0")) + entry.va_pay
+            _rate, pay = pay_from_approved_rate(entry, rate_amounts)
+            prev_log_pay[entry.client_id] = prev_log_pay.get(entry.client_id, Decimal("0")) + pay
         prev_pay = combine_period_pay(prev_dues, prev_log_pay)
         full_name = (
             (va.user.display_name.strip() if va.user and va.user.display_name else "")
@@ -439,7 +452,7 @@ def list_runs(
     ]
 
 
-def _review_entry(log: WorkLog, include_money: bool = False) -> dict:
+def _review_entry(log: WorkLog, include_money: bool = False, amounts=None) -> dict:
     """One log, fully spelled out for the approval screen. Money keys are omitted for Project Managers."""
     project = log.project
     project_client = project.client.name if project is not None and getattr(project, "client", None) is not None else None
@@ -458,14 +471,19 @@ def _review_entry(log: WorkLog, include_money: bool = False) -> dict:
         "hours": str(log.hours),
         "source": log.source or "manual",
         "status": log.status.value if hasattr(log.status, "value") else str(log.status),
+        "review_reason": getattr(log, "review_reason", None),
         "attachments": [
             WorkLogAttachmentResponse.model_validate(a).model_dump(mode="json")
             for a in (log.attachments or [])
         ],
     }
     if include_money:
-        entry["va_rate"] = str(log.va_rate)
-        entry["va_pay"] = str(log.va_pay)
+        if amounts is None:
+            rate, pay = log.va_rate, log.va_pay
+        else:
+            rate, pay = pay_from_approved_rate(log, amounts)
+        entry["va_rate"] = str(rate)
+        entry["va_pay"] = str(pay)
     return entry
 
 
@@ -548,6 +566,7 @@ def timesheet_entries(
         (row.va.user.display_name.strip() if row.va and row.va.user and row.va.user.display_name else "")
         or (row.va.name if row.va else None)
     )
+    amounts = None if redact else approved_rate_amounts(db, [row.va_id])
     return {
         "timesheet": TimesheetSubmissionResponse(
             id=row.id,
@@ -564,7 +583,7 @@ def timesheet_entries(
             total_hours=sum((l.hours for l in logs), Decimal("0")),
         ),
         "entries": [
-            _review_entry(l, include_money=not redact)
+            _review_entry(l, include_money=not redact, amounts=amounts)
             for l in logs
         ],
         **({"package_pay": package_pay} if package_pay else {}),

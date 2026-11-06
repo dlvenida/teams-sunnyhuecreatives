@@ -63,6 +63,7 @@ from app.services.va_rates import (
     package_period_amounts,
     pay_from_approved_rate,
     resolved_frequency,
+    MISSING_RATE_NOTE,
 )
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
@@ -239,8 +240,10 @@ def calculate_payroll(
             PayrollEntry(
                 id=e.id, work_date=e.work_date, client_name=e.client.name, description=e.description_plain,
                 hours=e.hours,
-                rate=None if redact else resolved[e.id][0],
-                pay=None if redact else resolved[e.id][1],
+                rate=None if redact or resolved[e.id][0] is None else resolved[e.id][0],
+                pay=None if redact or resolved[e.id][0] is None else resolved[e.id][1],
+                rate_missing=True if (not redact and resolved[e.id][0] is None) else None,
+                rate_note=MISSING_RATE_NOTE if (not redact and resolved[e.id][0] is None) else None,
                 project_name=e.project.name if e.project else None,
                 task_title=e.task.title if e.task else None,
                 task_name=log_task_name(e),
@@ -262,10 +265,15 @@ def calculate_payroll(
                 "hours": Decimal("0"), "pay": Decimal("0"), "client_id": l.client_id,
                 "rate": rate, "pay_type": "hourly", "currency": currency_code(va.currency),
                 "calculated_pay": None, "skipped": False, "adjusted": False, "note": None,
+                "rate_missing": False,
             })
             b["hours"] += l.hours
-            b["pay"] += pay
-            b["rate"] = rate
+            if rate is None:
+                b["rate_missing"] = True
+                b["rate"] = None
+            else:
+                b["pay"] += pay
+                b["rate"] = rate
             daily_map[l.work_date] = daily_map.get(l.work_date, Decimal("0")) + l.hours
         for line in package_lines:
             b = by_client.setdefault(line["name"], {
@@ -284,6 +292,7 @@ def calculate_payroll(
             b["adjusted"] = line["adjusted"]
             b["note"] = line["note"]
             b["currency"] = line["currency"]
+            b["rate_missing"] = False
         daily = []
         d = period_start
         while d <= period_end:
@@ -323,8 +332,8 @@ def calculate_payroll(
                 PayrollBreakdown(
                     label=k,
                     hours=v["hours"],
-                    pay=None if redact else v["pay"],
-                    rate=None if redact else v.get("rate"),
+                    pay=None if redact or v.get("rate_missing") else v["pay"],
+                    rate=None if redact or v.get("rate_missing") else v.get("rate"),
                     pay_type=None if redact else v.get("pay_type"),
                     client_id=None if redact else v.get("client_id"),
                     calculated_pay=None if redact else v.get("calculated_pay"),
@@ -333,6 +342,8 @@ def calculate_payroll(
                     skipped=None if redact else (v.get("skipped") if v.get("pay_type") == "package" else None),
                     adjusted=None if redact else (v.get("adjusted") if v.get("pay_type") == "package" else None),
                     note=None if redact else v.get("note"),
+                    rate_missing=True if (not redact and v.get("rate_missing")) else None,
+                    rate_note=MISSING_RATE_NOTE if (not redact and v.get("rate_missing")) else None,
                     currency=None if redact else v.get("currency"),
                 )
                 for k, v in by_client.items()

@@ -230,7 +230,7 @@ export function LogsPage() {
                       <span className={cn("ml-1.5 inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase", log.source === "clock" ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-600")}>{log.source === "clock" ? <><Clock3 className="h-2.5 w-2.5" /> Clock</> : <><Hand className="h-2.5 w-2.5" /> Manual</>}</span>
                     </td>
                     <td className="whitespace-nowrap p-3 text-xs font-extrabold">{formatHoursMinutes(log.hours)}</td>
-                    {showPricing && <td className="whitespace-nowrap p-3 text-xs">{formatCurrency(log.va_pay)}</td>}
+                    {showPricing && <td className="whitespace-nowrap p-3 text-xs">{log.rate_missing ? <span className="font-medium text-amber-900">Not set</span> : formatCurrency(log.va_pay)}</td>}
                     <td className="p-3">
                       {log.status === "submitted" && log.review_reason ? (
                         <span className="whitespace-nowrap rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">Needs review</span>

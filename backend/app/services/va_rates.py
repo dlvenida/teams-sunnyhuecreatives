@@ -12,6 +12,7 @@ from app.services.calculations import calculate_pay
 
 
 def _fallback_rate(db: Session) -> Decimal:
+    """Company setting only. VA pay must not use this when a My Rate is missing."""
     row = db.query(SystemSetting).filter(SystemSetting.key == "company").first()
     if row and row.value and row.value.get("default_va_hourly_rate"):
         try:
@@ -31,17 +32,30 @@ def get_approved_rate(db: Session, va_id: UUID, client_id: UUID) -> VARate | Non
     )
 
 
-def resolve_log_pay(db: Session, va_id: UUID, client_id: UUID, hours: Decimal) -> tuple[Decimal, Decimal, PayType | None]:
-    """Return (va_rate, va_pay, pay_type). Package logs store rate amount but va_pay=0 (flat applied in payroll).
+MISSING_RATE_NOTE = "No approved rate yet. Set it in My Rates."
+RATE_REQUIRED_MESSAGE = (
+    "You need an approved rate for this client before you can log time. "
+    "Set it in My Rates and wait until it is approved."
+)
 
-    The company default (often $75) is only a snapshot for a log saved before this VA
-    has an approved rate. It is not the client's billable rate. Pay views re-read the
-    approved rate through pay_from_approved_rate so a later approval replaces that snapshot.
+
+def require_approved_rate(db: Session, va_id: UUID, client_id: UUID) -> VARate:
+    """Hourly or package. A company default or a client billable rate is not enough."""
+    rate = get_approved_rate(db, va_id, client_id)
+    if rate is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=RATE_REQUIRED_MESSAGE)
+    return rate
+
+
+def resolve_log_pay(db: Session, va_id: UUID, client_id: UUID, hours: Decimal) -> tuple[Decimal, Decimal, PayType | None]:
+    """Return (va_rate, va_pay, pay_type). Package logs store the package amount and va_pay=0.
+
+    There is no company default and no client billable rate. A log without an approved
+    My Rate stores zero and pay views say the rate is missing.
     """
     rate = get_approved_rate(db, va_id, client_id)
     if not rate:
-        fallback = _fallback_rate(db)
-        return fallback, calculate_pay(hours, fallback), None
+        return Decimal("0.00"), Decimal("0.00"), None
     if rate.pay_type == PayType.package:
         return rate.amount, Decimal("0.00"), PayType.package
     return rate.amount, calculate_pay(hours, rate.amount), PayType.hourly
@@ -68,18 +82,16 @@ def approved_rate_amounts(db: Session, va_ids) -> dict[tuple[UUID, UUID], tuple[
     return chosen
 
 
-def pay_from_approved_rate(log, amounts: dict[tuple[UUID, UUID], tuple[str, Decimal]]) -> tuple[Decimal, Decimal]:
+def pay_from_approved_rate(log, amounts: dict[tuple[UUID, UUID], tuple[str, Decimal]]) -> tuple[Decimal | None, Decimal]:
     """Rate and pay for one log, from that VA's approved rate for that client.
 
-    Hourly: hours times the approved amount, not the number frozen on the log and not
-    the client's billable rate. Package: the log line does not add hourly pay. The
-    period package is applied separately. No approved rate: keep the stored snapshot.
+    Hourly: hours times the approved amount. Any number saved on the log is ignored,
+    whether it is $75, an older rate, or the client's billable rate. Package: the log
+    line does not add hourly pay. No approved rate: no rate and no pay.
     """
-    stored_rate = Decimal(log.va_rate or 0)
-    stored_pay = Decimal(log.va_pay or 0)
     found = amounts.get((log.va_id, log.client_id))
     if found is None:
-        return stored_rate, stored_pay
+        return None, Decimal("0.00")
     kind, amount = found
     if kind == PayType.package.value:
         return amount, Decimal("0.00")

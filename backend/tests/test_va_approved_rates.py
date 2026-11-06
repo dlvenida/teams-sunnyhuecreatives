@@ -60,11 +60,12 @@ class RateMathTests(unittest.TestCase):
         log = SimpleNamespace(va_id=va_id, client_id=client_id, hours=Decimal("9.00"), va_rate=Decimal("75.00"), va_pay=Decimal("675.00"))
         amounts = {(va_id, client_id): ("hourly", Decimal("4.50"))}
         self.assertEqual(pay_from_approved_rate(log, amounts), (Decimal("4.50"), Decimal("40.50")))
-        # Another VA's rate for the same client is not this VA's rate.
+        # Another VA's rate, or any amount saved on the log, is not this VA's rate.
         self.assertEqual(
             pay_from_approved_rate(log, {(other_id, client_id): ("hourly", Decimal("120.00"))}),
-            (Decimal("75.00"), Decimal("675.00")),
+            (None, Decimal("0.00")),
         )
+        self.assertEqual(pay_from_approved_rate(log, {}), (None, Decimal("0.00")))
 
     def test_one_hour_at_3_30_is_not_75(self):
         va_id, client_id = uuid.uuid4(), uuid.uuid4()
@@ -299,6 +300,114 @@ class WeeklyTimesheetRateTests(unittest.TestCase):
                 self.assertIsNone(row.rate)
                 self.assertIsNone(row.pay)
                 self.assertIsNone(row.currency)
+                self.assertIsNone(row.rate_note)
+
+    def test_every_saved_amount_is_replaced_by_that_vas_rate_or_withheld(self):
+        """$75, an old rate, and a client billable rate are not pay. Another VA's rate is not either."""
+        experts = self._client("Experts in Wellness")
+        old = self._client("Old Frozen Rate")
+        billable = self._client("Client Billable")
+        self._rate(self.mara, experts, PayType.hourly, Currency.PHP, Decimal("8.00"))
+        self._hours(self.ivory, experts, Decimal("3.00"), Decimal("75.00"), Decimal("225.00"))
+        self._hours(self.mara, experts, Decimal("3.00"), Decimal("75.00"), Decimal("225.00"))
+        self._hours(self.ivory, old, Decimal("2.00"), Decimal("40.00"), Decimal("80.00"))
+        self._hours(self.ivory, billable, Decimal("4.00"), Decimal("10.00"), Decimal("40.00"))
+        self._hours(self.ivory, self.morgan, Decimal("1.00"), Decimal("12.00"), Decimal("12.00"))
+        self.db.commit()
+
+        body = self._earnings(self.ivory_user, self.ivory)
+        for label in ("Experts in Wellness", "Old Frozen Rate", "Client Billable"):
+            row = self._entry(body, label)
+            self.assertTrue(row["rate_missing"], label)
+            self.assertIsNone(row["rate"], label)
+            self.assertIsNone(row["pay"], label)
+            self.assertIn("No approved rate yet", row["rate_note"])
+            summary = self._by_name(body, label)
+            self.assertTrue(summary["rate_missing"])
+            self.assertIsNone(summary["earned"])
+        morgan = [row for row in body["entries"] if "Morgan King" in row["client_name"]]
+        self.assertEqual(sorted(Decimal(row["pay"]) for row in morgan), [Decimal("4.50"), Decimal("40.50")])
+        self.assertTrue(all(Decimal(row["rate"]) == Decimal("4.50") for row in morgan))
+        # 9h and the extra 1h at $4.50, plus Ever After $3.30 and Lauren $11.00.
+        self.assertEqual(Decimal(body["range"]["earned"]), Decimal("59.30"))
+        blob = str(body)
+        for leftover in ("225.00", "75.00", "80.00", "12.00", "8.00"):
+            self.assertNotIn(leftover, blob, leftover)
+
+        mara = self._earnings(self.mara_user, self.mara)
+        own = self._entry(mara, "Experts in Wellness")
+        self.assertFalse(own.get("rate_missing"))
+        self.assertEqual(Decimal(own["rate"]), Decimal("8.00"))
+        self.assertEqual(Decimal(own["pay"]), Decimal("24.00"))
+
+    def test_a_va_cannot_log_time_or_finish_a_clock_log_without_her_rate(self):
+        from fastapi import HTTPException
+
+        from app.models import ClockStatus, TimeClockEntry
+        from app.routers.timeclock import clock_in, clock_out
+        from app.routers.va_portal import submit_work_log
+        from app.schemas import ClockInRequest, ClockOutRequest, WorkLogCreate
+        from app.services.va_rates import RATE_REQUIRED_MESSAGE
+
+        experts = self._client("Experts in Wellness")
+        self.db.add(ClientVARole(client_id=experts.id, va_id=self.ivory.id, role="General VA"))
+        self.db.add(ClientVARole(client_id=experts.id, va_id=self.angeline.id, role="General VA"))
+        self.db.commit()
+        current = CurrentUser(user=self.ivory_user, va_id=self.ivory.id)
+        with self.assertRaises(HTTPException) as blocked:
+            submit_work_log(WorkLogCreate(
+                work_date=DAY,
+                client_id=experts.id,
+                task_name="Newsletter, Carousel and Blog Scheduling for the Week",
+                description_plain="Newsletter draft",
+                entry_mode="duration",
+                duration_hours=3,
+                duration_minutes=0,
+            ), current, self.db)
+        self.assertEqual(blocked.exception.status_code, 400)
+        self.assertEqual(blocked.exception.detail, RATE_REQUIRED_MESSAGE)
+        self.assertNotIn("75", blocked.exception.detail)
+        self.assertEqual(self.db.query(WorkLog).filter(WorkLog.client_id == experts.id, WorkLog.va_id == self.ivory.id).count(), 0)
+
+        open_rows = self.db.query(TimeClockEntry).filter(
+            TimeClockEntry.va_id == self.ivory.id,
+            TimeClockEntry.status.in_([ClockStatus.running, ClockStatus.paused]),
+        ).all()
+        for row in open_rows:
+            row.status = "completed"
+            row.clock_out = row.clock_out or datetime.now(timezone.utc)
+        self.db.commit()
+        started = clock_in(ClockInRequest(client_id=experts.id), current, self.db)
+        self.assertEqual(str(started.status.value if hasattr(started.status, "value") else started.status), "running")
+        with self.assertRaises(HTTPException) as clock_blocked:
+            clock_out(ClockOutRequest(
+                create_work_log=True,
+                client_id=experts.id,
+                task_name="Newsletter",
+                description="Drafted the newsletter",
+            ), current, self.db)
+        self.assertEqual(clock_blocked.exception.detail, RATE_REQUIRED_MESSAGE)
+        still = self.db.query(TimeClockEntry).filter(TimeClockEntry.id == started.id).one()
+        self.assertNotEqual(str(still.status.value if hasattr(still.status, "value") else still.status), "completed")
+        self.assertEqual(self.db.query(WorkLog).filter(WorkLog.va_id == self.ivory.id, WorkLog.client_id == experts.id).count(), 0)
+        finished = clock_out(ClockOutRequest(create_work_log=False, client_id=experts.id), current, self.db)
+        self.assertIsNone(finished.work_log_id)
+
+        self._rate(self.angeline, experts, PayType.package, Currency.PHP, Decimal("8400.00"), "biweekly")
+        self.db.commit()
+        package_log = submit_work_log(WorkLogCreate(
+            work_date=DAY,
+            client_id=experts.id,
+            task_name="Package work",
+            description_plain="Covered by the package",
+            entry_mode="duration",
+            duration_hours=2,
+            duration_minutes=0,
+        ), CurrentUser(user=self.angeline_user, va_id=self.angeline.id), self.db)
+        self.assertEqual(package_log.va_pay, Decimal("0.00"))
+        self.assertNotEqual(package_log.va_rate, Decimal("75.00"))
+        self.db.query(TimeClockEntry).filter(TimeClockEntry.id == started.id).delete()
+        self.db.commit()
 
 
 class DuplicateReviewTests(unittest.TestCase):
@@ -371,6 +480,14 @@ class DuplicateReviewTests(unittest.TestCase):
         self.db.flush()
         self.user_ids.append(self.admin.id)
         self.db.add(ClientVARole(client_id=self.client.id, va_id=self.va.id, role="General VA"))
+        self.db.add(VARate(
+            va_id=self.va.id,
+            client_id=self.client.id,
+            pay_type=PayType.hourly,
+            currency=Currency.PHP,
+            amount=Decimal("10.00"),
+            status=RateStatus.approved,
+        ))
         self.db.commit()
 
     def tearDown(self):

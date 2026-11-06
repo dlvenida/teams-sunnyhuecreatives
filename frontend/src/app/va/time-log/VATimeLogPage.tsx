@@ -441,7 +441,7 @@ export function VATimeLogPage() {
             )}
           </div>
           {error && <p className="text-[11px] text-red-600">{error}</p>}
-          <Button variant="gold" className="w-full" onClick={() => submit.mutate()} disabled={!form.client_id || !form.task_name.trim() || !descriptionPlain || !!timeError || submit.isPending}>
+          <Button variant="gold" className="w-full" onClick={() => submit.mutate()} disabled={!form.client_id || !approvedRate || !form.task_name.trim() || !descriptionPlain || !!timeError || submit.isPending} title={form.client_id && !approvedRate ? "You need an approved rate for this client before you can log time. Set it in My Rates and wait until it is approved." : undefined}>
             {submit.isPending ? "Submitting..." : "Submit Entry"}
           </Button>
         </CardContent>
@@ -487,7 +487,7 @@ export function VATimeLogPage() {
                     </td>
                     <td className="p-2 whitespace-nowrap">{log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "…"}` : isDurationEntry(log) ? formatEnteredDuration(log.hours) : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}<span className="block text-[10px] text-muted-foreground">{log.source === "clock" ? "clock" : isDurationEntry(log) ? "duration" : "manual"}</span></td>
                     <td className="p-2">{log.hours}</td>
-                    {showMoney && <><td className="p-2">{formatCurrency(log.va_rate)}</td><td className="p-2">{formatCurrency(log.va_pay)}</td></>}
+                    {showMoney && (log.rate_missing ? <><td className="p-2 font-medium text-amber-900">{log.rate_note || "No approved rate yet. Set it in My Rates."}</td><td className="p-2 font-medium text-amber-900">Not set</td></> : <><td className="p-2">{formatCurrency(log.va_rate)}</td><td className="p-2">{formatCurrency(log.va_pay)}</td></>)}
                     <td className="p-2">
                       {log.status === "submitted" && log.review_reason ? (
                         <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">Needs review</span>

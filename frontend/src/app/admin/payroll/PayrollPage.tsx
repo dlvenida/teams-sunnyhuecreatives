@@ -722,7 +722,10 @@ export function PayrollPage() {
                           onCommit={(next) => saveOverride(va, client.clientId!, next, client.originalAmount ?? client.amount)}
                         />
                       )}
-                      {showPricing && client.payType !== "package" && client.rate != null && (
+                      {showPricing && client.rateMissing && (
+                        <p className="text-[11px] font-medium text-amber-900">{client.rateNote || "No approved rate yet. Set it in My Rates."}</p>
+                      )}
+                      {showPricing && !client.rateMissing && client.payType !== "package" && client.rate != null && (
                         <p className="text-[11px] text-muted-foreground">
                           Rate {formatCurrency(client.rate, va.currency)}/hr
                         </p>
@@ -754,7 +757,7 @@ export function PayrollPage() {
                               {task.description && <span className="mt-0.5 block text-[11px] text-muted-foreground">{task.description}</span>}
                             </td>
                             <td className="p-2 font-bold">{task.hours.toFixed(2)}</td>
-                            {showPricing && <td className="p-2 font-semibold">{client.payType === "package" ? "" : formatCurrency(task.amount, va.currency)}</td>}
+                            {showPricing && <td className="p-2 font-semibold">{task.rateMissing ? <span className="font-medium text-amber-900">Not set</span> : client.payType === "package" ? "" : formatCurrency(task.amount, va.currency)}</td>}
                             <td className="p-2 text-right">
                               {entry && (
                                 <Button size="sm" variant="ghost" onClick={() => {
@@ -783,8 +786,8 @@ export function PayrollPage() {
                   {showPricing && (
                     <p className="px-3 py-2 text-right text-[11px] text-muted-foreground">
                       {client.name} subtotal · {client.hours.toFixed(2)} hrs
-                      {client.payType === "package" ? (client.skipped ? " · Skipped" : client.deduction ? ` · Deduction -${formatCurrency(client.deduction, va.currency)}` : client.adjusted ? " · Fixed Package, Adjusted" : " · Fixed Package") : client.rate != null ? ` × ${formatCurrency(client.rate, va.currency)}/hr` : ""}
-                      {" · "}{formatCurrency(client.amount, va.currency)}
+                      {client.rateMissing ? "" : client.payType === "package" ? (client.skipped ? " · Skipped" : client.deduction ? ` · Deduction -${formatCurrency(client.deduction, va.currency)}` : client.adjusted ? " · Fixed Package, Adjusted" : " · Fixed Package") : client.rate != null ? ` × ${formatCurrency(client.rate, va.currency)}/hr` : ""}
+                      {client.rateMissing ? "" : ` · ${formatCurrency(client.amount, va.currency)}`}
                     </p>
                   )}
                 </div>

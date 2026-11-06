@@ -21,15 +21,17 @@ interface EarningsResponse {
   this_month: { hours: string; earned: string; entries: number; currency: string }
   all_time: { hours: string; earned: string; entries: number; currency: string }
   range: { hours: string; earned: string; entries: number; currency: string } | null
-  by_client: { client_id: string; client_name: string; hours: string; earned: string; pay_type: string; currency: string; status: string }[]
+  by_client: { client_id: string; client_name: string; hours: string; earned: string | null; pay_type: string; currency: string; status: string; rate_missing?: boolean; rate_note?: string | null }[]
   entries: {
     id: string
     work_date: string
     client_name: string
     description: string
     hours: string
-    rate: string
-    pay: string
+    rate: string | null
+    pay: string | null
+    rate_missing?: boolean
+    rate_note?: string | null
     project_name?: string | null
     task_title?: string | null
     task_name?: string | null
@@ -115,13 +117,14 @@ function WeekedEntries({
       </div>
       {weeks.map((week) => {
         const hours = week.items.reduce((s, e) => s + Number(e.hours || 0), 0)
-        const pay = week.items.reduce((s, e) => s + Number(e.pay || 0), 0)
+        const pay = week.items.reduce((s, e) => s + (e.rate_missing ? 0 : Number(e.pay || 0)), 0)
+        const missingRate = week.items.some((e) => e.rate_missing)
         return (
           <Card key={week.id} id={week.id} className="scroll-mt-24">
             <CardHeader className="pb-2">
               <CardTitle className="flex flex-wrap items-baseline justify-between gap-2">
                 <span>{week.label}</span>
-                <span className="text-xs font-semibold text-muted-foreground">{hours.toFixed(2)} hrs · {formatCurrency(pay, currency)}</span>
+                <span className="text-xs font-semibold text-muted-foreground">{hours.toFixed(2)} hrs · {formatCurrency(pay, currency)}{missingRate ? " · some hours have no approved rate" : ""}</span>
               </CardTitle>
             </CardHeader>
             <CardContent className="overflow-x-auto p-0">
@@ -146,8 +149,8 @@ function WeekedEntries({
                         {e.description && <span className="mt-0.5 block text-[11px] text-muted-foreground">{e.description}</span>}
                       </td>
                       <td className="p-3 font-bold">{e.hours}</td>
-                      <td className="p-3">{formatCurrency(e.rate, currency)}</td>
-                      <td className="p-3 font-semibold">{formatCurrency(e.pay, currency)}</td>
+                      <td className="p-3">{e.rate_missing ? <span className="font-medium text-amber-900">{e.rate_note || "No approved rate yet. Set it in My Rates."}</span> : formatCurrency(e.rate, currency)}</td>
+                      <td className="p-3 font-semibold">{e.rate_missing ? <span className="font-medium text-amber-900">Not set</span> : formatCurrency(e.pay, currency)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -208,7 +211,7 @@ export function VAPayrollPage() {
   const grand = useMemo(() => {
     const rows = earnings?.by_client ?? []
     const currency = earnings?.currency || ""
-    const same = rows.filter((row) => (row.currency || currency) === currency)
+    const same = rows.filter((row) => !row.rate_missing && (row.currency || currency) === currency)
     const earned = same.reduce((sum, row) => sum + Number(row.earned || 0), 0)
     const hours = rows.reduce((sum, row) => sum + Number(row.hours || 0), 0)
     return { earned, hours, currency, show: rows.length > 0 }
@@ -220,7 +223,7 @@ export function VAPayrollPage() {
       { id: "range", currency: earnings.range?.currency || profile, amount: earnings.range?.earned ?? 0 },
       { id: "week", currency: earnings.this_week.currency || profile, amount: earnings.this_week.earned },
       { id: "month", currency: earnings.this_month.currency || profile, amount: earnings.this_month.earned },
-      ...earnings.by_client.map((row) => ({ id: `client-${row.client_id}`, currency: row.currency || profile, amount: row.earned })),
+      ...earnings.by_client.filter((row) => !row.rate_missing).map((row) => ({ id: `client-${row.client_id}`, currency: row.currency || profile, amount: row.earned })),
       { id: "grand", currency: grand.currency, amount: grand.earned },
     ]
   }, [earnings, grand])
@@ -545,8 +548,14 @@ export function VAPayrollPage() {
                         <td className="p-3">{r.pay_type === "package" ? "Fixed Package" : "Hourly"}</td>
                         <td className="p-3">{r.hours}</td>
                         <td className="p-3 font-semibold">
-                          {formatCurrency(r.earned, r.currency)}
-                          {pesoText(`client-${r.client_id}`) && <span className="mt-0.5 block text-[10px] font-medium text-muted-foreground">{pesoText(`client-${r.client_id}`)}</span>}
+                          {r.rate_missing ? (
+                            <span className="font-medium text-amber-900">{r.rate_note || "No approved rate yet. Set it in My Rates."}</span>
+                          ) : (
+                            <>
+                              {formatCurrency(r.earned, r.currency)}
+                              {pesoText(`client-${r.client_id}`) && <span className="mt-0.5 block text-[10px] font-medium text-muted-foreground">{pesoText(`client-${r.client_id}`)}</span>}
+                            </>
+                          )}
                         </td>
                         <td className="p-3">{r.status}</td>
                       </tr>

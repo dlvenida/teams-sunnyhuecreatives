@@ -36,7 +36,9 @@ from app.services.va_rates import (
     package_flats_for_period,
     package_period_amounts,
     pay_from_approved_rate,
+    require_approved_rate,
     resolve_log_pay,
+    MISSING_RATE_NOTE,
 )
 from app.services.work_log_entry import apply_work_log_timing, resolve_timing
 from app.services.va_scope import ensure_va_scope, is_va, load_va_scope
@@ -48,7 +50,12 @@ BILLABLE = [WorkLogStatus.approved, WorkLogStatus.invoiced]
 
 
 def _serialize_log(log: WorkLog, amounts=None) -> WorkLogResponse:
-    rate, pay = (log.va_rate, log.va_pay) if amounts is None else pay_from_approved_rate(log, amounts)
+    if amounts is None:
+        rate, pay = log.va_rate, log.va_pay
+        missing = False
+    else:
+        rate, pay = pay_from_approved_rate(log, amounts)
+        missing = rate is None
     return WorkLogResponse(
         id=log.id,
         work_date=log.work_date,
@@ -64,8 +71,10 @@ def _serialize_log(log: WorkLog, amounts=None) -> WorkLogResponse:
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
-        va_rate=rate,
-        va_pay=pay,
+        va_rate=None if missing else rate,
+        va_pay=None if missing else pay,
+        rate_missing=True if missing else None,
+        rate_note=MISSING_RATE_NOTE if missing else None,
         notes=log.notes,
         review_reason=getattr(log, "review_reason", None),
         status=log.status,
@@ -438,9 +447,12 @@ def my_earnings(
             key,
             {"client_id": key, "client_name": l.client.name if l.client else "Client", "hours": Decimal("0"), "earned": Decimal("0"), "pay_type": "hourly", "currency": currency, "status": "Approved"},
         )
-        _rate, pay = _line_pay(l)
+        rate, pay = _line_pay(l)
         row["hours"] += l.hours
-        row["earned"] += pay
+        if rate is None:
+            row["rate_missing"] = True
+        else:
+            row["earned"] += pay
     if range_start is None or range_end is None:
         range_dates: dict = {}
         for log in range_logs:
@@ -451,6 +463,7 @@ def my_earnings(
             if key in by_client_map:
                 by_client_map[key]["earned"] = flat
                 by_client_map[key]["pay_type"] = "package"
+                by_client_map[key]["rate_missing"] = False
                 rate = get_approved_rate(db, current.va_id, cid)
                 if rate:
                     by_client_map[key]["currency"] = rate.currency.value
@@ -473,15 +486,23 @@ def my_earnings(
             row["earned"] = effective
             row["pay_type"] = "package"
             row["currency"] = rate_currency
+            row["rate_missing"] = False
 
-    by_client = [
-        {**r, "hours": str(r["hours"]), "earned": str(r["earned"])}
-        for r in sorted(by_client_map.values(), key=lambda x: x["client_name"].lower())
-    ]
+    by_client = []
+    for r in sorted(by_client_map.values(), key=lambda x: x["client_name"].lower()):
+        missing = bool(r.get("rate_missing")) and r.get("pay_type") != "package"
+        by_client.append({
+            **r,
+            "hours": str(r["hours"]),
+            "earned": None if missing else str(r["earned"]),
+            "rate_missing": missing,
+            "rate_note": MISSING_RATE_NOTE if missing else None,
+        })
 
     entries = []
     for l in sorted(range_logs, key=lambda x: (x.work_date, x.start_time or time.min)):
         rate, pay = _line_pay(l)
+        missing = rate is None
         entries.append(
         {
             "id": str(l.id),
@@ -489,8 +510,10 @@ def my_earnings(
             "client_name": l.client.name if l.client else "Client",
             "description": l.description_plain or "",
             "hours": str(l.hours),
-            "rate": str(rate),
-            "pay": str(pay),
+            "rate": None if missing else str(rate),
+            "pay": None if missing else str(pay),
+            "rate_missing": missing,
+            "rate_note": MISSING_RATE_NOTE if missing else None,
             "project_name": l.project.name if getattr(l, "project", None) else None,
             "task_title": l.task.title if getattr(l, "task", None) else None,
             "task_name": (l.task_name or "").strip() or (l.task.title if getattr(l, "task", None) else None),
@@ -674,6 +697,7 @@ def submit_work_log(
         )
     if is_va(current):
         ensure_va_scope(db, current.va_id, body.client_id, body.project_id)
+    require_approved_rate(db, current.va_id, body.client_id)
     rate, pay, _ = resolve_log_pay(db, current.va_id, body.client_id, hours)
     payable_on = resolve_payable_on(db, current.va_id, body.work_date)
     task_name = (body.task_name or "").strip() or None

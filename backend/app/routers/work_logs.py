@@ -17,7 +17,7 @@ from app.schemas import WorkLogAttachmentResponse, WorkLogResponse, WorkLogUpdat
 from app.services import storage
 from app.services.log_display import log_task_name
 from app.services.calculations import calculate_pay
-from app.services.va_rates import approved_rate_amounts, pay_from_approved_rate
+from app.services.va_rates import MISSING_RATE_NOTE, approved_rate_amounts, pay_from_approved_rate
 from app.services.work_log_entry import apply_work_log_timing
 from app.services.images import ALLOWED_CONTENT_TYPES, optimize_image
 from app.services.notifications import push, va_user_id
@@ -39,8 +39,10 @@ def _va_full_name(va: VA | None) -> str | None:
 def _serialize_log(log: WorkLog, redact_money: bool = False, amounts=None) -> WorkLogResponse:
     if redact_money or amounts is None:
         rate, pay = log.va_rate, log.va_pay
+        missing = False
     else:
         rate, pay = pay_from_approved_rate(log, amounts)
+        missing = rate is None
     return WorkLogResponse(
         id=log.id,
         work_date=log.work_date,
@@ -56,8 +58,10 @@ def _serialize_log(log: WorkLog, redact_money: bool = False, amounts=None) -> Wo
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
-        va_rate=None if redact_money else rate,
-        va_pay=None if redact_money else pay,
+        va_rate=None if redact_money or missing else rate,
+        va_pay=None if redact_money or missing else pay,
+        rate_missing=True if missing else None,
+        rate_note=MISSING_RATE_NOTE if missing else None,
         notes=log.notes,
         review_reason=getattr(log, "review_reason", None),
         status=log.status,

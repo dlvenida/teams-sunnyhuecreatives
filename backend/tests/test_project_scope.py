@@ -90,6 +90,11 @@ class DatabaseScopeTests(unittest.TestCase):
             db.add_all([project, outsider])
             db.flush()
             db.add(ClientVARole(client_id=mine.id, va_id=va.id, role="General VA"))
+            from app.models import Currency, PayType, RateStatus, VARate
+            db.add(VARate(
+                va_id=va.id, client_id=mine.id, pay_type=PayType.hourly, currency=Currency.USD,
+                amount=Decimal("5.50"), status=RateStatus.approved,
+            ))
             db.commit()
             va_current = CurrentUser(user=va_user, va_id=va.id)
             admin_current = CurrentUser(user=admin, va_id=None)
@@ -146,6 +151,7 @@ class DatabaseScopeTests(unittest.TestCase):
             db.query(WorkLog).filter(WorkLog.id == ok.id).delete()
             db.query(Task).filter(Task.id == task.id).delete()
             db.query(Project).filter(Project.id == created.id).delete()
+            db.query(VARate).filter(VARate.client_id == mine.id).delete()
             db.query(ClientVARole).filter(ClientVARole.client_id == mine.id, ClientVARole.va_id == va.id).delete()
             db.query(Project).filter(Project.id.in_([project.id, outsider.id])).delete(synchronize_session=False)
             db.query(Client).filter(Client.id.in_([mine.id, other.id])).delete(synchronize_session=False)

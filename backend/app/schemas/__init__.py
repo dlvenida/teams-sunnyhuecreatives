@@ -883,6 +883,8 @@ class WorkLogResponse(BaseModel):
     hours: Decimal
     va_rate: Decimal | None = None
     va_pay: Decimal | None = None
+    rate_missing: bool | None = None
+    rate_note: str | None = None
     notes: str | None
     review_reason: str | None = None
     status: WorkLogStatus
@@ -1073,6 +1075,8 @@ class PayrollEntry(BaseModel):
     # Omitted entirely for the project manager (auditor) — never send 0 as a stand-in for hidden pay.
     rate: Decimal | None = None
     pay: Decimal | None = None
+    rate_missing: bool | None = None
+    rate_note: str | None = None
     project_name: str | None = None
     task_title: str | None = None
     task_name: str | None = None
@@ -1097,6 +1101,8 @@ class PayrollBreakdown(BaseModel):
     skipped: bool | None = None
     adjusted: bool | None = None
     note: str | None = None
+    rate_missing: bool | None = None
+    rate_note: str | None = None
     # Rate currency for this client. PHP shows ₱. Omitted when pay is hidden.
     currency: str | None = None
 

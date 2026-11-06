@@ -3,7 +3,7 @@ import io
 import inspect
 import unittest
 import uuid
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
@@ -24,6 +24,7 @@ from app.services.engagement_rules import (
     platform_from_title,
     rejection_reason,
     review_log_order,
+    review_reasons,
     summarize,
 )
 from app.services.engagement_service import add_screenshot_bytes
@@ -348,12 +349,20 @@ class StatusTests(unittest.TestCase):
         met = summary_for(20, 10)
         self.assertEqual(short["status"], "needs_review")
         self.assertEqual(short["categories"][0]["verified"], 15)
-        self.assertTrue(any(alert["code"] == "BELOW_TARGET" for alert in short["alerts"]))
+        self.assertEqual(
+            next(alert["explanation"] for alert in short["alerts"] if alert["code"] == "BELOW_TARGET"),
+            "Lacking DMs. Instagram DMs 15 of 20.",
+        )
         review_log = [row for row in (short, met) if row["status"] == "needs_review"]
         self.assertEqual(len(review_log), 1)
         self.assertEqual(review_log[0]["categories"][0]["verified"], 15)
+        self.assertEqual(
+            review_reasons({"platform": "instagram", **short}),
+            ["Lacking DMs. Instagram DMs 15 of 20."],
+        )
         self.assertEqual(met["status"], "target_met")
         self.assertFalse(any(alert["code"] == "BELOW_TARGET" for alert in met["alerts"]))
+        self.assertEqual(review_reasons({"platform": "instagram", **met}), [])
 
     def test_review_log_lists_the_newest_first(self):
         items = [
@@ -385,6 +394,98 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(ordered[0]["task_id"], "chef")
         self.assertIn("chef", [row["task_id"] for row in ordered])
         self.assertTrue(all(row.get("rejection_reasons") and row["rejection_reasons"][0].strip() for row in ordered))
+
+    def test_review_reasons_name_what_is_lacking_and_keep_reject_notes(self):
+        both = review_reasons({
+            "platform": "instagram",
+            "status": "needs_review",
+            "categories": [
+                {"key": "dm", "label": "Direct Messages", "verified": 0, "min": 20},
+                {"key": "comment", "label": "Comments", "verified": 0, "min": 10},
+            ],
+        })
+        self.assertEqual(both, ["Lacking DMs and comments. Instagram DMs 0 of 20. Instagram comments 0 of 10."])
+
+        comments = review_reasons({
+            "platform": "instagram",
+            "status": "needs_review",
+            "categories": [
+                {"key": "dm", "verified": 25, "min": 20},
+                {"key": "comment", "verified": 0, "min": 10},
+            ],
+        })
+        self.assertEqual(comments, ["Lacking comments. Instagram comments 0 of 10."])
+        self.assertNotIn("DMs", comments[0])
+
+        shares = review_reasons({
+            "platform": "facebook",
+            "status": "needs_review",
+            "categories": [{"key": "share", "label": "Group shares", "verified": 8, "min": 25}],
+        })
+        self.assertEqual(shares, ["Lacking shares. Facebook shares 8 of 25."])
+
+        linkedin = review_reasons({
+            "platform": "linkedin",
+            "status": "needs_review",
+            "categories": [{"key": "comment", "verified": 0, "min": 20}],
+        })
+        self.assertEqual(linkedin, ["Lacking comments. LinkedIn comments 0 of 20."])
+
+        exceeded = review_reasons({
+            "platform": "instagram",
+            "status": "target_exceeded",
+            "categories": [
+                {"key": "dm", "verified": 30, "min": 20},
+                {"key": "comment", "verified": 16, "min": 10},
+            ],
+        })
+        self.assertEqual(exceeded, [])
+
+        rejected = review_reasons({
+            "platform": "instagram",
+            "status": "target_met",
+            "approval": "Sent back",
+            "rejection_note": "Account mismatch for Chef Stephanie Tranchina",
+            "categories": [
+                {"key": "dm", "verified": 22, "min": 20},
+                {"key": "comment", "verified": 12, "min": 10},
+            ],
+            "rejection_reasons": ["Account mismatch for Chef Stephanie Tranchina"],
+        })
+        self.assertEqual(rejected, ["Rejected: Account mismatch for Chef Stephanie Tranchina"])
+
+        sent_back_short = review_reasons({
+            "platform": "linkedin",
+            "status": "needs_review",
+            "approval": "Sent back",
+            "rejection_note": "Wrong account on the screenshot",
+            "categories": [{"key": "comment", "verified": 0, "min": 20}],
+        })
+        self.assertEqual(sent_back_short[0], "Lacking comments. LinkedIn comments 0 of 20.")
+        self.assertIn("Rejected: Wrong account on the screenshot", sent_back_short)
+
+        unclear = review_reasons({
+            "platform": "instagram",
+            "status": "needs_review",
+            "categories": [
+                {"key": "dm", "verified": 20, "min": 20},
+                {"key": "comment", "verified": 10, "min": 10},
+            ],
+            "alerts": [{
+                "code": "UNCLEAR_SCREENSHOT",
+                "explanation": "This screenshot could not be read. Nothing on it was counted.",
+            }],
+        })
+        self.assertEqual(unclear, ["This screenshot could not be read. Nothing on it was counted."])
+
+        stored_only = review_reasons({
+            "status": "needs_review",
+            "categories": [],
+            "rejection_reasons": ["Direct Messages are below the minimum of 20. 15 verified."],
+        })
+        self.assertEqual(stored_only, ["Direct Messages are below the minimum of 20. 15 verified."])
+
+        self.assertEqual(review_reasons({"status": "needs_review", "categories": [], "alerts": [], "activities": []}), ["Needs review."])
 
     def test_summarize_does_not_accept_a_typed_total(self):
         self.assertNotIn("verified_total", inspect.signature(summarize).parameters)
@@ -563,6 +664,64 @@ class AccessAndAuditTests(unittest.TestCase):
         self.assertFalse(gem.engagement_verification)
         pm_toggle = self.client.patch(f"/engagement/vas/{gem.id}", headers=_auth(self.pm_user), json={"enabled": True})
         self.assertEqual(pm_toggle.status_code, 403)
+
+    def test_admin_and_project_manager_see_why_each_review_item_is_waiting(self):
+        yesterday = date.today() - timedelta(days=1)
+        _admin, _ = self._person("Review Admin", UserRole.admin, flag=False)
+        gem_user, gem = self._person("Gem Santos", UserRole.va, flag=False)
+        short = Task(
+            title="Instagram Community Management",
+            client_id=self.client_row.id,
+            assignee_va_id=gem.id,
+            status=TaskStatus.todo,
+            due_date=yesterday,
+        )
+        rejected_task = Task(
+            title="LinkedIn Community Management",
+            client_id=self.client_row.id,
+            assignee_va_id=self.arby.id,
+            status=TaskStatus.todo,
+            due_date=yesterday,
+        )
+        self.db.add_all([short, rejected_task])
+        self.db.flush()
+        self.db.add(EngagementVerification(
+            task_id=rejected_task.id,
+            va_id=self.arby.id,
+            client_id=self.client_row.id,
+            platform="linkedin",
+            work_date=yesterday,
+            rejected_at=datetime.now(timezone.utc),
+            rejected_by=self.pm_user.id,
+            rejection_note="Wrong account on the screenshot",
+        ))
+        self.db.commit()
+        admin = self.db.query(User).filter(User.display_name == "Review Admin").one()
+        for user in (admin, self.pm_user):
+            response = self.client.get(
+                f"/engagement/tasks?work_date={yesterday.isoformat()}",
+                headers=_auth(user),
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            tasks = response.json()["tasks"]
+            by_id = {row["task_id"]: row for row in tasks}
+            gem_row = by_id[str(short.id)]
+            self.assertEqual(gem_row["assignee_name"], "Gem Santos")
+            self.assertEqual(gem_row["status"], "needs_review")
+            self.assertEqual(
+                gem_row["review_reasons"][0],
+                "Lacking DMs and comments. Instagram DMs 0 of 20. Instagram comments 0 of 10.",
+            )
+            self.assertFalse(gem_row["review_reasons"][0].startswith("Rejected"))
+            arby_row = by_id[str(rejected_task.id)]
+            self.assertEqual(arby_row["review_reasons"][0], "Lacking comments. LinkedIn comments 0 of 20.")
+            self.assertIn("Rejected: Wrong account on the screenshot", arby_row["review_reasons"])
+            pair = [row for row in tasks if row["task_id"] in {str(short.id), str(rejected_task.id)}]
+            self.assertEqual(
+                [row["task_id"] for row in pair],
+                [row["task_id"] for row in sorted(pair, key=lambda row: row.get("latest_at") or "", reverse=True)],
+            )
+        self.assertEqual(gem_user.role, UserRole.va)
 
     def test_name_sync_follows_engagement_tasks_not_only_a_name(self):
         self.arby.engagement_verification = False

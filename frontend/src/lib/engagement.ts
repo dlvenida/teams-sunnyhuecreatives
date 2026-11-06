@@ -72,6 +72,7 @@ export interface EngagementTask {
   time_logged: string
   rejection_note?: string | null
   rejection_reasons?: string[]
+  review_reasons?: string[]
   approval: string
   latest_at?: string | null
   submitted_at?: string | null
@@ -114,4 +115,69 @@ export const PLATFORM_LABEL: Record<string, string> = {
   instagram: "Instagram",
   facebook: "Facebook",
   linkedin: "LinkedIn",
+}
+
+const LACKING_WORD: Record<string, string> = {
+  dm: "DMs",
+  comment: "comments",
+  share: "shares",
+}
+
+const METRIC_NAME: Record<string, string> = {
+  "instagram:dm": "Instagram DMs",
+  "instagram:comment": "Instagram comments",
+  "facebook:share": "Facebook shares",
+  "linkedin:comment": "LinkedIn comments",
+}
+
+function lackingLead(words: string[]): string {
+  if (words.length === 1) return `Lacking ${words[0]}.`
+  if (words.length === 2) return `Lacking ${words[0]} and ${words[1]}.`
+  return `Lacking ${words.slice(0, -1).join(", ")}, and ${words[words.length - 1]}.`
+}
+
+/** Same wording as the API. Used only when an older payload has counts but no review_reasons. */
+export function lackingReason(task: Pick<EngagementTask, "platform" | "categories">): string | null {
+  const words: string[] = []
+  const counts: string[] = []
+  for (const row of task.categories || []) {
+    if (row.verified == null || row.min == null || Number(row.verified) >= Number(row.min)) continue
+    const word = LACKING_WORD[row.key]
+    const metric = METRIC_NAME[`${task.platform}:${row.key}`]
+    if (!word || !metric) {
+      const label = (row.label || "").trim()
+      if (!label) continue
+      words.push(label.toLowerCase())
+      counts.push(`${label} ${Number(row.verified)} of ${Number(row.min)}`)
+      continue
+    }
+    words.push(word)
+    counts.push(`${metric} ${Number(row.verified)} of ${Number(row.min)}`)
+  }
+  if (!words.length) return null
+  return `${lackingLead(words)} ${counts.join(". ")}.`
+}
+
+export function reviewReasonLines(task: EngagementTask): string[] {
+  const provided = (task.review_reasons ?? []).map((line) => line.trim()).filter(Boolean)
+  if (provided.length) return provided
+  const waiting = task.status === "needs_review"
+    || task.approval === "Pending management review"
+    || task.approval === "Sent back"
+    || (task.rejection_reasons?.length ?? 0) > 0
+  if (!waiting) return []
+  const lines: string[] = []
+  const lacking = lackingReason(task)
+  if (lacking) lines.push(lacking)
+  for (const reason of task.rejection_reasons ?? []) {
+    const text = reason.trim()
+    if (!text) continue
+    if (lacking && /below the minimum|lacking /i.test(text)) continue
+    const line = /^(rejected:|sent back)/i.test(text) ? text : `Rejected: ${text}`
+    if (lines.some((existing) => existing.toLowerCase() === line.toLowerCase() || existing.includes(text))) continue
+    lines.push(line)
+  }
+  if (!lines.length && task.approval === "Pending management review") lines.push("Submitted for management review.")
+  if (!lines.length) lines.push("Needs review.")
+  return lines
 }

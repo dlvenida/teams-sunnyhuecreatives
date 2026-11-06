@@ -590,6 +590,133 @@ def rejection_reason(item: dict) -> str:
     return "Rejected. Approve it here if this evidence should count."
 
 
+_LACKING_WORD = {
+    "dm": "DMs",
+    "comment": "comments",
+    "share": "shares",
+}
+
+_METRIC_NAME = {
+    ("instagram", "dm"): "Instagram DMs",
+    ("instagram", "comment"): "Instagram comments",
+    ("facebook", "share"): "Facebook shares",
+    ("linkedin", "comment"): "LinkedIn comments",
+}
+
+
+def _lacking_lead(words: list[str]) -> str:
+    if len(words) == 1:
+        return f"Lacking {words[0]}."
+    if len(words) == 2:
+        return f"Lacking {words[0]} and {words[1]}."
+    return "Lacking " + ", ".join(words[:-1]) + f", and {words[-1]}."
+
+
+def below_minimum_reason(item: dict) -> str | None:
+    """Plain reason when a daily count is short. None when every minimum is met."""
+    platform = (item.get("platform") or "").casefold()
+    words: list[str] = []
+    counts: list[str] = []
+    for category in item.get("categories") or []:
+        if not isinstance(category, dict):
+            continue
+        try:
+            verified = int(category.get("verified"))
+            minimum = int(category.get("min"))
+        except (TypeError, ValueError):
+            continue
+        if verified >= minimum:
+            continue
+        key = category.get("key")
+        word = _LACKING_WORD.get(key)
+        metric = _METRIC_NAME.get((platform, key))
+        if not word or not metric:
+            label = " ".join(str(category.get("label") or "").split())
+            if not label:
+                continue
+            word = label.casefold()
+            metric = label
+        words.append(word)
+        counts.append(f"{metric} {verified} of {minimum}")
+    if not words:
+        return None
+    return f"{_lacking_lead(words)} {'. '.join(counts)}."
+
+
+def _in_review(item: dict) -> bool:
+    if item.get("status") == "needs_review":
+        return True
+    if item.get("approval") in {"Pending management review", "Sent back"}:
+        return True
+    return bool(item.get("rejection_reasons"))
+
+
+def _as_rejected(text: str) -> str:
+    lowered = text.casefold()
+    if lowered.startswith("rejected:") or lowered.startswith("sent back"):
+        return text
+    return f"Rejected: {text}"
+
+
+def review_reasons(item: dict) -> list[str]:
+    """Why this task is on the review list, from the counts and stored notes.
+
+    Below-minimum work leads with lacking DMs, comments, or shares. A stored
+    reject note stays labeled as rejected. Nothing is added when the counts
+    and status do not support it.
+    """
+    if not _in_review(item):
+        return []
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    def add(text: str | None) -> None:
+        cleaned = " ".join(str(text or "").split())
+        if not cleaned:
+            return
+        key = cleaned.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        lines.append(cleaned)
+
+    lacking = below_minimum_reason(item)
+    if lacking:
+        add(lacking)
+    if item.get("approval") == "Sent back":
+        note = " ".join(str(item.get("rejection_note") or "").split())
+        if note:
+            add(_as_rejected(note))
+    for activity in item.get("activities") or []:
+        if not isinstance(activity, dict):
+            continue
+        status = activity.get("status")
+        explanation = activity.get("explanation") or activity.get("decision_reason")
+        if status == "rejected" or activity.get("decision") == "rejected":
+            add(_as_rejected(explanation or rejection_reason(activity)))
+        elif status in {"invalid", "duplicate"}:
+            add(explanation or rejection_reason(activity))
+        elif status == "needs_review":
+            if not explanation:
+                for alert in activity.get("alerts") or []:
+                    explanation = (alert or {}).get("explanation")
+                    if explanation:
+                        break
+            add(explanation)
+    for alert in item.get("alerts") or []:
+        if not isinstance(alert, dict) or alert.get("code") == "BELOW_TARGET" or alert.get("activity_id"):
+            continue
+        add(alert.get("explanation"))
+    if not lines and item.get("approval") == "Pending management review":
+        add("Submitted for management review.")
+    if not lines:
+        for text in item.get("rejection_reasons") or []:
+            add(text)
+    if not lines:
+        add("Needs review.")
+    return lines
+
+
 def review_log_order(items: list[dict]) -> list[dict]:
     """Needs review, sent back, and rejected evidence, newest first."""
     def waiting(item: dict) -> bool:
@@ -645,8 +772,9 @@ def summarize(
             "below_target": verified < target["min"],
         })
         if verified < target["min"] and (screenshot_count > 0 or workday_ended):
+            shortfall = below_minimum_reason({"platform": platform, "categories": [{**target, "verified": verified}]})
             alerts.append({
-                **_alert("BELOW_TARGET", f"{target['label']} are below the minimum of {target['min']}. {verified} verified. This is in the review log."),
+                **_alert("BELOW_TARGET", shortfall or f"{target['label']} are below the minimum of {target['min']}. {verified} verified."),
                 "screenshot_id": None,
                 "activity_id": None,
             })

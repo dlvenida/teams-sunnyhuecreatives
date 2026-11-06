@@ -30,6 +30,7 @@ from app.services.engagement_rules import (
     platform_from_title,
     rejection_reason,
     review_log_order,
+    review_reasons,
     summarize,
     workday_has_ended,
 )
@@ -575,7 +576,7 @@ def serialize_task(db: Session, task: Task, owner: VA, verification: EngagementV
         if alert.get("activity_id"):
             continue
         add_reason(alert.get("explanation"))
-    return {
+    payload = {
         "task_id": str(task.id),
         "title": task.title,
         "client_id": str(task.client_id),
@@ -597,6 +598,8 @@ def serialize_task(db: Session, task: Task, owner: VA, verification: EngagementV
         "latest_at": _latest_stamp(task, verification),
         **summary,
     }
+    payload["review_reasons"] = review_reasons(payload)
+    return payload
 
 
 def _activity_reason(row) -> str | None:

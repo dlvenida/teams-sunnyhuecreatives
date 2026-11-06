@@ -186,6 +186,71 @@ def package_period_amounts(
     return out
 
 
+def earned_for_window(db: Session, va_id: UUID, start: date, end: date) -> tuple[Decimal, Decimal]:
+    """Approved pay for a date window. Same rules as the VA earnings page.
+
+    Package clients use the period amount, including bi-weekly halves and any
+    saved period override. Hourly clients use the pay already stored on approved logs.
+    """
+    from app.models import WorkLog, WorkLogStatus
+    from app.services.package_overrides import effective_package_amount, load_overrides
+
+    logs = (
+        db.query(WorkLog)
+        .filter(
+            WorkLog.va_id == va_id,
+            WorkLog.status.in_([WorkLogStatus.approved, WorkLogStatus.invoiced]),
+            WorkLog.work_date >= start,
+            WorkLog.work_date <= end,
+        )
+        .all()
+    )
+    hours = sum((log.hours for log in logs), Decimal("0"))
+    log_pay: dict[UUID, Decimal] = {}
+    for log in logs:
+        log_pay[log.client_id] = log_pay.get(log.client_id, Decimal("0")) + (log.va_pay or Decimal("0"))
+    saved = load_overrides(db, {va_id}, start, end)
+    dues: dict[UUID, Decimal] = {}
+    for client_id, _name, calculated, _currency in package_period_amounts(db, va_id, start, end):
+        row = saved.get((va_id, client_id))
+        effective, _skipped, _adjusted = effective_package_amount(
+            calculated,
+            skipped=bool(row.skipped) if row else False,
+            amount=row.amount if row else None,
+            deduction=row.deduction if row else None,
+        )
+        dues[client_id] = effective
+    return combine_period_pay(dues, log_pay), hours
+
+
+def own_month_pay(db: Session, va_id: UUID, today: date | None = None) -> dict:
+    """This calendar month and the current payroll half, for the signed-in VA only."""
+    from app.models import VA
+    from app.services.payroll_calendar import payroll_period_for
+
+    today = today or date.today()
+    month_start = date(today.year, today.month, 1)
+    month_end = date(today.year, today.month, monthrange(today.year, today.month)[1])
+    period_start, period_end = payroll_period_for(today)
+    month_pay, month_hours = earned_for_window(db, va_id, month_start, month_end)
+    period_pay, period_hours = earned_for_window(db, va_id, period_start, period_end)
+    va = db.query(VA).filter(VA.id == va_id).first()
+    currency = currency_code(va.currency if va else None)
+    return {
+        "month_label": today.strftime("%B %Y"),
+        "month_start": month_start.isoformat(),
+        "month_end": month_end.isoformat(),
+        "month_pay": str(month_pay),
+        "month_hours": str(month_hours),
+        "period_label": f"{period_start.strftime('%b')} {period_start.day} to {period_end.strftime('%b')} {period_end.day}",
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "period_pay": str(period_pay),
+        "period_hours": str(period_hours),
+        "currency": currency,
+    }
+
+
 def combine_period_pay(package_dues: dict[UUID, Decimal], log_pay_by_client: dict[UUID, Decimal]) -> Decimal:
     """Package clients are paid the period amount. Hourly clients keep the sum of their logs."""
     hourly = sum(

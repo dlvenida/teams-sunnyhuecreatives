@@ -44,6 +44,10 @@ def seed_database(db: Session) -> None:
         _u.username = unique_username(db, _u.email)
     db.commit()
 
+    from app.services.engagement_access import sync_engagement_subject
+
+    sync_engagement_subject(db)
+
     if not settings.seed_demo_data:
         return
 

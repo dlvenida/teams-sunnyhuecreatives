@@ -145,6 +145,7 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    legal_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     profile_photo_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -232,6 +233,9 @@ class VA(Base):
     name: Mapped[str] = mapped_column(String(255))
     currency: Mapped[Currency] = mapped_column(Enum(Currency, name="currency"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Screenshot verification is enabled only for Arby Mae Malumay. The flag is set once
+    # from her user record and then checked by id, so other VAs never see the feature.
+    engagement_verification: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     reviewer_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -914,3 +918,6 @@ class ClientPackage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     client: Mapped["Client"] = relationship(back_populates="packages")
+
+
+from app.models import engagement as _engagement_models  # noqa: E402, F401

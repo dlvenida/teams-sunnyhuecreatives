@@ -14,6 +14,7 @@ import { groupByWeek } from "@/lib/weeks"
 import { Paperclip, Plus, X } from "lucide-react"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
 import { TimeAreaTabs } from "@/components/nav/AreaTabs"
+import { MyProductivity } from "@/components/dashboard/ProductivityPanel"
 
 interface ApprovedRate {
   id: string
@@ -245,6 +246,7 @@ export function VATimeLogPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
+      {!isStaff && <MyProductivity />}
       <div>
         <h1 className="text-base font-semibold">{isStaff ? "Log my time" : "Log time"}</h1>
         <p className="text-[11px] text-muted-foreground">

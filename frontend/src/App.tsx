@@ -31,6 +31,7 @@ import { VANotificationPreferencesPage } from "@/app/va/notifications/VANotifica
 import { NotFoundPage } from "@/app/not-found/NotFoundPage"
 import { VAClientsPage } from "@/app/va/clients/VAClientsPage"
 import { UserReportsPage } from "@/app/reports/UserReportsPage"
+import { EngagementPage } from "@/app/engagement/EngagementPage"
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
@@ -69,6 +70,7 @@ export default function App() {
                 <Route path="/admin/clients" element={<ClientsPage />} />
                 <Route path="/admin/user-reports" element={<UserReportsPage />} />
                 <Route path="/admin/tasks" element={<TasksPage />} />
+                <Route path="/admin/engagement" element={<EngagementPage />} />
                 <Route path="/admin/projects" element={<ProjectsPage />} />
                 <Route path="/admin/time-clock" element={<TimeClockPage />} />
                 <Route path="/admin/log-time" element={<VATimeLogPage />} />
@@ -95,6 +97,7 @@ export default function App() {
               <Route element={<AppShell />}>
                 <Route path="/va/dashboard" element={<DashboardPage />} />
                 <Route path="/va/tasks" element={<TasksPage />} />
+                <Route path="/va/engagement" element={<EngagementPage />} />
                 <Route path="/va/projects" element={<ProjectsPage />} />
                 <Route path="/va/time-clock" element={<TimeClockPage />} />
                 <Route path="/va/time-log" element={<VATimeLogPage />} />

@@ -10,6 +10,7 @@ import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recha
 import { Activity, Eye, ShieldCheck, Siren } from "lucide-react"
 import { useCssVar } from "@/hooks/useCssVar"
 import { InsightsTabs } from "@/components/nav/AreaTabs"
+import { TeamProductivity } from "@/components/dashboard/ProductivityPanel"
 
 const STATUS_META = {
   inactive: { label: "No activity", pill: "border-red-200 bg-red-100 text-red-700", bar: "bg-red-400" },
@@ -70,6 +71,7 @@ export function AnalyticsPage() {
         {activity && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">Week of {formatDate(activity.week_start)} – {formatDate(activity.week_end)}</p>}
       </div>
       <InsightsTabs />
+      <TeamProductivity />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard title="Team Hours This Week" value={`${teamHoursWeek.toFixed(2)} hrs`} subtitle={`${teamHoursToday.toFixed(2)} hrs today`} />

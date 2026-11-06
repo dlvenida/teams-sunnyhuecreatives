@@ -73,6 +73,9 @@ export interface EngagementTask {
   rejection_note?: string | null
   rejection_reasons?: string[]
   review_reasons?: string[]
+  reader_failed?: boolean
+  counts_not_measured?: boolean
+  unreadable_screenshots?: number
   approval: string
   latest_at?: string | null
   submitted_at?: string | null
@@ -158,26 +161,60 @@ export function lackingReason(task: Pick<EngagementTask, "platform" | "categorie
   return `${lackingLead(words)} ${counts.join(". ")}.`
 }
 
+const UNREAD_SCREENSHOT_NOTE = "This screenshot could not be read. Nothing on it was counted."
+
+export function taskNeedsReview(task: EngagementTask): boolean {
+  if (task.status === "needs_review" || task.status === "incomplete") return true
+  if (task.approval === "Pending management review" || task.approval === "Sent back") return true
+  if (task.approval === "Approved") return false
+  if ((task.activities || []).some((row) => row.status === "rejected" || row.decision === "rejected")) return true
+  if (task.status === "target_met" || task.status === "target_exceeded" || task.status === "completed") return false
+  return (task.rejection_reasons?.length ?? 0) > 0
+}
+
+function uploadedButNotCounted(task: EngagementTask): boolean {
+  if (task.reader_failed || task.counts_not_measured) return true
+  const shots = task.screenshots || []
+  if (!shots.length) return false
+  if ((task.categories || []).some((row) => Number(row.verified) > 0)) return false
+  if ((task.activities || []).some((row) => row.counted)) return false
+  return true
+}
+
 export function reviewReasonLines(task: EngagementTask): string[] {
-  const provided = (task.review_reasons ?? []).map((line) => line.trim()).filter(Boolean)
-  if (provided.length) return provided
-  const waiting = task.status === "needs_review"
-    || task.approval === "Pending management review"
-    || task.approval === "Sent back"
-    || (task.rejection_reasons?.length ?? 0) > 0
-  if (!waiting) return []
+  if (Array.isArray(task.review_reasons)) {
+    return task.review_reasons.map((line) => line.trim()).filter(Boolean)
+  }
+  if (!taskNeedsReview(task)) return []
   const lines: string[] = []
-  const lacking = lackingReason(task)
-  if (lacking) lines.push(lacking)
+  const unread = uploadedButNotCounted(task)
+  const lacking = unread ? null : lackingReason(task)
+  if (unread) {
+    const note = (task.screenshots || []).map((shot) => (shot.extraction_note || "").trim()).find(Boolean)
+      || (task.alerts || []).find((alert) => alert.code === "UNCLEAR_SCREENSHOT" && !alert.activity_id)?.explanation
+      || UNREAD_SCREENSHOT_NOTE
+    lines.push(note)
+  } else if (lacking) {
+    lines.push(lacking)
+  }
+  if (task.approval === "Sent back" && task.rejection_note?.trim()) {
+    const note = task.rejection_note.trim()
+    const line = /^(rejected:|sent back)/i.test(note) ? note : `Rejected: ${note}`
+    if (!lines.some((existing) => existing.toLowerCase() === line.toLowerCase())) lines.push(line)
+  }
   for (const reason of task.rejection_reasons ?? []) {
     const text = reason.trim()
     if (!text) continue
+    if (unread && /lacking |below the minimum/i.test(text)) continue
     if (lacking && /below the minimum|lacking /i.test(text)) continue
-    const line = /^(rejected:|sent back)/i.test(text) ? text : `Rejected: ${text}`
-    if (lines.some((existing) => existing.toLowerCase() === line.toLowerCase() || existing.includes(text))) continue
+    if (lines.some((existing) => existing.toLowerCase() === text.toLowerCase() || existing.includes(text))) continue
+    const line = unread && /could not be read|could not be checked/i.test(text)
+      ? text
+      : /^(rejected:|sent back)/i.test(text) ? text : `Rejected: ${text}`
+    if (lines.some((existing) => existing.toLowerCase() === line.toLowerCase())) continue
     lines.push(line)
   }
   if (!lines.length && task.approval === "Pending management review") lines.push("Submitted for management review.")
-  if (!lines.length) lines.push("Needs review.")
+  if (!lines.length) lines.push(unread ? UNREAD_SCREENSHOT_NOTE : "Needs review.")
   return lines
 }

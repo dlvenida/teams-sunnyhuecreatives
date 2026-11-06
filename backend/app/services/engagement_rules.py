@@ -36,6 +36,10 @@ STATUS_LABELS = {
     "incomplete": "Incomplete",
 }
 
+# Shown when a file was uploaded but the reader did not return activities.
+# A zero in that case is not a counted shortfall.
+UNREAD_SCREENSHOT_NOTE = "This screenshot could not be read. Nothing on it was counted."
+
 ALERT_LABELS = {
     "DATE_MISMATCH": "Date mismatch",
     "TIME_MISMATCH": "Time mismatch",
@@ -549,16 +553,25 @@ def overall_status(
     pending_review: int,
     workday_ended: bool,
     approved: bool,
+    unreadable_screenshots: int = 0,
+    reader_failed: bool = False,
 ) -> str:
-    """Below a minimum is Needs review, so management sees it. Over the maximum is Target exceeded."""
+    """Below a counted minimum is Needs review. Meeting it is Target met.
+
+    An unread screenshot stays in review until someone opens it. Flagged rows
+    that were not counted do not pull a day back once the verified minimum is met.
+    Over the maximum is Target exceeded. Approving an unread upload does not invent a count.
+    """
     if screenshot_count == 0 and not workday_ended:
         return "not_started"
     mins_met = all(row["verified"] >= row["min"] for row in categories) if categories else False
     any_over = any(row["verified"] > row["max"] for row in categories)
     below = any(row["verified"] < row["min"] for row in categories) if categories else screenshot_count == 0
-    if approved and mins_met and pending_review == 0:
+    if approved and (reader_failed or mins_met):
         return "completed"
-    if below or pending_review > 0:
+    if reader_failed or unreadable_screenshots:
+        return "needs_review"
+    if below or (pending_review > 0 and not mins_met):
         return "needs_review"
     if mins_met and any_over:
         return "target_exceeded"
@@ -643,11 +656,55 @@ def below_minimum_reason(item: dict) -> str | None:
     return f"{_lacking_lead(words)} {'. '.join(counts)}."
 
 
-def _in_review(item: dict) -> bool:
-    if item.get("status") == "needs_review":
+def _uploaded_but_not_counted(item: dict) -> bool:
+    """Screenshots are on the task, and no activity was verified.
+
+    The zeros on that task are not a measured shortfall. A day with no
+    screenshot at all is different: that zero is the empty total.
+    """
+    if item.get("reader_failed") or item.get("counts_not_measured"):
+        return True
+    categories = [row for row in item.get("categories") or [] if isinstance(row, dict)]
+    verified_values: list[int] = []
+    for category in categories:
+        try:
+            verified_values.append(int(category.get("verified")))
+        except (TypeError, ValueError):
+            continue
+    if any(value > 0 for value in verified_values):
+        return False
+    try:
+        if int(item.get("verified_total") or 0) > 0:
+            return False
+    except (TypeError, ValueError):
+        pass
+    shots = [row for row in item.get("screenshots") or [] if isinstance(row, dict)]
+    if shots:
+        return True
+    alerts = [row for row in item.get("alerts") or [] if isinstance(row, dict)]
+    if any(row.get("code") == "UNCLEAR_SCREENSHOT" and not row.get("activity_id") for row in alerts):
+        return not verified_values or all(value == 0 for value in verified_values)
+    return False
+
+
+def in_review_queue(item: dict) -> bool:
+    """Tasks a manager still has to open.
+
+    Target met and target exceeded stay off this list. A duplicate note does
+    not pull them back on. Sent back, a rejected activity, and an explicit
+    submit still do.
+    """
+    if item.get("status") in {"needs_review", "incomplete"}:
         return True
     if item.get("approval") in {"Pending management review", "Sent back"}:
         return True
+    if item.get("approval") == "Approved":
+        return False
+    for activity in item.get("activities") or []:
+        if isinstance(activity, dict) and (activity.get("status") == "rejected" or activity.get("decision") == "rejected"):
+            return True
+    if item.get("status") in {"target_met", "target_exceeded", "completed"}:
+        return False
     return bool(item.get("rejection_reasons"))
 
 
@@ -665,7 +722,7 @@ def review_reasons(item: dict) -> list[str]:
     reject note stays labeled as rejected. Nothing is added when the counts
     and status do not support it.
     """
-    if not _in_review(item):
+    if not in_review_queue(item):
         return []
     lines: list[str] = []
     seen: set[str] = set()
@@ -680,7 +737,8 @@ def review_reasons(item: dict) -> list[str]:
         seen.add(key)
         lines.append(cleaned)
 
-    lacking = below_minimum_reason(item)
+    # Zero verified from an upload that was not counted is not "lacking".
+    lacking = None if _uploaded_but_not_counted(item) else below_minimum_reason(item)
     if lacking:
         add(lacking)
     if item.get("approval") == "Sent back":
@@ -707,11 +765,17 @@ def review_reasons(item: dict) -> list[str]:
         if not isinstance(alert, dict) or alert.get("code") == "BELOW_TARGET" or alert.get("activity_id"):
             continue
         add(alert.get("explanation"))
+    if item.get("reader_failed") and not any("could not be read" in line.casefold() for line in lines):
+        add(UNREAD_SCREENSHOT_NOTE)
     if not lines and item.get("approval") == "Pending management review":
         add("Submitted for management review.")
     if not lines:
         for text in item.get("rejection_reasons") or []:
+            if _uploaded_but_not_counted(item) and "lacking " in str(text).casefold():
+                continue
             add(text)
+    if not lines and _uploaded_but_not_counted(item):
+        add(UNREAD_SCREENSHOT_NOTE)
     if not lines:
         add("Needs review.")
     return lines
@@ -719,17 +783,10 @@ def review_reasons(item: dict) -> list[str]:
 
 def review_log_order(items: list[dict]) -> list[dict]:
     """Needs review, sent back, and rejected evidence, newest first."""
-    def waiting(item: dict) -> bool:
-        if item.get("status") == "needs_review":
-            return True
-        if item.get("approval") in {"Pending management review", "Sent back"}:
-            return True
-        return bool(item.get("rejection_reasons"))
-
     def stamp(item: dict) -> str:
         return str(item.get("latest_at") or item.get("submitted_at") or item.get("rejected_at") or "")
 
-    return sorted((item for item in items if waiting(item)), key=stamp, reverse=True)
+    return sorted((item for item in items if in_review_queue(item)), key=stamp, reverse=True)
 
 
 def summarize(
@@ -746,9 +803,13 @@ def summarize(
     """Roll classified activities into totals. There is no typed-count input."""
     categories = []
     alerts: list[dict] = []
+    measured = any(bool(row.get("counted")) for row in classified)
+    # Uploaded files with no verified activity are not a counted total of zero.
+    counts_not_measured = screenshot_count > 0 and not measured
+    reader_failed = counts_not_measured and len(unclear_screenshots) >= screenshot_count and not classified
     for shot in unclear_screenshots:
         alerts.append({
-            **_alert("UNCLEAR_SCREENSHOT", shot.get("note") or "This screenshot could not be read. Nothing on it was counted."),
+            **_alert("UNCLEAR_SCREENSHOT", shot.get("note") or UNREAD_SCREENSHOT_NOTE),
             "screenshot_id": shot.get("id"),
             "activity_id": None,
         })
@@ -771,7 +832,7 @@ def summarize(
             "completion_pct": _completion(verified, target["min"]),
             "below_target": verified < target["min"],
         })
-        if verified < target["min"] and (screenshot_count > 0 or workday_ended):
+        if verified < target["min"] and (screenshot_count > 0 or workday_ended) and not counts_not_measured:
             shortfall = below_minimum_reason({"platform": platform, "categories": [{**target, "verified": verified}]})
             alerts.append({
                 **_alert("BELOW_TARGET", shortfall or f"{target['label']} are below the minimum of {target['min']}. {verified} verified."),
@@ -794,6 +855,8 @@ def summarize(
         pending_review=pending,
         workday_ended=workday_ended,
         approved=approved,
+        unreadable_screenshots=len(unclear_screenshots),
+        reader_failed=reader_failed,
     )
     if categories:
         completion = round(sum(row["completion_pct"] for row in categories) / len(categories))
@@ -811,6 +874,9 @@ def summarize(
         "verified_total": sum(row["verified"] for row in categories),
         "alerts": alerts,
         "all_minimums_met": all(not row["below_target"] for row in categories) if categories else False,
+        "counts_not_measured": counts_not_measured,
+        "reader_failed": reader_failed,
+        "unreadable_screenshots": len(unclear_screenshots),
     }
 
 

@@ -2,7 +2,7 @@ import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSearchParams } from "react-router-dom"
 import { apiFetch, apiFetchBlob, getAuthUser } from "@/lib/api"
-import { PLATFORM_LABEL, reviewReasonLines, useEngagementAccess, type EngagementBoard, type EngagementTask } from "@/lib/engagement"
+import { PLATFORM_LABEL, reviewReasonLines, taskNeedsReview, useEngagementAccess, type EngagementBoard, type EngagementTask } from "@/lib/engagement"
 import { prepareImage } from "@/lib/imagePrep"
 import { Button } from "@/components/ui/button"
 import { Input, Label } from "@/components/ui/input"
@@ -85,7 +85,13 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
   }
 
   const reasons = reviewReasonLines(task)
-  const alerts = task.alerts.filter((alert) => alert.code !== "BELOW_TARGET" || !reasons.some((line) => /^lacking /i.test(line)))
+  const waiting = taskNeedsReview(task)
+  const alerts = task.alerts.filter((alert) => {
+    if (!waiting && !alert.activity_id && (alert.code === "BELOW_TARGET" || alert.code === "UNCLEAR_SCREENSHOT")) return false
+    if (reasons.some((line) => line.includes(alert.explanation))) return false
+    if (alert.code === "BELOW_TARGET" && reasons.some((line) => /^lacking /i.test(line))) return false
+    return true
+  })
 
   return (
     <Card id={`task-${task.task_id}`} className="border-[#F7C6D3]">
@@ -108,7 +114,7 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
             <div key={row.key} className="rounded-2xl bg-[#FDF2F5] p-3">
               <p className="brand-label text-[11px] font-bold uppercase tracking-wide text-[#B8325F]">{row.label}</p>
               <p className="mt-1 text-3xl leading-none text-[#B8325F]">{row.verified}</p>
-              <p className="mt-1 text-xs text-muted-foreground">Target {row.min} to {row.max} · {row.remaining} still to go · {row.completion_pct}%</p>
+              <p className="mt-1 text-xs text-muted-foreground">{task.reader_failed ? `Target ${row.min} to ${row.max} · screenshot could not be read` : `Target ${row.min} to ${row.max} · ${row.remaining} still to go · ${row.completion_pct}%`}</p>
               {row.verified > row.max && <p className="text-[11px] font-semibold text-[#B8325F]">Above the daily maximum. The full verified count is kept.</p>}
               <p className="text-[11px] text-muted-foreground">Seen {row.detected} · duplicates {row.duplicates} · not counted {row.invalid} · to review {row.needs_review}</p>
               <div className="mt-2 h-1.5 rounded-full bg-white"><div className="h-1.5 rounded-full bg-[#E8578A]" style={{ width: `${row.completion_pct}%` }} /></div>
@@ -133,7 +139,7 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
             {task.screenshots.map((shot) => (
               <div key={shot.id}>
                 <ShotThumb id={shot.id} name={shot.original_name} />
-                <p className="mt-1 text-[11px] text-muted-foreground">{shot.extraction_status === "read" ? "Read" : "Needs review"}{shot.extraction_note ? ` · ${shot.extraction_note}` : ""}</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">{shot.extraction_status === "read" ? "Read" : (shot.extraction_note || "Could not be read")}</p>
               </div>
             ))}
           </div>
@@ -152,8 +158,10 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
             {task.activities.map((activity) => (
               <li key={activity.id} className="rounded-xl border px-3 py-2 text-xs">
                 <p className="font-semibold">{activity.activity_type}{activity.username ? ` · ${activity.username}` : ""} · {activity.status.replaceAll("_", " ")}{activity.counted ? " · counted" : " · not counted"}</p>
-                {(activity.status === "rejected" || activity.status === "invalid" || activity.status === "duplicate") ? (
+                {activity.status === "rejected" ? (
                   <p className="font-semibold text-amber-900">Rejected: {activity.explanation}</p>
+                ) : activity.status === "invalid" || activity.status === "duplicate" ? (
+                  <p className="font-semibold text-amber-900">{activity.explanation}</p>
                 ) : (
                   <p className="text-muted-foreground">{activity.explanation || activity.text || "No extra note"}</p>
                 )}
@@ -212,15 +220,8 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
   )
 }
 
-function inReview(task: EngagementTask) {
-  return task.status === "needs_review"
-    || task.approval === "Pending management review"
-    || task.approval === "Sent back"
-    || (task.rejection_reasons?.length ?? 0) > 0
-}
-
 function ReviewLog({ tasks }: { tasks: EngagementTask[] }) {
-  const waiting = [...tasks.filter(inReview)]
+  const waiting = [...tasks.filter(taskNeedsReview)]
     .sort((a, b) => (b.latest_at || b.submitted_at || b.rejected_at || "").localeCompare(a.latest_at || a.submitted_at || a.rejected_at || ""))
   return (
     <Card className="border-amber-200">

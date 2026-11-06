@@ -7,9 +7,12 @@ Cutoff / pay schedule:
 from __future__ import annotations
 
 from calendar import monthrange
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
+
+MANILA = ZoneInfo("Asia/Manila")
 
 from app.models import TimesheetStatus, TimesheetSubmission, VA, User, UserRole
 
@@ -22,6 +25,29 @@ def payroll_period_for(d: date) -> tuple[date, date]:
     if d.day <= 15:
         return date(d.year, d.month, 1), date(d.year, d.month, 15)
     return date(d.year, d.month, 16), date(d.year, d.month, last)
+
+
+def manila_today(now: datetime | None = None) -> date:
+    """Calendar date in Asia/Manila. Payroll halves follow this, not the server UTC date."""
+    current = now or datetime.now(MANILA)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=MANILA)
+    return current.astimezone(MANILA).date()
+
+
+def calendar_half(which: str, today: date | None = None) -> tuple[date, date]:
+    """1st-15th or 16th-end of the calendar month that contains today.
+
+    `today` is the Asia/Manila date. Both presets are that month, so a VA on the 6th
+    can still open the 16th-end half of the same month.
+    """
+    today = today or manila_today()
+    last = monthrange(today.year, today.month)[1]
+    if which == "first_half":
+        return date(today.year, today.month, 1), date(today.year, today.month, 15)
+    if which == "second_half":
+        return date(today.year, today.month, 16), date(today.year, today.month, last)
+    raise ValueError("which must be first_half or second_half")
 
 
 def snap_payroll_period(start: date, end: date) -> tuple[date, date]:

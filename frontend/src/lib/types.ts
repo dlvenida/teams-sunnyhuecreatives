@@ -228,6 +228,7 @@ export interface PayrollVA {
     skipped?: boolean | null
     adjusted?: boolean | null
     note?: string | null
+    currency?: "PHP" | "USD" | string | null
   }[]
   daily?: { work_date: string; hours: string }[]
   prev_hours?: string

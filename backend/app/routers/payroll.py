@@ -44,7 +44,7 @@ from app.schemas import (
 from app.services.log_display import approval_task_label, log_task_name
 from app.services.billing import get_week_period
 from app.services.notifications import push, va_user_id
-from app.services.payroll_calendar import filter_logs_in_pay_period, period_lookup_keys, snap_payroll_period
+from app.services.payroll_calendar import calendar_half, filter_logs_in_pay_period, period_lookup_keys, snap_payroll_period
 from app.services.package_overrides import (
     describe_package_review,
     effective_package_amount,
@@ -54,7 +54,7 @@ from app.services.package_overrides import (
     plan_override,
 )
 from app.services.pay_access import hide_team_money, may_review_timesheet, pay_notice_path, person_role_label, role_value
-from app.services.va_rates import combine_period_pay, get_approved_rate, package_amount_for_window, package_period_amounts, resolved_frequency
+from app.services.va_rates import combine_period_pay, currency_code, get_approved_rate, package_amount_for_window, package_period_amounts, resolved_frequency
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
@@ -70,6 +70,10 @@ def _period(body: PayrollRequest) -> tuple[date, date]:
         t = date.today()
         y, m = (t.year, t.month) if body.period == "this_month" else ((t.year - 1, 12) if t.month == 1 else (t.year, t.month - 1))
         return date(y, m, 1), date(y, m, monthrange(y, m)[1])
+    if body.period in ("first_half", "second_half"):
+        # 1st-15th and 16th-end of the current Asia/Manila month. Not snapped:
+        # those exact dates are already one bi-weekly half.
+        return calendar_half(body.period)
     return get_week_period("this_week")
 
 
@@ -193,7 +197,7 @@ def calculate_payroll(
             package_rows = package_period_amounts(db, va_id, period_start, period_end)
         package_lines: list[dict] = []
         package_dues: dict = {}
-        for cid, name, calculated in package_rows:
+        for cid, name, calculated, rate_currency in package_rows:
             saved = period_overrides.get((va_id, cid))
             effective, skipped, adjusted = effective_package_amount(
                 calculated,
@@ -212,6 +216,7 @@ def calculate_payroll(
                 "skipped": skipped,
                 "adjusted": adjusted,
                 "note": (saved.note or "").strip() or None if saved else None,
+                "currency": rate_currency,
             })
         log_pay_by_client: dict = {}
         for entry in data["entries"]:
@@ -242,7 +247,7 @@ def calculate_payroll(
         for l in data["entries"]:
             b = by_client.setdefault(l.client.name, {
                 "hours": Decimal("0"), "pay": Decimal("0"), "client_id": l.client_id,
-                "rate": l.va_rate, "pay_type": "hourly",
+                "rate": l.va_rate, "pay_type": "hourly", "currency": currency_code(va.currency),
                 "calculated_pay": None, "skipped": False, "adjusted": False, "note": None,
             })
             b["hours"] += l.hours
@@ -253,7 +258,7 @@ def calculate_payroll(
         for line in package_lines:
             b = by_client.setdefault(line["name"], {
                 "hours": Decimal("0"), "pay": Decimal("0"), "client_id": line["client_id"],
-                "rate": line["calculated"], "pay_type": "package",
+                "rate": line["calculated"], "pay_type": "package", "currency": line["currency"],
                 "calculated_pay": line["calculated"], "override_amount": None, "deduction": None, "skipped": False, "adjusted": False, "note": None,
             })
             b["pay"] = line["effective"]
@@ -266,6 +271,7 @@ def calculate_payroll(
             b["skipped"] = line["skipped"]
             b["adjusted"] = line["adjusted"]
             b["note"] = line["note"]
+            b["currency"] = line["currency"]
         daily = []
         d = period_start
         while d <= period_end:
@@ -282,7 +288,7 @@ def calculate_payroll(
         change = float((data["total_hours"] - prev_hours) / prev_hours * 100) if prev_hours > 0 else None
         prev_rows = package_period_amounts(db, va_id, prev_start, prev_end)
         prev_dues = {}
-        for cid, _name, calculated in prev_rows:
+        for cid, _name, calculated, _rate_currency in prev_rows:
             saved = prev_overrides.get((va_id, cid))
             effective, _skipped, _adjusted = effective_package_amount(
                 calculated,
@@ -314,6 +320,7 @@ def calculate_payroll(
                     skipped=None if redact else (v.get("skipped") if v.get("pay_type") == "package" else None),
                     adjusted=None if redact else (v.get("adjusted") if v.get("pay_type") == "package" else None),
                     note=None if redact else v.get("note"),
+                    currency=None if redact else v.get("currency"),
                 )
                 for k, v in by_client.items()
             ),
@@ -509,7 +516,7 @@ def timesheet_entries(
             for key, value in load_overrides(db, {row.va_id}, row.period_start, row.period_end).items():
                 saved.setdefault(key, value)
         clients = []
-        for cid, name, calculated in package_period_amounts(db, row.va_id, pay_start, pay_end):
+        for cid, name, calculated, _rate_currency in package_period_amounts(db, row.va_id, pay_start, pay_end):
             override = saved.get((row.va_id, cid))
             described = describe_package_review(
                 calculated,

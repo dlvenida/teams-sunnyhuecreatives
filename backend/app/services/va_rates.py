@@ -43,20 +43,51 @@ def resolve_log_pay(db: Session, va_id: UUID, client_id: UUID, hours: Decimal) -
 
 
 def frequency_for_save(pay_type: PayType, raw: str | None) -> str | None:
-    """Hourly rates do not use a frequency. New package rates default to bi-weekly."""
+    """Hourly rates do not use a frequency.
+
+    Creating a package rate with the frequency left blank saves Bi-weekly.
+    This is only the create path. It does not rewrite rates that are already stored.
+    """
     if pay_type != PayType.package:
         return None
-    value = (raw or "biweekly").strip().lower()
+    value = _frequency_token(raw)
+    if not value:
+        value = "biweekly"
+    if value not in ("monthly", "biweekly"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment frequency must be Monthly or Bi-weekly.")
+    return value
+
+
+def _frequency_token(raw: str | None) -> str:
+    return (raw or "").strip().lower().replace("-", "").replace(" ", "")
+
+
+def frequency_for_update(raw: str | None) -> str:
+    """An edit must say Monthly or Bi-weekly. A blank value is not turned into either one."""
+    value = _frequency_token(raw)
     if value not in ("monthly", "biweekly"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Payment frequency must be Monthly or Bi-weekly.")
     return value
 
 
 def resolved_frequency(rate: VARate | None) -> str:
-    """Null on an existing package rate means Monthly, so those payslips stay whole."""
+    """Null on an existing package rate means Monthly, so those payslips stay whole.
+
+    Rates saved before payment frequency existed, and any row still missing it,
+    keep the full monthly amount. New saves go through frequency_for_save and
+    store biweekly when the client omits the field. Do not backfill nulls.
+    """
     if rate is None or rate.pay_type != PayType.package:
         return "monthly"
     return rate.payment_frequency or "monthly"
+
+
+def currency_code(value) -> str:
+    """PHP or USD. Anything else is shown as USD."""
+    if value is None:
+        return "USD"
+    raw = value.value if hasattr(value, "value") else value
+    return "PHP" if str(raw).upper() == "PHP" else "USD"
 
 
 def split_biweekly(monthly: Decimal) -> tuple[Decimal, Decimal]:
@@ -140,15 +171,18 @@ def package_period_amounts(
     va_id: UUID,
     period_start: date,
     period_end: date,
-) -> list[tuple[UUID, str, Decimal]]:
-    """Period package pay for every approved client. Logged hours are not an input."""
-    out: list[tuple[UUID, str, Decimal]] = []
+) -> list[tuple[UUID, str, Decimal, str]]:
+    """Period package pay for every approved client. Logged hours are not an input.
+
+    The fourth value is the rate currency (PHP or USD), not a display default.
+    """
+    out: list[tuple[UUID, str, Decimal, str]] = []
     for rate in approved_package_rates(db, va_id):
         due = package_amount_for_window(rate.amount, resolved_frequency(rate), period_start, period_end)
         if due <= 0:
             continue
         name = rate.client.name if rate.client else "Client"
-        out.append((rate.client_id, name, due))
+        out.append((rate.client_id, name, due, currency_code(rate.currency)))
     return out
 
 

@@ -774,6 +774,11 @@ class VARateAdminCreate(BaseModel):
     notes: str | None = None
 
 
+class VARateFrequencyUpdate(BaseModel):
+    """Change Monthly or Bi-weekly on a package rate Jane already has. Amount stays put."""
+    payment_frequency: str
+
+
 class PayablePerson(BaseModel):
     va_id: UUID
     name: str
@@ -1091,6 +1096,8 @@ class PayrollBreakdown(BaseModel):
     skipped: bool | None = None
     adjusted: bool | None = None
     note: str | None = None
+    # Rate currency for this client. PHP shows ₱. Omitted when pay is hidden.
+    currency: str | None = None
 
 
 class PayrollDay(BaseModel):

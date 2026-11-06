@@ -103,7 +103,7 @@ export function VARatesPage() {
                 <option value="biweekly">Bi-weekly</option>
                 <option value="monthly">Monthly</option>
               </Select>
-              <p className="mt-1 text-[11px] text-muted-foreground">Bi-weekly pays half of this monthly amount on the 1st–15th and half on the 16th–end. Monthly pays the full amount once, on the 1st–15th. Older package rates with no frequency stay Monthly.</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">Amount is the full monthly package. Bi-weekly pays about half on the 1st–15th and about half on the 16th–end. Monthly pays the full amount once, on the 1st–15th. New package rates default to Bi-weekly. Older package rates with no frequency stay Monthly.</p>
             </div>
           )}
           <div className="flex items-end">

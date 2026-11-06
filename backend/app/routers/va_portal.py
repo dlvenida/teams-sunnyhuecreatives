@@ -346,7 +346,7 @@ def my_earnings(
     def _package_dues(start: date, end: date) -> dict:
         saved = load_overrides(db, {current.va_id}, start, end)
         dues: dict = {}
-        for cid, _name, calculated in package_period_amounts(db, current.va_id, start, end):
+        for cid, _name, calculated, _rate_currency in package_period_amounts(db, current.va_id, start, end):
             row = saved.get((current.va_id, cid))
             effective, _skipped, _adjusted = effective_package_amount(
                 calculated,
@@ -408,7 +408,7 @@ def my_earnings(
                     by_client_map[key]["currency"] = rate.currency.value
     else:
         saved = load_overrides(db, {current.va_id}, range_start, range_end)
-        for cid, name, flat in package_period_amounts(db, current.va_id, range_start, range_end):
+        for cid, name, flat, rate_currency in package_period_amounts(db, current.va_id, range_start, range_end):
             override = saved.get((current.va_id, cid))
             effective, _skipped, _adjusted = effective_package_amount(
                 flat,
@@ -424,9 +424,7 @@ def my_earnings(
             row["client_name"] = name
             row["earned"] = effective
             row["pay_type"] = "package"
-            rate = get_approved_rate(db, current.va_id, cid)
-            if rate:
-                row["currency"] = rate.currency.value
+            row["currency"] = rate_currency
 
     by_client = [
         {**r, "hours": str(r["hours"]), "earned": str(r["earned"])}

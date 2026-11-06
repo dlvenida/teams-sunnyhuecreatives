@@ -55,6 +55,14 @@ export function VARatesAdminPage() {
     mutationFn: (id: string) => apiFetch(`/va-rates/${id}/reject`, { method: "POST" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["va-rates-admin"] }),
   })
+  const setFrequency = useMutation({
+    mutationFn: ({ id, payment_frequency }: { id: string; payment_frequency: "monthly" | "biweekly" }) =>
+      apiFetch(`/va-rates/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ payment_frequency }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["va-rates-admin"] }),
+  })
   const override = useMutation({
     mutationFn: () =>
       apiFetch("/va-rates", {
@@ -123,7 +131,7 @@ export function VARatesAdminPage() {
                 <option value="biweekly">Bi-weekly</option>
                 <option value="monthly">Monthly</option>
               </Select>
-              <p className="mt-1 text-[11px] text-muted-foreground">Bi-weekly is the Sunny Hue standard. A PHP 2,000 package pays PHP 1,000 on the 1st–15th and PHP 1,000 on the 16th–end. Monthly pays the full amount once, on the 1st–15th payslip. Package rates saved before this field are treated as Monthly.</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">Amount is the full monthly package. Bi-weekly is the Sunny Hue standard: about half is paid on the 1st–15th and about half on the 16th–end. A PHP 2,000 package pays PHP 1,000 on each half. Monthly pays the full amount once, on the 1st–15th. New package rates default to Bi-weekly. A package rate saved with no frequency stays Monthly until you change it here.</p>
             </div>
           )}
           <div className="flex items-end">
@@ -160,7 +168,21 @@ export function VARatesAdminPage() {
                   <td className="p-3 font-semibold">{r.va_name}{r.person_role === "Project Manager" ? " · Project Manager" : ""}</td>
                   <td className="p-3">{r.client_name}</td>
                   <td className="p-3 capitalize">{r.pay_type}{r.set_by_admin ? " · admin" : ""}</td>
-                  <td className="p-3">{r.pay_type === "package" ? (r.payment_frequency === "biweekly" ? "Bi-weekly" : "Monthly") : "—"}</td>
+                  <td className="p-3">
+                    {r.pay_type === "package" ? (
+                      <Select
+                        aria-label={`Payment frequency for ${r.va_name || "this person"} and ${r.client_name || "this client"}`}
+                        className="w-32"
+                        value={r.payment_frequency === "biweekly" ? "biweekly" : "monthly"}
+                        title={r.payment_frequency ? undefined : "No frequency was saved. This rate stays Monthly until you choose Bi-weekly."}
+                        disabled={setFrequency.isPending}
+                        onChange={(e) => setFrequency.mutate({ id: r.id, payment_frequency: e.target.value as "monthly" | "biweekly" })}
+                      >
+                        <option value="biweekly">Bi-weekly</option>
+                        <option value="monthly">Monthly</option>
+                      </Select>
+                    ) : "—"}
+                  </td>
                   <td className="p-3">{formatCurrency(r.amount, r.currency)}{r.pay_type === "package" ? "/month" : "/hr"}</td>
                   <td className="p-3"><StatusBadge status={r.status} /></td>
                   <td className="p-3">

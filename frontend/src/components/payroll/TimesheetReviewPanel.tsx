@@ -47,6 +47,8 @@ interface PackagePayClient {
 interface PackagePay {
   locked: boolean
   currency: "PHP" | "USD" | string
+  period_start?: string
+  period_end?: string
   clients: PackagePayClient[]
 }
 
@@ -79,6 +81,8 @@ function EditPackagePay({
   const [error, setError] = useState("")
   const locked = packagePay.locked
   const currency = packagePay.currency === "USD" ? "USD" : "PHP"
+  const periodStart = packagePay.period_start || sheet.period_start
+  const periodEnd = packagePay.period_end || sheet.period_end
 
   const rowState = (client: PackagePayClient) => {
     const draft = drafts[client.client_id]
@@ -148,8 +152,8 @@ function EditPackagePay({
         body: JSON.stringify({
           va_id: sheet.va_id,
           client_id: client.client_id,
-          period_start: sheet.period_start,
-          period_end: sheet.period_end,
+          period_start: periodStart,
+          period_end: periodEnd,
           skipped: !state.pay,
           amount,
           deduction,
@@ -172,7 +176,7 @@ function EditPackagePay({
     <section className="mb-5 rounded-2xl border border-primary/25 bg-white p-4">
       <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary">Edit package pay</p>
       <p className="mt-1 text-xs text-muted-foreground">
-        Each Fixed Package is listed with this period's amount. A change here updates Timesheets & pay and the payslip.
+        {formatDate(periodStart)} to {formatDate(periodEnd)}. Each Fixed Package is listed with this period's amount. A change here updates Timesheets & pay and the payslip.
       </p>
       <div className="mt-3 space-y-3">
         {displayed.map(({ client, state, calculated, amount, deduction }) => (
@@ -327,15 +331,20 @@ export function TimesheetReviewPanel({
   timesheetId,
   onClose,
   variant = "drawer",
+  payPeriod,
 }: {
   timesheetId: string
   onClose?: () => void
   variant?: "drawer" | "inline"
+  payPeriod?: { start: string; end: string }
 }) {
   const qc = useQueryClient()
   const { data, isLoading, error } = useQuery({
-    queryKey: ["timesheet-review", timesheetId],
-    queryFn: () => apiFetch<ReviewPayload>(`/payroll/timesheets/${timesheetId}/entries`),
+    queryKey: ["timesheet-review", timesheetId, payPeriod?.start, payPeriod?.end],
+    queryFn: () => {
+      const qs = payPeriod ? `?period_start=${payPeriod.start}&period_end=${payPeriod.end}` : ""
+      return apiFetch<ReviewPayload>(`/payroll/timesheets/${timesheetId}/entries${qs}`)
+    },
   })
 
   const allAtts = useMemo(

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
+import { halfMonthRange, type HalfMonth } from "@/lib/payrollPeriod"
 import { cn, formatCurrency, formatDate, payrollPdfFilename } from "@/lib/utils"
 import { parseUsdPhpRate } from "@/lib/pesoEstimate"
 import { PayrollDocument } from "@/components/pdf/PayrollDocument"
@@ -22,9 +23,25 @@ import { AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeCheck, Banknote, Chec
 import { useCssVar } from "@/hooks/useCssVar"
 
 const PERIODS = [
-  { id: "this_week", label: "This Week" }, { id: "last_week", label: "Last Week" },
-  { id: "this_month", label: "This Month" }, { id: "last_month", label: "Last Month" }, { id: "custom", label: "Custom Range" },
+  { id: "this_week", label: "This Week" },
+  { id: "last_week", label: "Last Week" },
+  { id: "this_month", label: "This Month" },
+  { id: "last_month", label: "Last Month" },
+  { id: "first_half", label: "1st – 15th" },
+  { id: "second_half", label: "16th – end" },
+  { id: "custom", label: "Custom Range" },
 ]
+
+function payrollRequestWindow(period: string, dateFrom: string, dateTo: string) {
+  if (period === "first_half" || period === "second_half") {
+    const range = halfMonthRange(period as HalfMonth)
+    return { period: "custom", date_from: range.from, date_to: range.to }
+  }
+  if (period === "custom") {
+    return { period: "custom", date_from: dateFrom || null, date_to: dateTo || null }
+  }
+  return { period, date_from: null, date_to: null }
+}
 function initials(name: string) { return name.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase() }
 const n = (v?: string | number | null) => Number(v ?? 0)
 
@@ -267,11 +284,12 @@ export function PayrollPage() {
   }, [searchParams, pendingSheets])
 
   // Auto-computes whenever a filter changes — no Calculate button needed
+  const requestWindow = payrollRequestWindow(period, dateFrom, dateTo)
   const { data: payrollSource, isLoading } = useQuery({
-    queryKey: ["payroll", vaId, period, dateFrom, dateTo],
+    queryKey: ["payroll", vaId, period, requestWindow.date_from, requestWindow.date_to],
     queryFn: () => apiFetch<PayrollResponse>("/payroll/calculate", {
       method: "POST",
-      body: JSON.stringify({ va_id: vaId || null, period, date_from: period === "custom" ? dateFrom || null : null, date_to: period === "custom" ? dateTo || null : null }),
+      body: JSON.stringify({ va_id: vaId || null, ...requestWindow }),
     }),
     enabled: period !== "custom" || (!!dateFrom && !!dateTo),
   })
@@ -385,9 +403,18 @@ export function PayrollPage() {
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([work_date, hours]) => ({ work_date, hours, label: new Date(work_date + "T00:00:00").toLocaleDateString("en-US", { weekday: "narrow" }) + " " + new Date(work_date + "T00:00:00").getDate() }))
   }, [payroll])
   const teamClients = useMemo(() => {
-    const map = new Map<string, { hours: number; pay: number }>()
-    for (const va of payroll?.vas ?? []) for (const b of va.by_client ?? []) { const cur = map.get(b.label) ?? { hours: 0, pay: 0 }; cur.hours += n(b.hours); cur.pay += n(b.pay); map.set(b.label, cur) }
-    return [...map.entries()].map(([label, v]) => ({ label, ...v })).sort((a, b) => b.hours - a.hours)
+    const map = new Map<string, { label: string; currency: "PHP" | "USD"; hours: number; pay: number }>()
+    for (const va of payroll?.vas ?? []) {
+      const currency: "PHP" | "USD" = va.currency === "USD" ? "USD" : "PHP"
+      for (const row of va.by_client ?? []) {
+        const key = `${row.label}::${currency}`
+        const cur = map.get(key) ?? { label: row.label, currency, hours: 0, pay: 0 }
+        cur.hours += n(row.hours)
+        cur.pay += n(row.pay)
+        map.set(key, cur)
+      }
+    }
+    return [...map.values()].sort((a, b) => b.hours - a.hours || a.label.localeCompare(b.label))
   }, [payroll])
 
   const paidCount = (payroll?.vas ?? []).filter(v => v.is_paid).length
@@ -467,7 +494,12 @@ export function PayrollPage() {
           </div>
           <div className="space-y-4">
             {pendingSheets.map((s) => (
-              <TimesheetReviewPanel key={s.id} timesheetId={s.id} variant="inline" />
+              <TimesheetReviewPanel
+                key={s.id}
+                timesheetId={s.id}
+                variant="inline"
+                payPeriod={payroll ? { start: payroll.period_start, end: payroll.period_end } : undefined}
+              />
             ))}
           </div>
         </div>
@@ -476,7 +508,28 @@ export function PayrollPage() {
       {/* Filters — results update live */}
       <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-5">
         <div><Label>VA</Label><Select value={vaId} onChange={(e) => setVaId(e.target.value)}><option value="">All VAs</option>{vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</Select></div>
-        <div><Label>Period</Label><Select value={period} onChange={(e) => setPeriod(e.target.value)}>{PERIODS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</Select></div>
+        <div className="sm:col-span-2 lg:col-span-4">
+          <Label>Period</Label>
+          <div className="mt-1 flex flex-wrap gap-1.5" role="group" aria-label="Period">
+            {PERIODS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                aria-pressed={period === item.id}
+                onClick={() => setPeriod(item.id)}
+                className={cn(
+                  "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                  period === item.id ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-muted/60",
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Bi-weekly packages show one half on 1st – 15th and the other half on 16th – end. Monthly packages pay the full amount on 1st – 15th only.
+          </p>
+        </div>
         {period === "custom" && <><div><Label>From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div><div><Label>To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div></>}
         {isAdmin && (
           <div>
@@ -527,7 +580,7 @@ export function PayrollPage() {
           </CardContent></Card>
           <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Hours by Client</CardTitle></CardHeader><CardContent className="space-y-2.5">
             {teamClients.map(c => { const pct = n(payroll.total_hours) ? (c.hours / n(payroll.total_hours)) * 100 : 0; return (
-              <div key={c.label} className="text-xs"><div className="flex justify-between gap-2"><span className="truncate font-semibold">{c.label}</span><span className="whitespace-nowrap text-muted-foreground">{c.hours.toFixed(2)} hrs{showPricing ? ` · ${formatCurrency(c.pay)}` : ""}</span></div>
+              <div key={`${c.label}-${c.currency}`} className="text-xs"><div className="flex justify-between gap-2"><span className="truncate font-semibold">{c.label}</span><span className="whitespace-nowrap text-muted-foreground">{c.hours.toFixed(2)} hrs{showPricing ? ` · ${formatCurrency(c.pay, c.currency)}` : ""}</span></div>
               <div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} /></div></div>) })}
             {teamClients.length === 0 && <p className="text-xs text-muted-foreground">No approved hours in this period.</p>}
           </CardContent></Card>
@@ -562,6 +615,7 @@ export function PayrollPage() {
                   <div className="mt-3 flex items-end justify-between">
                     <div>
                       <p className="text-2xl font-extrabold leading-none">{showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`}</p>
+                      <p className="mt-1 text-[11px] font-semibold text-primary">{formatDate(payroll.period_start)} to {formatDate(payroll.period_end)}</p>
                       {showPricing && parsedRate && va.currency === "USD" && (
                         <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
                           ≈ {formatCurrency(n(va.total_pay) * parsedRate, "PHP")}
@@ -861,6 +915,7 @@ export function PayrollPage() {
       {reviewTimesheetId && (
         <TimesheetReviewPanel
           timesheetId={reviewTimesheetId}
+          payPeriod={payroll ? { start: payroll.period_start, end: payroll.period_end } : undefined}
           onClose={() => setReviewTimesheetId(null)}
         />
       )}

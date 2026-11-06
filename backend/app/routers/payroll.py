@@ -467,6 +467,8 @@ def timesheet_entries(
     timesheet_id: UUID,
     current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
+    period_start: date | None = None,
+    period_end: date | None = None,
 ):
     """Full time-log detail + attachment metadata for Timesheet Review."""
     row = (
@@ -478,6 +480,11 @@ def timesheet_entries(
     if not row:
         raise HTTPException(404, "Timesheet not found")
     shown_start, shown_end = snap_payroll_period(row.period_start, row.period_end)
+    pay_start, pay_end = shown_start, shown_end
+    if period_start is not None and period_end is not None:
+        if period_end < period_start:
+            raise HTTPException(400, "period_end must be on or after period_start")
+        pay_start, pay_end = snap_payroll_period(period_start, period_end)
     logs = filter_logs_in_pay_period(
         db.query(WorkLog)
         .options(
@@ -496,12 +503,13 @@ def timesheet_entries(
     redact = hide_team_money(current.role)
     package_pay = None
     if include_package_pay(current.role.value):
-        saved = load_overrides(db, {row.va_id}, shown_start, shown_end)
-        if (shown_start, shown_end) != (row.period_start, row.period_end):
+        saved = load_overrides(db, {row.va_id}, pay_start, pay_end)
+        # A Manila midnight can be stored one day early. Use that row only for the same half.
+        if (pay_start, pay_end) == (shown_start, shown_end) and (pay_start, pay_end) != (row.period_start, row.period_end):
             for key, value in load_overrides(db, {row.va_id}, row.period_start, row.period_end).items():
                 saved.setdefault(key, value)
         clients = []
-        for cid, name, calculated in package_period_amounts(db, row.va_id, shown_start, shown_end):
+        for cid, name, calculated in package_period_amounts(db, row.va_id, pay_start, pay_end):
             override = saved.get((row.va_id, cid))
             described = describe_package_review(
                 calculated,
@@ -523,8 +531,10 @@ def timesheet_entries(
         if clients:
             currency = row.va.currency.value if row.va and hasattr(row.va.currency, "value") else "PHP"
             package_pay = {
-                "locked": period_is_paid(db, row.va_id, shown_start, shown_end) or period_is_paid(db, row.va_id, row.period_start, row.period_end),
+                "locked": period_is_paid(db, row.va_id, pay_start, pay_end) or period_is_paid(db, row.va_id, row.period_start, row.period_end),
                 "currency": currency,
+                "period_start": pay_start.isoformat(),
+                "period_end": pay_end.isoformat(),
                 "clients": clients,
             }
     full_name = (

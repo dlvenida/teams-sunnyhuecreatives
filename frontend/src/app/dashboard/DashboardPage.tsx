@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { LogApprovalCard } from "@/components/payroll/LogApprovalCard"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TASK_STATUSES, PRIORITY_META, formatDuration } from "@/components/tasks/task-utils"
+import { MyProductivity, TeamProductivity } from "@/components/dashboard/ProductivityPanel"
 import { AlertTriangle, ArrowRight, CalendarDays, Check, CheckCircle2, ClipboardList, DollarSign, Flame, Lightbulb, ListTodo, Pause, Play, Sparkles, Square, Sun, Sunrise, Sunset, Timer, TrendingUp, Volume2, Wallet, X } from "lucide-react"
 
 const BIBLE_VERSES = [
@@ -353,6 +354,9 @@ export function DashboardPage() {
       </div>
 
       {readerOpen && <div id="dashboard-reader" className="scroll-mt-20"><DashboardReader overview={overview} isAdmin={isStaff} firstName={firstName} autoPlay onClose={() => setReaderOpen(false)} /></div>}
+
+      {isVA && <MyProductivity />}
+      {isStaff && <TeamProductivity compact />}
 
       <div className="grid grid-cols-3 gap-3">
         {[{ label: "Due today", v: c.due_today, icon: CalendarDays }, { label: "Overdue", v: c.overdue, icon: AlertTriangle }, { label: "Done this week", v: c.done_this_week, icon: CheckCircle2 }].map(s => (

@@ -2,6 +2,7 @@ import { useState } from "react"
 import { Outlet } from "react-router-dom"
 import { getAuthUser } from "@/lib/api"
 import { getNavForRole } from "@/lib/navigation"
+import { useEngagementAccess } from "@/lib/engagement"
 import { Sidebar } from "@/components/layout/Sidebar"
 import { TopBar } from "@/components/layout/TopBar"
 import { ImpersonationBanner } from "@/components/layout/ImpersonationBanner"
@@ -9,7 +10,8 @@ import { NotificationAlerts } from "@/components/notifications/NotificationAlert
 
 export function AppShell() {
   const user = getAuthUser()
-  const navItems = getNavForRole(user?.role ?? "va")
+  const engagement = useEngagementAccess()
+  const navItems = getNavForRole(user?.role ?? "va", { engagement: engagement.data?.scope === "va" })
   const [mobileOpen, setMobileOpen] = useState(false)
 
   return (

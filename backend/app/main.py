@@ -29,6 +29,7 @@ from app.routers import (
     vas,
     work_logs,
 )
+from app.routers import engagement, productivity
 from app.services.seed import seed_database
 
 
@@ -75,6 +76,9 @@ def _describe(method: str, path: str) -> tuple[str, str]:
         ("invoices" in p and tail == "mark-unpaid", ("update", "Marked an invoice as unpaid")),
         ("payroll/runs" in p and method == "POST", ("pay", "Marked a VA as paid (payroll)")),
         ("payroll/runs" in p and method == "DELETE", ("delete", "Voided a payroll payment")),
+        ("engagement" in p and "screenshots" in p, ("create", "Uploaded engagement screenshots")),
+        ("engagement" in p and tail == "approve", ("approve", "Approved engagement evidence")),
+        ("engagement" in p and tail == "reject", ("reject", "Rejected engagement evidence")),
         ("time-clock/clock-in" in p, ("clock", "Clocked in")),
         ("time-clock/clock-out" in p, ("clock", "Clocked out")),
         ("time-clock/pause" in p, ("clock", "Paused the clock")),
@@ -158,6 +162,8 @@ app.include_router(notifications.router)
 app.include_router(collaboration.router)
 app.include_router(agent.router)
 app.include_router(agent_control.router)
+app.include_router(engagement.router)
+app.include_router(productivity.router)
 
 
 @app.get("/health")

@@ -9,7 +9,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
-from app.deps import CurrentUser, require_va
+from app.deps import CurrentUser, get_current_user, require_va
 from app.models import (
     Client,
     ClientApprovalStatus,
@@ -17,6 +17,7 @@ from app.models import (
     SubClient,
     TimesheetStatus,
     TimesheetSubmission,
+    UserRole,
     VA,
     WorkLog,
     WorkLogStatus,
@@ -27,7 +28,7 @@ from app.services.billing import get_week_period
 from app.services.payroll_calendar import period_lookup_keys, snap_payroll_period
 from app.services.notifications import push
 from app.services.package_overrides import effective_package_amount, load_overrides
-from app.services.va_rates import combine_period_pay, get_approved_rate, package_flats_for_period, package_period_amounts, resolve_log_pay
+from app.services.va_rates import combine_period_pay, get_approved_rate, own_month_pay, package_flats_for_period, package_period_amounts, resolve_log_pay
 from app.services.work_log_entry import apply_work_log_timing, resolve_timing
 from app.services.va_scope import ensure_va_scope, is_va, load_va_scope
 from app.services.work_log_overlap import assert_no_time_overlap
@@ -304,6 +305,33 @@ def my_usd_php_rate(current: Annotated[CurrentUser, Depends(require_va)], db: An
         )
         rate = _positive_rate(latest[0] if latest else None)
     return {"usd_php_rate": str(rate) if rate is not None else None}
+
+
+@router.get("/month-pay")
+def my_month_pay(
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    va_id: UUID | None = None,
+):
+    """This month and the current pay period.
+
+    A VA always receives her own totals. An admin may ask for one VA. A project
+    manager never receives pay.
+    """
+    if current.role == UserRole.auditor:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Pay is not available for Project Managers.")
+    if current.role == UserRole.va:
+        if not current.va_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Pay is only available on your own dashboard.")
+        return own_month_pay(db, current.va_id)
+    if current.role != UserRole.admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Pay is only available on your own dashboard.")
+    if va_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Choose a VA.")
+    va = db.query(VA).filter(VA.id == va_id, VA.is_active.is_(True)).first()
+    if va is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="VA not found")
+    return own_month_pay(db, va.id)
 
 
 @router.get("/earnings")

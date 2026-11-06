@@ -13,6 +13,7 @@ import { DetailAttachments } from "@/components/comments/DetailAttachments"
 import { TaskStaffNotes } from "@/components/tasks/TaskStaffNotes"
 import { AlertTriangle, CalendarDays, Columns3, List, MessageSquare, Pencil, Plus, Repeat, Search, Timer, Trash2, X } from "lucide-react"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
+import { engagementPlatform, useEngagementAccess } from "@/lib/engagement"
 
 type ViewMode = "board" | "list" | "timeline"
 
@@ -395,6 +396,10 @@ function TaskTimeLogs({ taskId }: { taskId: string }) {
 }
 
 function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onComments: () => void; draggable?: boolean; onDragStart?: () => void }) {
+  const user = getAuthUser()
+  const access = useEngagementAccess()
+  const base = user?.role === "va" ? "/va" : "/admin"
+  const showCheck = !!engagementPlatform(t.title) && !!access.data?.va_id && t.assignee_va_id === access.data.va_id
   return (
     <div
       role="button"
@@ -432,7 +437,8 @@ function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onCo
       <div className="mt-2 space-y-1 text-[11px] text-muted-foreground">
         <div>{t.client_name}{t.project_name ? ` · ${t.project_name}` : ""}</div>
         <div className="flex justify-between"><span>{t.assignee_name || "Unassigned"}</span><span>{t.due_date ? formatDate(t.due_date) : "No deadline"}</span></div>
-        <div className="flex justify-between"><span>{t.logged_hours}h logged{t.estimated_hours ? ` / ${t.estimated_hours}h est` : ""}</span><span className="font-semibold text-primary underline">Open · Comments</span></div>
+        <div className="flex justify-between gap-2"><span>{t.logged_hours}h logged{t.estimated_hours ? ` / ${t.estimated_hours}h est` : ""}</span><span className="font-semibold text-primary underline">Open · Comments</span></div>
+        {showCheck && <Link to={`${base}/engagement?task=${t.id}`} onClick={(event) => event.stopPropagation()} className="mt-1 inline-block text-[10px] font-bold text-[#B8325F] underline">Screenshot check</Link>}
       </div>
       {t.estimated_hours && Number(t.estimated_hours) > 0 && <div className="mt-2 h-1.5 rounded-full bg-slate-100"><div className="h-1.5 rounded-full bg-primary" style={{ width: `${Math.min(100, (Number(t.logged_hours) / Number(t.estimated_hours)) * 100)}%` }} /></div>}
     </div>

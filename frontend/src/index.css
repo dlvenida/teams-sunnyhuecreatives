@@ -193,6 +193,22 @@ h1, h2, h3, h4 {
   letter-spacing: -0.02em;
 }
 
+.shc-brand {
+  font-family: "DM Sans", var(--font-sans);
+}
+.shc-brand h1,
+.shc-brand h2,
+.shc-brand h3 {
+  font-family: "Instrument Serif", var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+.shc-brand button,
+.shc-brand label,
+.shc-brand .brand-label {
+  font-family: "Montserrat", var(--font-sans);
+}
+
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }

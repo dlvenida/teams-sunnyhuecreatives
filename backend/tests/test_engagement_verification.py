@@ -22,6 +22,8 @@ from app.services.engagement_rules import (
     overall_status,
     parse_extraction_document,
     platform_from_title,
+    rejection_reason,
+    review_log_order,
     summarize,
 )
 from app.services.engagement_service import add_screenshot_bytes
@@ -252,13 +254,137 @@ class StatusTests(unittest.TestCase):
 
     def test_statuses(self):
         self.assertEqual(overall_status(screenshot_count=0, categories=self._cats(0), pending_review=0, workday_ended=False, approved=False), "not_started")
-        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=False, approved=False), "in_progress")
+        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=False, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=1, workday_ended=False, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(20), pending_review=0, workday_ended=False, approved=False), "target_met")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(26), pending_review=0, workday_ended=False, approved=False), "target_exceeded")
-        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=True, approved=False), "incomplete")
+        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=True, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(22), pending_review=0, workday_ended=True, approved=True), "completed")
         self.assertNotEqual(overall_status(screenshot_count=1, categories=self._cats(22), pending_review=0, workday_ended=True, approved=False), "completed")
+
+    def test_counts_above_the_maximum_stay_and_mark_target_exceeded(self):
+        rows = []
+        for index in range(26):
+            rows.append(_act(id=f"dm{index}", order=index, username=f"@dm{index}", activity_time=time(21, index % 50)))
+        for index in range(16):
+            rows.append(_act(
+                id=f"c{index}",
+                order=index,
+                activity_type="comment",
+                username=f"@comment{index}",
+                activity_time=time(22, index % 50),
+                screenshot_id="s2",
+            ))
+        classified = _count("instagram", rows)
+        verified_dms = [row for row in classified if row["activity_type"] == "dm" and row["counted"]]
+        verified_comments = [row for row in classified if row["activity_type"] == "comment" and row["counted"]]
+        self.assertEqual(len(verified_dms), 26)
+        self.assertEqual(len(verified_comments), 16)
+        summary = summarize(
+            "instagram",
+            classified,
+            screenshot_count=1,
+            unclear_screenshots=[],
+            targets=[
+                {"key": "dm", "label": "Direct Messages", "min": 20, "max": 25},
+                {"key": "comment", "label": "Comments", "min": 10, "max": 15},
+            ],
+            workday_ended=False,
+            approved=False,
+            submitted=False,
+        )
+        self.assertEqual(summary["status"], "target_exceeded")
+        self.assertEqual(summary["categories"][0]["verified"], 26)
+        self.assertEqual(summary["categories"][1]["verified"], 16)
+        self.assertEqual(summary["categories"][0]["completion_pct"], 100)
+        self.assertEqual(summary["completion_pct"], 100)
+
+    def test_linkedin_comments_can_pass_twenty(self):
+        rows = [
+            _act(id=f"c{index}", order=index, activity_type="comment", platform_hint="linkedin", username=f"Person {index}", activity_time=time(21, index % 50))
+            for index in range(21)
+        ]
+        rows.append(_act(id="connect", activity_type="connect", platform_hint="linkedin", username="Someone Else", activity_time=time(21, 10)))
+        classified = _count("linkedin", rows)
+        comments = [row for row in classified if row["activity_type"] == "comment" and row["counted"]]
+        connects = [row for row in classified if row["activity_type"] == "connect"]
+        self.assertEqual(len(comments), 21)
+        self.assertEqual(connects[0]["status"], "excluded")
+        summary = summarize(
+            "linkedin",
+            classified,
+            screenshot_count=1,
+            unclear_screenshots=[],
+            targets=[{"key": "comment", "label": "Comments", "min": 20, "max": 20}],
+            workday_ended=False,
+            approved=False,
+            submitted=False,
+        )
+        self.assertEqual(summary["status"], "target_exceeded")
+        self.assertEqual(summary["categories"][0]["verified"], 21)
+
+    def test_below_minimum_goes_to_review_and_meeting_minimum_does_not(self):
+        def summary_for(dms, comments):
+            classified = []
+            for index in range(dms):
+                classified.append({"id": f"d{index}", "activity_type": "dm", "counted": True, "status": "verified", "alerts": []})
+            for index in range(comments):
+                classified.append({"id": f"c{index}", "activity_type": "comment", "counted": True, "status": "verified", "alerts": []})
+            return summarize(
+                "instagram",
+                classified,
+                screenshot_count=1,
+                unclear_screenshots=[],
+                targets=[
+                    {"key": "dm", "label": "Direct Messages", "min": 20, "max": 25},
+                    {"key": "comment", "label": "Comments", "min": 10, "max": 15},
+                ],
+                workday_ended=False,
+                approved=False,
+                submitted=False,
+            )
+
+        short = summary_for(15, 10)
+        met = summary_for(20, 10)
+        self.assertEqual(short["status"], "needs_review")
+        self.assertEqual(short["categories"][0]["verified"], 15)
+        self.assertTrue(any(alert["code"] == "BELOW_TARGET" for alert in short["alerts"]))
+        review_log = [row for row in (short, met) if row["status"] == "needs_review"]
+        self.assertEqual(len(review_log), 1)
+        self.assertEqual(review_log[0]["categories"][0]["verified"], 15)
+        self.assertEqual(met["status"], "target_met")
+        self.assertFalse(any(alert["code"] == "BELOW_TARGET" for alert in met["alerts"]))
+
+    def test_review_log_lists_the_newest_first(self):
+        items = [
+            {"task_id": "old", "status": "needs_review", "latest_at": "2026-11-06T08:00:00+00:00"},
+            {"task_id": "approved", "status": "target_met", "approval": "Approved", "latest_at": "2026-11-06T19:00:00+00:00"},
+            {"task_id": "newest", "status": "needs_review", "latest_at": "2026-11-06T18:30:00+00:00"},
+            {"task_id": "pending", "status": "target_met", "approval": "Pending management review", "submitted_at": "2026-11-06T12:00:00+00:00"},
+        ]
+        self.assertEqual([row["task_id"] for row in review_log_order(items)], ["newest", "pending", "old"])
+
+    def test_rejected_item_keeps_a_reason_and_stays_in_the_review_log(self):
+        rejected = _count("instagram", [_act(activity_date=date(2026, 11, 5))])[0]
+        self.assertEqual(rejected["status"], "invalid")
+        self.assertTrue(rejected["explanation"].strip())
+        self.assertIn("date", rejected["explanation"].casefold())
+        blank = rejection_reason({"status": "rejected", "decision_reason": "   ", "alerts": []})
+        self.assertTrue(blank.strip())
+        items = [
+            {"task_id": "older", "status": "needs_review", "latest_at": "2026-11-06T09:00:00+00:00", "rejection_reasons": ["Direct Messages are below the minimum of 20. 15 verified."]},
+            {
+                "task_id": "chef",
+                "status": "target_met",
+                "approval": "Sent back",
+                "latest_at": "2026-11-06T16:00:00+00:00",
+                "rejection_reasons": ["Account mismatch for Chef Stephanie Tranchina"],
+            },
+        ]
+        ordered = review_log_order(items)
+        self.assertEqual(ordered[0]["task_id"], "chef")
+        self.assertIn("chef", [row["task_id"] for row in ordered])
+        self.assertTrue(all(row.get("rejection_reasons") and row["rejection_reasons"][0].strip() for row in ordered))
 
     def test_summarize_does_not_accept_a_typed_total(self):
         self.assertNotIn("verified_total", inspect.signature(summarize).parameters)
@@ -333,6 +459,7 @@ class AccessAndAuditTests(unittest.TestCase):
                 self.db.query(EngagementAudit).filter(EngagementAudit.verification_id.in_(ver_ids)).delete(synchronize_session=False)
                 self.db.query(EngagementVerification).filter(EngagementVerification.id.in_(ver_ids)).delete(synchronize_session=False)
             self.db.query(Task).filter(Task.id == self.task.id).delete(synchronize_session=False)
+        self.db.query(Task).filter(Task.client_id == self.client_row.id).delete(synchronize_session=False)
         self.db.query(VA).filter(VA.user_id.in_(self.created_user_ids)).delete(synchronize_session=False)
         self.db.query(User).filter(User.id.in_(self.created_user_ids)).delete(synchronize_session=False)
         self.db.query(Client).filter(Client.id == self.client_row.id).delete(synchronize_session=False)
@@ -395,18 +522,68 @@ class AccessAndAuditTests(unittest.TestCase):
         )
         self.assertEqual(denied.status_code, 403)
 
-    def test_name_sync_enables_the_flag_once(self):
+    def test_community_engagement_va_is_included_and_a_content_va_is_not(self):
+        gem_user, gem = self._person("Gem Santos", UserRole.va, flag=False)
+        content_user, content = self._person("Myra Content", UserRole.va, flag=False)
+        self.db.add(Task(
+            title="LinkedIn Community Management",
+            client_id=self.client_row.id,
+            assignee_va_id=gem.id,
+            status=TaskStatus.todo,
+            due_date=date.today(),
+        ))
+        self.db.add(Task(
+            title="Inbox triage",
+            client_id=self.client_row.id,
+            assignee_va_id=content.id,
+            status=TaskStatus.todo,
+            due_date=date.today(),
+        ))
+        self.db.commit()
+        allowed = self.client.get("/engagement/tasks", headers=_auth(gem_user, gem))
+        self.assertEqual(allowed.status_code, 200)
+        self.db.refresh(gem)
+        self.assertTrue(gem.engagement_verification)
+        denied = self.client.get("/engagement/tasks", headers=_auth(content_user, content))
+        self.assertEqual(denied.status_code, 403)
+        self.db.refresh(content)
+        self.assertFalse(content.engagement_verification)
+        admin = self.db.query(User).filter(User.role == UserRole.admin).first()
+        self.assertIsNotNone(admin)
+        roster = self.client.get("/engagement/vas", headers=_auth(admin))
+        self.assertEqual(roster.status_code, 200)
+        self.assertNotIn("rate", roster.text.lower())
+        turned_off = self.client.patch(f"/engagement/vas/{gem.id}", headers=_auth(admin), json={"enabled": False})
+        self.assertEqual(turned_off.status_code, 200)
+        self.db.refresh(gem)
+        self.assertFalse(gem.engagement_verification)
+        self.assertTrue(gem.engagement_verification_manual)
+        sync_engagement_subject(self.db)
+        self.db.refresh(gem)
+        self.assertFalse(gem.engagement_verification)
+        pm_toggle = self.client.patch(f"/engagement/vas/{gem.id}", headers=_auth(self.pm_user), json={"enabled": True})
+        self.assertEqual(pm_toggle.status_code, 403)
+
+    def test_name_sync_follows_engagement_tasks_not_only_a_name(self):
         self.arby.engagement_verification = False
-        self.arby.name = "Arby Mae Malumay"
+        self.arby.engagement_verification_manual = False
         self.db.commit()
         sync_engagement_subject(self.db)
         self.db.refresh(self.arby)
         self.assertTrue(self.arby.engagement_verification)
-        self.arby.name = "Arby"
+        self.other.engagement_verification_manual = True
+        self.other.engagement_verification = False
+        self.db.add(Task(
+            title="Facebook Community Management",
+            client_id=self.client_row.id,
+            assignee_va_id=self.other.id,
+            status=TaskStatus.todo,
+            due_date=date.today(),
+        ))
         self.db.commit()
         sync_engagement_subject(self.db)
-        self.db.refresh(self.arby)
-        self.assertTrue(self.arby.engagement_verification)
+        self.db.refresh(self.other)
+        self.assertFalse(self.other.engagement_verification)
 
 
 if __name__ == "__main__":

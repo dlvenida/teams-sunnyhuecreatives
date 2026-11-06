@@ -28,6 +28,8 @@ from app.services.engagement_rules import (
     classify_activities,
     manual_override,
     platform_from_title,
+    rejection_reason,
+    review_log_order,
     summarize,
     workday_has_ended,
 )
@@ -70,6 +72,9 @@ def actor_name(db: Session, current) -> str:
 
 
 def _subject_va(db: Session, current) -> VA | None:
+    from app.services.engagement_access import sync_engagement_subject
+
+    sync_engagement_subject(db)
     if not current.va_id:
         return None
     return (
@@ -486,6 +491,7 @@ def serialize_task(db: Session, task: Task, owner: VA, verification: EngagementV
         audits = []
         submitted_at = approved_at = rejected_at = None
         approval = "Not submitted"
+        rejection_note = ""
     else:
         summary = refresh(db, verification, task)
         work_date = verification.work_date
@@ -516,7 +522,7 @@ def serialize_task(db: Session, task: Task, owner: VA, verification: EngagementV
                 "status": row.status,
                 "counted": bool(row.counted),
                 "alerts": row.alerts or [],
-                "explanation": row.explanation,
+                "explanation": _activity_reason(row),
                 "decision": row.decision,
                 "decision_reason": row.decision_reason,
                 "original_result": row.original_result,
@@ -540,6 +546,9 @@ def serialize_task(db: Session, task: Task, owner: VA, verification: EngagementV
         submitted_at = verification.submitted_at.isoformat() if verification.submitted_at else None
         approved_at = verification.approved_at.isoformat() if verification.approved_at else None
         rejected_at = verification.rejected_at.isoformat() if verification.rejected_at else None
+        rejection_note = " ".join((verification.rejection_note or "").split())
+        if verification.rejected_at and not verification.submitted_at and not rejection_note:
+            rejection_note = "Sent back. Approve it here if this evidence should count."
         if verification.approved_at:
             approval = "Approved"
         elif verification.rejected_at and not verification.submitted_at:
@@ -548,6 +557,24 @@ def serialize_task(db: Session, task: Task, owner: VA, verification: EngagementV
             approval = "Pending management review"
         else:
             approval = "Not submitted"
+    seen_reasons: set[str] = set()
+    rejection_reasons = []
+
+    def add_reason(text: str | None) -> None:
+        cleaned = " ".join(str(text or "").split())
+        if cleaned and cleaned not in seen_reasons:
+            seen_reasons.add(cleaned)
+            rejection_reasons.append(cleaned)
+
+    if rejection_note and approval == "Sent back":
+        add_reason(rejection_note)
+    for activity in activities:
+        if activity["status"] in {"rejected", "invalid", "duplicate"}:
+            add_reason(activity.get("explanation") or rejection_reason(activity))
+    for alert in summary.get("alerts") or []:
+        if alert.get("activity_id"):
+            continue
+        add_reason(alert.get("explanation"))
     return {
         "task_id": str(task.id),
         "title": task.title,
@@ -561,12 +588,50 @@ def serialize_task(db: Session, task: Task, owner: VA, verification: EngagementV
         "submitted_at": submitted_at,
         "approved_at": approved_at,
         "rejected_at": rejected_at,
+        "rejection_note": rejection_note,
+        "rejection_reasons": rejection_reasons,
         "approval": approval,
         "screenshots": screenshots,
         "activities": activities,
         "audits": audits,
+        "latest_at": _latest_stamp(task, verification),
         **summary,
     }
+
+
+def _activity_reason(row) -> str | None:
+    if row.status not in {"rejected", "invalid", "duplicate"} and row.decision != "rejected":
+        return row.explanation
+    return rejection_reason({
+        "status": row.status,
+        "explanation": row.explanation,
+        "decision_reason": row.decision_reason,
+        "alerts": row.alerts or [],
+    })
+
+
+def _latest_stamp(task: Task, verification: EngagementVerification | None) -> str | None:
+    stamps = []
+    for value in (task.updated_at, task.created_at):
+        if value is not None:
+            stamps.append(value)
+    if verification is not None:
+        for value in (verification.updated_at, verification.submitted_at, verification.created_at):
+            if value is not None:
+                stamps.append(value)
+        for shot in verification.screenshots:
+            if shot.created_at is not None:
+                stamps.append(shot.created_at)
+        for activity in verification.activities:
+            if activity.created_at is not None:
+                stamps.append(activity.created_at)
+    if not stamps:
+        return None
+    def _as_utc(value):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return max(_as_utc(value) for value in stamps).isoformat()
 
 
 def list_tasks(db: Session, current, work_date: date) -> list[dict]:
@@ -596,7 +661,17 @@ def list_tasks(db: Session, current, work_date: date) -> list[dict]:
         if owner is None:
             continue
         tasks.append(serialize_task(db, task, owner, verification))
-    tasks.sort(key=lambda row: (row["client_name"].casefold(), row["platform"] or ""))
+    if subject is None:
+        review = review_log_order(tasks)
+        review_ids = {row["task_id"] for row in review}
+        rest = sorted(
+            (row for row in tasks if row["task_id"] not in review_ids),
+            key=lambda item: item.get("latest_at") or "",
+            reverse=True,
+        )
+        tasks = review + rest
+    else:
+        tasks.sort(key=lambda row: (row["client_name"].casefold(), row["platform"] or ""))
     db.commit()
     return tasks
 

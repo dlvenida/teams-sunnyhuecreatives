@@ -101,12 +101,16 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
               <p className="brand-label text-[11px] font-bold uppercase tracking-wide text-[#B8325F]">{row.label}</p>
               <p className="mt-1 text-3xl leading-none text-[#B8325F]">{row.verified}</p>
               <p className="mt-1 text-xs text-muted-foreground">Target {row.min} to {row.max} · {row.remaining} still to go · {row.completion_pct}%</p>
+              {row.verified > row.max && <p className="text-[11px] font-semibold text-[#B8325F]">Above the daily maximum. The full verified count is kept.</p>}
               <p className="text-[11px] text-muted-foreground">Seen {row.detected} · duplicates {row.duplicates} · not counted {row.invalid} · to review {row.needs_review}</p>
               <div className="mt-2 h-1.5 rounded-full bg-white"><div className="h-1.5 rounded-full bg-[#E8578A]" style={{ width: `${row.completion_pct}%` }} /></div>
             </div>
           ))}
         </div>
         <p className="text-xs text-muted-foreground">Approval: {task.approval}. A board status of Done does not complete this check.</p>
+        {task.rejection_note && task.approval === "Sent back" && (
+          <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-950">Sent back: {task.rejection_note}</p>
+        )}
         {task.alerts.length > 0 && (
           <ul className="space-y-1">
             {task.alerts.slice(0, 8).map((alert, index) => (
@@ -140,7 +144,11 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
             {task.activities.map((activity) => (
               <li key={activity.id} className="rounded-xl border px-3 py-2 text-xs">
                 <p className="font-semibold">{activity.activity_type}{activity.username ? ` · ${activity.username}` : ""} · {activity.status.replaceAll("_", " ")}{activity.counted ? " · counted" : " · not counted"}</p>
-                <p className="text-muted-foreground">{activity.explanation || activity.text || "No extra note"}</p>
+                {(activity.status === "rejected" || activity.status === "invalid" || activity.status === "duplicate") ? (
+                  <p className="font-semibold text-amber-900">Rejected: {activity.explanation}</p>
+                ) : (
+                  <p className="text-muted-foreground">{activity.explanation || activity.text || "No extra note"}</p>
+                )}
                 {management && (
                   <div className="mt-2 flex gap-2">
                     <Button type="button" size="sm" variant="success" onClick={() => withReason(`/engagement/activities/${activity.id}/approve`)}>Count it</Button>
@@ -196,6 +204,76 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
   )
 }
 
+function inReview(task: EngagementTask) {
+  return task.status === "needs_review"
+    || task.approval === "Pending management review"
+    || task.approval === "Sent back"
+    || (task.rejection_reasons?.length ?? 0) > 0
+}
+
+function ReviewLog({ tasks }: { tasks: EngagementTask[] }) {
+  const waiting = [...tasks.filter(inReview)]
+    .sort((a, b) => (b.latest_at || b.submitted_at || b.rejected_at || "").localeCompare(a.latest_at || a.submitted_at || a.rejected_at || ""))
+  return (
+    <Card className="border-amber-200">
+      <CardContent className="space-y-2 p-4">
+        <p className="brand-label text-[11px] font-bold uppercase tracking-[0.12em] text-amber-900">Review log</p>
+        <p className="text-xs text-muted-foreground">Newest items waiting for approval are first, including rejected evidence and the reason it was rejected. You can approve it here.</p>
+        {waiting.length === 0 && <p className="text-sm text-muted-foreground">Nothing is waiting for review.</p>}
+        <ul className="space-y-1.5">
+          {waiting.map((task) => (
+            <li key={task.task_id}>
+              <a href={`#task-${task.task_id}`} className="block rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+                <span className="font-semibold">{task.client_name} · {PLATFORM_LABEL[task.platform] || task.platform}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{task.assignee_name} · {task.categories.map((row) => `${row.label} ${row.verified} of ${row.min}`).join(" · ")}</span>
+                {(task.rejection_reasons ?? []).slice(0, 3).map((reason, index) => (
+                  <span key={`${task.task_id}-${index}`} className="mt-1 block text-xs font-semibold text-amber-950">Rejected: {reason}</span>
+                ))}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}
+
+function AccessRoster() {
+  const qc = useQueryClient()
+  const { data } = useQuery({
+    queryKey: ["engagement-vas"],
+    queryFn: () => apiFetch<{ vas: { va_id: string; name: string; enabled: boolean; manual: boolean; has_engagement_tasks: boolean }[] }>("/engagement/vas"),
+  })
+  const toggle = useMutation({
+    mutationFn: (row: { va_id: string; enabled: boolean }) =>
+      apiFetch(`/engagement/vas/${row.va_id}`, { method: "PATCH", body: JSON.stringify({ enabled: row.enabled }) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["engagement-vas"] })
+      qc.invalidateQueries({ queryKey: ["engagement-access"] })
+      qc.invalidateQueries({ queryKey: ["engagement-tasks"] })
+    },
+  })
+  if (!data) return null
+  return (
+    <Card>
+      <CardContent className="space-y-2 p-4">
+        <p className="brand-label text-[11px] font-bold uppercase tracking-[0.12em] text-[#B8325F]">Who can upload</p>
+        <p className="text-xs text-muted-foreground">Virtual Assistants with Instagram, Facebook, or LinkedIn tasks are included. You can turn screenshot check on or off for one person. Pay is not shown here.</p>
+        <ul className="space-y-1.5">
+          {data.vas.map((row) => (
+            <li key={row.va_id} className="flex items-center justify-between gap-2 rounded-xl border bg-card px-3 py-2 text-sm">
+              <span className="min-w-0 truncate">{row.name}{row.has_engagement_tasks ? "" : " · no engagement tasks"}</span>
+              <Button type="button" size="sm" variant={row.enabled ? "outline" : "gold"} onClick={() => toggle.mutate({ va_id: row.va_id, enabled: !row.enabled })}>
+                {row.enabled ? "On" : "Off"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function EngagementPage() {
   const user = getAuthUser()
   const access = useEngagementAccess()
@@ -228,7 +306,7 @@ export function EngagementPage() {
         <div>
           <p className="brand-label text-[11px] font-bold uppercase tracking-[0.14em] text-[#B8325F]">Screenshot check</p>
           <h1 className="text-4xl text-[#B8325F]">Daily engagement evidence</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Upload screenshots on the client task that is already on the board. Verified totals come only from those screenshots. This does not change clock-in, timesheets, or the task list.</p>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Upload screenshots on the client task that is already on the board. Verified totals come only from those screenshots. You can go past the daily maximum, and that extra count stays. This does not change clock-in, timesheets, or the task list.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Input type="date" value={day || data?.work_date || ""} onChange={(event) => setDay(event.target.value)} className="w-auto" />
@@ -237,6 +315,8 @@ export function EngagementPage() {
         </div>
       </div>
       {error && <p className="text-sm text-red-600">{error instanceof Error ? error.message : "Could not load tasks."}</p>}
+      {user?.role === "admin" && <AccessRoster />}
+      {management && <ReviewLog tasks={data?.tasks ?? []} />}
       {data && data.tasks.length === 0 && (
         <Card><CardContent className="p-5 text-sm text-muted-foreground">No Instagram, Facebook, or LinkedIn engagement tasks for this date. The check uses tasks already on the board. It does not create a second task.</CardContent></Card>
       )}

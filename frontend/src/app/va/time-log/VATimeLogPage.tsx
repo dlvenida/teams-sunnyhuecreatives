@@ -246,18 +246,15 @@ export function VATimeLogPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 animate-fade-in">
-      {!isStaff && <MyProductivity />}
-      <div>
-        <h1 className="text-base font-semibold">{isStaff ? "Log my time" : "Log time"}</h1>
-        <p className="text-[11px] text-muted-foreground">
-          {isStaff
-            ? "Your own hours. To approve the team, use Review logs."
-            : showMoney
-              ? "Rate auto-fills from your approved My Rates profile. Use start and end time, or enter hours and minutes."
-              : "Log your own hours with a start and end time, or with hours and minutes."}
-        </p>
-      </div>
-      {isStaff && <TimeAreaTabs />}
+      {isStaff && (
+        <>
+          <div>
+            <h1 className="text-base font-semibold">Log my time</h1>
+            <p className="text-[11px] text-muted-foreground">Your own hours. To approve the team, use Review logs.</p>
+          </div>
+          <TimeAreaTabs />
+        </>
+      )}
 
       <Card>
         <CardHeader className="pb-2"><CardTitle>New Entry</CardTitle></CardHeader>
@@ -504,6 +501,15 @@ export function VATimeLogPage() {
           {logs.length === 0 && <p className="p-4 text-center text-xs text-muted-foreground">No entries yet. Clock in or submit your first log above.</p>}
         </CardContent>
       </Card>
+
+      {!isStaff && (
+        <p className="text-[11px] text-muted-foreground">
+          {showMoney
+            ? "Rate auto-fills from your approved My Rates profile. Use start and end time, or enter hours and minutes."
+            : "Log your own hours with a start and end time, or with hours and minutes."}
+        </p>
+      )}
+      {!isStaff && <MyProductivity />}
 
       {editingLog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setEditingLog(null)}>

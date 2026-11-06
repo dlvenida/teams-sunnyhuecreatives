@@ -550,20 +550,22 @@ def overall_status(
     workday_ended: bool,
     approved: bool,
 ) -> str:
-    if screenshot_count == 0:
-        return "incomplete" if workday_ended else "not_started"
+    """Below a minimum is Needs review, so management sees it. Over the maximum is Target exceeded."""
+    if screenshot_count == 0 and not workday_ended:
+        return "not_started"
     mins_met = all(row["verified"] >= row["min"] for row in categories) if categories else False
     any_over = any(row["verified"] > row["max"] for row in categories)
+    below = any(row["verified"] < row["min"] for row in categories) if categories else screenshot_count == 0
     if approved and mins_met and pending_review == 0:
         return "completed"
-    if pending_review > 0:
+    if below or pending_review > 0:
         return "needs_review"
     if mins_met and any_over:
         return "target_exceeded"
     if mins_met:
         return "target_met"
     if workday_ended:
-        return "incomplete"
+        return "needs_review"
     return "in_progress"
 
 
@@ -606,9 +608,9 @@ def summarize(
             "completion_pct": _completion(verified, target["min"]),
             "below_target": verified < target["min"],
         })
-        if verified < target["min"] and (workday_ended or submitted):
+        if verified < target["min"] and (screenshot_count > 0 or workday_ended):
             alerts.append({
-                **_alert("BELOW_TARGET", f"{target['label']} are below the minimum of {target['min']}. {verified} verified."),
+                **_alert("BELOW_TARGET", f"{target['label']} are below the minimum of {target['min']}. {verified} verified. This is in the review log."),
                 "screenshot_id": None,
                 "activity_id": None,
             })

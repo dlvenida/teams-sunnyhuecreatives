@@ -197,6 +197,29 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
   )
 }
 
+function ReviewLog({ tasks }: { tasks: EngagementTask[] }) {
+  const waiting = tasks.filter((task) => task.status === "needs_review")
+  return (
+    <Card className="border-amber-200">
+      <CardContent className="space-y-2 p-4">
+        <p className="brand-label text-[11px] font-bold uppercase tracking-[0.12em] text-amber-900">Review log</p>
+        <p className="text-xs text-muted-foreground">Tasks below a daily minimum, or with unclear evidence, wait here for management. Uploads can still be added.</p>
+        {waiting.length === 0 && <p className="text-sm text-muted-foreground">Nothing is waiting for review.</p>}
+        <ul className="space-y-1.5">
+          {waiting.map((task) => (
+            <li key={task.task_id}>
+              <a href={`#task-${task.task_id}`} className="block rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+                <span className="font-semibold">{task.client_name} · {PLATFORM_LABEL[task.platform] || task.platform}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{task.assignee_name} · {task.categories.map((row) => `${row.label} ${row.verified} of ${row.min}`).join(" · ")}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}
+
 function AccessRoster() {
   const qc = useQueryClient()
   const { data } = useQuery({
@@ -275,6 +298,7 @@ export function EngagementPage() {
       </div>
       {error && <p className="text-sm text-red-600">{error instanceof Error ? error.message : "Could not load tasks."}</p>}
       {user?.role === "admin" && <AccessRoster />}
+      {management && <ReviewLog tasks={data?.tasks ?? []} />}
       {data && data.tasks.length === 0 && (
         <Card><CardContent className="p-5 text-sm text-muted-foreground">No Instagram, Facebook, or LinkedIn engagement tasks for this date. The check uses tasks already on the board. It does not create a second task.</CardContent></Card>
       )}

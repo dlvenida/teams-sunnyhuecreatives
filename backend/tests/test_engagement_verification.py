@@ -252,11 +252,11 @@ class StatusTests(unittest.TestCase):
 
     def test_statuses(self):
         self.assertEqual(overall_status(screenshot_count=0, categories=self._cats(0), pending_review=0, workday_ended=False, approved=False), "not_started")
-        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=False, approved=False), "in_progress")
+        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=False, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=1, workday_ended=False, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(20), pending_review=0, workday_ended=False, approved=False), "target_met")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(26), pending_review=0, workday_ended=False, approved=False), "target_exceeded")
-        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=True, approved=False), "incomplete")
+        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=True, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(22), pending_review=0, workday_ended=True, approved=True), "completed")
         self.assertNotEqual(overall_status(screenshot_count=1, categories=self._cats(22), pending_review=0, workday_ended=True, approved=False), "completed")
 
@@ -320,6 +320,38 @@ class StatusTests(unittest.TestCase):
         )
         self.assertEqual(summary["status"], "target_exceeded")
         self.assertEqual(summary["categories"][0]["verified"], 21)
+
+    def test_below_minimum_goes_to_review_and_meeting_minimum_does_not(self):
+        def summary_for(dms, comments):
+            classified = []
+            for index in range(dms):
+                classified.append({"id": f"d{index}", "activity_type": "dm", "counted": True, "status": "verified", "alerts": []})
+            for index in range(comments):
+                classified.append({"id": f"c{index}", "activity_type": "comment", "counted": True, "status": "verified", "alerts": []})
+            return summarize(
+                "instagram",
+                classified,
+                screenshot_count=1,
+                unclear_screenshots=[],
+                targets=[
+                    {"key": "dm", "label": "Direct Messages", "min": 20, "max": 25},
+                    {"key": "comment", "label": "Comments", "min": 10, "max": 15},
+                ],
+                workday_ended=False,
+                approved=False,
+                submitted=False,
+            )
+
+        short = summary_for(15, 10)
+        met = summary_for(20, 10)
+        self.assertEqual(short["status"], "needs_review")
+        self.assertEqual(short["categories"][0]["verified"], 15)
+        self.assertTrue(any(alert["code"] == "BELOW_TARGET" for alert in short["alerts"]))
+        review_log = [row for row in (short, met) if row["status"] == "needs_review"]
+        self.assertEqual(len(review_log), 1)
+        self.assertEqual(review_log[0]["categories"][0]["verified"], 15)
+        self.assertEqual(met["status"], "target_met")
+        self.assertFalse(any(alert["code"] == "BELOW_TARGET" for alert in met["alerts"]))
 
     def test_summarize_does_not_accept_a_typed_total(self):
         self.assertNotIn("verified_total", inspect.signature(summarize).parameters)

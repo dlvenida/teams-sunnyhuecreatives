@@ -35,7 +35,7 @@ def _policy(method: str, path: str) -> str | None:
         return "admin"
     if path in {"/va/earnings", "/va/payroll-history"} or path.startswith("/va/work-logs"):
         return "self"
-    if path.startswith("/invoices") or path.startswith("/expenses") or path == "/dashboard/owner-finance":
+    if path.startswith("/invoices") or path.startswith("/expenses") or path.startswith("/manual-earnings") or path == "/dashboard/owner-finance":
         return "admin"
     if path == "/dashboard/summary":
         return "redacted"
@@ -134,6 +134,7 @@ class PayAccessTests(unittest.TestCase):
             ("GET", "/va-rates/mine"),
             ("GET", "/invoices"),
             ("GET", "/expenses"),
+            ("GET", "/manual-earnings"),
             ("GET", "/dashboard/summary"),
             ("GET", "/dashboard/owner-finance"),
             ("GET", "/work-logs"),

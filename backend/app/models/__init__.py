@@ -210,6 +210,7 @@ class Client(Base):
     billing_lines: Mapped[list["ClientBillingLine"]] = relationship(
         back_populates="client", cascade="all, delete-orphan", order_by="ClientBillingLine.sort_order"
     )
+    manual_earnings: Mapped[list["ManualEarning"]] = relationship(back_populates="client")
     proposer: Mapped["User | None"] = relationship(foreign_keys=[proposed_by])
 
 
@@ -657,6 +658,27 @@ class BusinessExpense(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ManualEarning(Base):
+    """Admin-only client income entered by hand, in USD or PHP, with or without an invoice."""
+
+    __tablename__ = "manual_earnings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("clients.id", ondelete="RESTRICT"), index=True
+    )
+    earned_date: Mapped[date] = mapped_column(Date, index=True)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(10), default="USD")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    client: Mapped["Client"] = relationship(back_populates="manual_earnings")
 
 
 class TimesheetSubmission(Base):

@@ -15,6 +15,7 @@ from app.models import (
     ClientApprovalStatus,
     Invoice,
     InvoiceStatus,
+    ManualEarning,
     PayrollRun,
     Project,
     Task,
@@ -28,6 +29,7 @@ from app.models import (
     WorkLog,
     WorkLogStatus,
 )
+from app.services.owner_finance import MoneySplit, combine, currency_code, pack_money, quantize_money
 from app.routers.work_logs import _serialize_log
 from app.schemas import DashboardSummary
 from app.services.billing import get_week_period
@@ -489,11 +491,11 @@ def owner_finance(
     date_to: date | None = None,
     usd_php_rate: Decimal | None = None,
 ):
-    """Admin-only owner earnings + expenses overview for a date range.
+    """Admin-only owner earnings and expenses for a custom date range.
 
-    Income = invoices issued in range (client currency, typically USD).
-    VA payroll = payroll runs paid in range (mixed USD/PHP — converted with rate).
-    Expenses = manual business expenses in range.
+    Income is invoices issued in the range plus manual earnings dated in the range.
+    USD and PHP stay in separate buckets. A rate combines them into one total in
+    dollars and the same total in pesos. Without a rate, nothing is converted.
     """
     today = date.today()
     if not date_from:
@@ -505,38 +507,56 @@ def owner_finance(
 
     rate = Decimal(str(usd_php_rate)) if usd_php_rate and usd_php_rate > 0 else None
 
-    def to_usd(amount: Decimal, currency: str) -> Decimal:
-        c = (currency or "USD").upper()
-        if c == "USD":
-            return amount
-        if c == "PHP" and rate:
-            return (amount / rate).quantize(Decimal("0.01"))
-        return amount  # unknown — leave as-is
-
-    def to_php(amount: Decimal, currency: str) -> Decimal | None:
-        if not rate:
-            return None
-        c = (currency or "USD").upper()
-        if c == "PHP":
-            return amount
-        if c == "USD":
-            return (amount * rate).quantize(Decimal("0.01"))
-        return None
-
     invoices = (
         db.query(Invoice)
         .options(joinedload(Invoice.client))
         .filter(Invoice.issue_date >= date_from, Invoice.issue_date <= date_to)
         .all()
     )
+    manual_rows = (
+        db.query(ManualEarning)
+        .options(joinedload(ManualEarning.client))
+        .filter(ManualEarning.earned_date >= date_from, ManualEarning.earned_date <= date_to)
+        .order_by(ManualEarning.earned_date.desc(), ManualEarning.created_at.desc())
+        .all()
+    )
     by_client: dict[str, dict] = {}
-    total_earned = Decimal("0")
+
+    def bucket(name: str, client_id) -> dict:
+        row = by_client.get(name)
+        if row is None:
+            row = {
+                "client_id": str(client_id) if client_id else None,
+                "client_name": name,
+                "usd": Decimal("0"),
+                "php": Decimal("0"),
+                "invoices": 0,
+                "manual": 0,
+            }
+            by_client[name] = row
+        elif client_id and not row["client_id"]:
+            row["client_id"] = str(client_id)
+        return row
+
+    def add_earned(row: dict, amount: Decimal, currency) -> None:
+        if currency_code(currency) == "PHP":
+            row["php"] += amount
+        else:
+            row["usd"] += amount
+
+    earned = MoneySplit()
     for inv in invoices:
         name = inv.client.name if inv.client else "Client"
-        row = by_client.setdefault(name, {"client_name": name, "earned": Decimal("0"), "invoices": 0})
-        row["earned"] += inv.amount
+        row = bucket(name, inv.client_id)
+        add_earned(row, inv.amount, inv.currency)
         row["invoices"] += 1
-        total_earned += inv.amount
+        earned.add(inv.amount, inv.currency)
+    for item in manual_rows:
+        name = item.client.name if item.client else "Client"
+        row = bucket(name, item.client_id)
+        add_earned(row, item.amount, item.currency)
+        row["manual"] += 1
+        earned.add(item.amount, item.currency)
 
     runs = (
         db.query(PayrollRun)
@@ -546,15 +566,10 @@ def owner_finance(
         )
         .all()
     )
-    # Also include runs whose period overlaps if paid_at filter is empty edge-case —
-    # primary filter is paid_at date for "what left the business this period".
-    total_va_usd = Decimal("0")
-    total_va_php_equiv = Decimal("0") if rate else None
+    # paid_at is what left the business in this date range.
+    va_pay = MoneySplit()
     for run in runs:
-        total_va_usd += to_usd(run.total_pay, run.currency)
-        php = to_php(run.total_pay, run.currency)
-        if php is not None and total_va_php_equiv is not None:
-            total_va_php_equiv += php
+        va_pay.add(run.total_pay, run.currency)
 
     expenses = (
         db.query(BusinessExpense)
@@ -562,45 +577,70 @@ def owner_finance(
         .order_by(BusinessExpense.expense_date.desc())
         .all()
     )
-    # Treat expense currency as USD unless PHP (convert if rate given)
-    total_expenses_usd = Decimal("0")
-    for e in expenses:
-        total_expenses_usd += to_usd(e.amount, e.currency)
+    expense_money = MoneySplit()
+    for expense in expenses:
+        expense_money.add(expense.amount, expense.currency)
 
-    net_usd = total_earned - total_va_usd - total_expenses_usd
-    net_php = (net_usd * rate).quantize(Decimal("0.01")) if rate else None
+    net = MoneySplit()
+    net.usd = earned.usd - va_pay.usd - expense_money.usd
+    net.php = earned.php - va_pay.php - expense_money.php
+
+    client_rows = []
+    for row in by_client.values():
+        usd = quantize_money(row["usd"])
+        php = quantize_money(row["php"])
+        combined_usd, combined_php = combine(usd, php, rate)
+        client_rows.append({
+            "client_id": row["client_id"],
+            "client_name": row["client_name"],
+            "earned_usd": str(usd),
+            "earned_php": str(php),
+            "combined_usd": str(combined_usd) if combined_usd is not None else None,
+            "combined_php": str(combined_php) if combined_php is not None else None,
+            "invoices": row["invoices"],
+            "manual": row["manual"],
+        })
+    client_rows.sort(
+        key=lambda row: (
+            Decimal(row["combined_usd"]) if row["combined_usd"] is not None else Decimal(row["earned_usd"]),
+            Decimal(row["earned_php"]),
+        ),
+        reverse=True,
+    )
 
     return {
         "period_start": str(date_from),
         "period_end": str(date_to),
         "usd_php_rate": str(rate) if rate else None,
-        "total_earned": str(total_earned),
-        "total_earned_php": str((total_earned * rate).quantize(Decimal("0.01"))) if rate else None,
-        "total_va_payroll": str(total_va_usd),
-        "total_va_payroll_php": str(total_va_php_equiv) if total_va_php_equiv is not None else None,
-        "total_expenses": str(total_expenses_usd),
-        "total_expenses_php": str((total_expenses_usd * rate).quantize(Decimal("0.01"))) if rate else None,
-        "net_profit": str(net_usd),
-        "net_profit_php": str(net_php) if net_php is not None else None,
-        "by_client": [
+        "earned": pack_money(earned, rate),
+        "va_payroll": pack_money(va_pay, rate),
+        "expense_totals": pack_money(expense_money, rate),
+        "net": pack_money(net, rate),
+        "by_client": client_rows,
+        "manual_earnings": [
             {
-                "client_name": r["client_name"],
-                "earned": str(r["earned"]),
-                "earned_php": str((r["earned"] * rate).quantize(Decimal("0.01"))) if rate else None,
-                "invoices": r["invoices"],
+                "id": str(item.id),
+                "client_id": str(item.client_id),
+                "client_name": item.client.name if item.client else "Client",
+                "client_active": bool(item.client.is_active) if item.client else False,
+                "earned_date": str(item.earned_date),
+                "description": item.description,
+                "amount": str(item.amount),
+                "currency": item.currency,
             }
-            for r in sorted(by_client.values(), key=lambda x: x["earned"], reverse=True)
+            for item in manual_rows
         ],
         "expenses": [
             {
-                "id": str(e.id),
-                "expense_date": str(e.expense_date),
-                "description": e.description,
-                "amount": str(e.amount),
-                "currency": e.currency,
+                "id": str(expense.id),
+                "expense_date": str(expense.expense_date),
+                "description": expense.description,
+                "amount": str(expense.amount),
+                "currency": expense.currency,
             }
-            for e in expenses
+            for expense in expenses
         ],
         "va_runs_count": len(runs),
         "invoices_count": len(invoices),
+        "manual_count": len(manual_rows),
     }

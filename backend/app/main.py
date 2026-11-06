@@ -15,6 +15,7 @@ from app.routers import (
     dashboard,
     expenses,
     invoices,
+    manual_earnings,
     notifications,
     payroll,
     profile,
@@ -71,6 +72,9 @@ def _describe(method: str, path: str) -> tuple[str, str]:
     rules = [
         ("work-logs" in p and tail == "approve", ("approve", "Approved a time log")),
         ("work-logs" in p and tail == "reject", ("reject", "Rejected a time log")),
+        ("manual-earnings" in p and method == "POST", ("create", "Added a manual earning")),
+        ("manual-earnings" in p and method == "PATCH", ("update", "Updated a manual earning")),
+        ("manual-earnings" in p and method == "DELETE", ("delete", "Removed a manual earning")),
         ("invoices" in p and tail == "generate", ("create", "Generated an invoice")),
         ("invoices" in p and tail == "mark-paid", ("update", "Marked an invoice as paid")),
         ("invoices" in p and tail == "mark-unpaid", ("update", "Marked an invoice as unpaid")),
@@ -150,6 +154,7 @@ app.include_router(va_portal.router)
 app.include_router(va_rates.router)
 app.include_router(dashboard.router)
 app.include_router(expenses.router)
+app.include_router(manual_earnings.router)
 app.include_router(payroll.router)
 app.include_router(reports.router)
 app.include_router(invoices.router)

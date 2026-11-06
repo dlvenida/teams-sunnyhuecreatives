@@ -78,8 +78,10 @@ export interface WorkLog {
   start_time?: string | null
   end_time?: string | null
   hours: string
-  va_rate: string
-  va_pay: string
+  va_rate: string | null
+  va_pay: string | null
+  rate_missing?: boolean | null
+  rate_note?: string | null
   notes?: string | null
   review_reason?: string | null
   status: "submitted" | "approved" | "rejected" | "invoiced"
@@ -200,6 +202,8 @@ export interface PayrollVA {
     hours: string
     rate?: string | null
     pay?: string | null
+    rate_missing?: boolean | null
+    rate_note?: string | null
     project_name?: string | null
     task_title?: string | null
     task_name?: string | null
@@ -229,6 +233,8 @@ export interface PayrollVA {
     skipped?: boolean | null
     adjusted?: boolean | null
     note?: string | null
+    rate_missing?: boolean | null
+    rate_note?: string | null
     currency?: "PHP" | "USD" | string | null
   }[]
   daily?: { work_date: string; hours: string }[]

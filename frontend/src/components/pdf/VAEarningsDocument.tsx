@@ -90,14 +90,16 @@ export interface VAEarningsPdfData {
   principal_name?: string | null
   location?: string | null
   range?: { hours: string; earned: string; entries: number; currency: string } | null
-  by_client: { client_name: string; hours: string; earned: string; pay_type: string; currency: string }[]
+  by_client: { client_name: string; hours: string; earned: string | null; pay_type: string; currency: string; rate_missing?: boolean; rate_note?: string | null }[]
   entries: {
     work_date: string
     client_name: string
     description: string
     hours: string
-    rate: string
-    pay: string
+    rate: string | null
+    pay: string | null
+    rate_missing?: boolean
+    rate_note?: string | null
     project_name?: string | null
     task_title?: string | null
   }[]
@@ -125,14 +127,18 @@ export function VAEarningsDocument({ data }: { data: VAEarningsPdfData }) {
       ? data.by_client.map((c) => ({
           title: `${c.client_name} · ${c.pay_type === "package" ? "Fixed Package" : "VA services"}`,
           sub: period,
-          rate: c.pay_type === "hourly" ? `${formatCurrency(Number(c.earned) / Math.max(Number(c.hours) || 1, 0.01), (c.currency || currency) as "PHP" | "USD")}/hr` : formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD"),
-          amount: formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD"),
+          rate: c.rate_missing
+            ? (c.rate_note || "No approved rate yet. Set it in My Rates.")
+            : c.pay_type === "hourly"
+              ? `${formatCurrency(Number(c.earned) / Math.max(Number(c.hours) || 1, 0.01), (c.currency || currency) as "PHP" | "USD")}/hr`
+              : formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD"),
+          amount: c.rate_missing ? "Not set" : formatCurrency(c.earned, (c.currency || currency) as "PHP" | "USD"),
         }))
       : data.entries.map((e) => ({
           title: e.client_name || "Services",
           sub: period,
-          rate: formatCurrency(e.rate, currency),
-          amount: formatCurrency(e.pay, currency),
+          rate: e.rate_missing ? (e.rate_note || "No approved rate yet. Set it in My Rates.") : formatCurrency(e.rate, currency),
+          amount: e.rate_missing ? "Not set" : formatCurrency(e.pay, currency),
         }))
 
   return (

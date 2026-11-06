@@ -75,6 +75,11 @@ export function TimeClockPage() {
     enabled: showMine,
   })
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false"), enabled: showMine })
+  const { data: outRate } = useQuery({
+    queryKey: ["va-rate-client", outClientId],
+    queryFn: () => apiFetch<{ id: string } | null>(`/va-rates/mine/for-client/${outClientId}`),
+    enabled: showMine && createLog && !!outClientId,
+  })
   const { data: adjustments = [] } = useQuery({ queryKey: ["clock-adjustments"], queryFn: () => apiFetch<TimeClockAdjustment[]>("/time-clock/adjustments"), enabled: showTeam })
   const { data: correctionRequests = [] } = useQuery({
     queryKey: ["clock-correction-requests"],
@@ -280,8 +285,11 @@ export function TimeClockPage() {
     },
     onError: (e: Error) => setTaskCreateError(e.message),
   })
-  const clockOutReady = !createLog || (!!outClientId && !!outTaskName.trim() && !!outDesc.trim())
-  const clockOutHint = !createLog ? "" : !outTaskName.trim() && !outDesc.trim()
+  const clockOutNeedsRate = createLog && !!outClientId && outRate === null
+  const clockOutReady = !createLog || (!!outClientId && !!outTaskName.trim() && !!outDesc.trim() && !!outRate)
+  const clockOutHint = !createLog ? "" : clockOutNeedsRate
+    ? "You need an approved rate for this client before you can log time. Set it in My Rates and wait until it is approved."
+    : !outTaskName.trim() && !outDesc.trim()
     ? "Add a task name and describe what you worked on before clocking out."
     : !outTaskName.trim()
       ? "Add a task name before clocking out. It is typed by you and is not filled in from My Task."

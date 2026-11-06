@@ -6,6 +6,7 @@ export interface PayslipTask {
   description: string
   hours: number
   amount: number
+  rateMissing?: boolean
 }
 
 export interface PayslipClient {
@@ -23,6 +24,8 @@ export interface PayslipClient {
   note?: string | null
   overrideAmount?: number | null
   deduction?: number | null
+  rateMissing?: boolean
+  rateNote?: string | null
 }
 
 export interface PayslipModel {
@@ -79,9 +82,10 @@ export function buildPayslip(
     const payType = breakdown?.pay_type ?? (rates.length ? "hourly" : null)
     const tasks: PayslipTask[] = sorted.map((e) => {
       const hours = num(e.hours)
-      const lineRate = num(e.rate) || rate || 0
-      const stored = e.pay != null && e.pay !== "" ? num(e.pay) : null
-      const amount = payType === "package"
+      const missing = Boolean(e.rate_missing)
+      const lineRate = missing ? 0 : (num(e.rate) || rate || 0)
+      const stored = !missing && e.pay != null && e.pay !== "" ? num(e.pay) : null
+      const amount = missing || payType === "package"
         ? 0
         : stored != null && stored > 0
           ? stored
@@ -98,6 +102,7 @@ export function buildPayslip(
         description: description && description !== task ? description : description || "",
         hours,
         amount,
+        rateMissing: missing,
       }
     })
     const hours = round2(tasks.reduce((s, t) => s + t.hours, 0))
@@ -125,6 +130,8 @@ export function buildPayslip(
       note: breakdown?.note ?? null,
       overrideAmount: breakdown?.override_amount != null && breakdown.override_amount !== "" ? round2(num(breakdown.override_amount)) : null,
       deduction: breakdown?.deduction != null && breakdown.deduction !== "" && num(breakdown.deduction) > 0 ? round2(num(breakdown.deduction)) : null,
+      rateMissing: Boolean(breakdown?.rate_missing) || tasks.some((task) => task.rateMissing),
+      rateNote: breakdown?.rate_note || (tasks.some((task) => task.rateMissing) ? "No approved rate yet. Set it in My Rates." : null),
     }
   }).sort((a, b) => Number(a.skipped) - Number(b.skipped) || b.amount - a.amount || b.hours - a.hours)
 

@@ -14,7 +14,11 @@ class ClockLogTests(unittest.TestCase):
         from app.models import (
             Client,
             ClientVARole,
+            Currency,
+            PayType,
             Project,
+            RateStatus,
+            VARate,
             Task,
             TaskComment,
             ClockStatus,
@@ -50,6 +54,10 @@ class ClockLogTests(unittest.TestCase):
             db.add(project)
             db.flush()
             db.add(ClientVARole(client_id=client.id, va_id=va.id, role="General VA"))
+            db.add(VARate(
+                va_id=va.id, client_id=client.id, pay_type=PayType.hourly, currency=Currency.USD,
+                amount=Decimal("4.50"), status=RateStatus.approved,
+            ))
             task = Task(title="Futureglaze | November Content", client_id=client.id, project_id=project.id, assignee_va_id=va.id)
             db.add(task)
             db.commit()
@@ -106,6 +114,7 @@ class ClockLogTests(unittest.TestCase):
             db.query(WorkLog).filter(WorkLog.id == log.id).delete()
             db.query(TimeClockEntry).filter(TimeClockEntry.id == done.id).delete()
             db.query(Task).filter(Task.id == task.id).delete()
+            db.query(VARate).filter(VARate.client_id == client.id).delete()
             db.query(ClientVARole).filter(ClientVARole.client_id == client.id, ClientVARole.va_id == va.id).delete()
             db.query(Project).filter(Project.id == project.id).delete()
             db.query(Client).filter(Client.id == client.id).delete()

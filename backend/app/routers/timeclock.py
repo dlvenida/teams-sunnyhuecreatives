@@ -239,6 +239,8 @@ def clock_out(body: ClockOutRequest, current: Annotated[CurrentUser, Depends(req
             raise HTTPException(400, "Add a task name before clocking out. It is typed by you and is not filled in from My Task.")
         if not description:
             raise HTTPException(400, "Describe what you worked on before clocking out.")
+        from app.services.va_rates import require_approved_rate
+        require_approved_rate(db, current.va_id, entry.client_id)
     if comment and not entry.task_id:
         raise HTTPException(400, "Choose My Task before posting a comment on the task thread.")
     now = datetime.now(timezone.utc)

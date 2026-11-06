@@ -25,6 +25,7 @@ from app.schemas import (
     ClientBillingLineWrite,
     InvoiceDraftLineResponse,
     InvoiceGenerateRequest,
+    PeriodLogRow,
     InvoiceLineItemResponse,
     InvoiceLineItemUpdate,
     InvoicePrepareResponse,
@@ -39,6 +40,7 @@ from app.services.client_billing import (
     SETUP_TYPES,
     build_setup_drafts,
     clean_invoice_text,
+    hour_description,
     normalize_invoice_line,
     quantize_money,
 )
@@ -127,6 +129,46 @@ def get_next_invoice_number(
 ):
     numbers = [inv.invoice_number for inv in db.query(Invoice.invoice_number).all()]
     return {"invoice_number": next_invoice_number(numbers, year)}
+
+
+@router.get("/period-logs", response_model=list[PeriodLogRow])
+def list_period_logs(
+    client_id: UUID,
+    year: int,
+    month: int,
+    cutoff: int,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Approved logs for one client and billing period. Nothing is changed."""
+    period_start, period_end, _label = get_billing_period(year, month, cutoff)
+    logs = (
+        db.query(WorkLog)
+        .options(joinedload(WorkLog.task), joinedload(WorkLog.va))
+        .filter(
+            WorkLog.client_id == client_id,
+            WorkLog.work_date >= period_start,
+            WorkLog.work_date <= period_end,
+            WorkLog.status == WorkLogStatus.approved,
+        )
+        .order_by(WorkLog.work_date, WorkLog.created_at)
+        .all()
+    )
+    rows = []
+    for log in logs:
+        task_name = (log.task_name or "").strip()
+        if not task_name and log.task is not None:
+            task_name = log.task.title
+        rows.append(PeriodLogRow(
+            id=log.id,
+            work_date=log.work_date,
+            task_name=task_name or "Logged work",
+            description=log.description_plain or "",
+            hours=log.hours,
+            va_name=log.va.name if log.va else None,
+            project_id=log.project_id,
+        ))
+    return rows
 
 
 def _period_logs(db: Session, client_id: UUID, period_start, period_end):
@@ -440,6 +482,42 @@ def prepare_invoice(
     )
 
 
+def _remaining_hourly_line(
+    db: Session,
+    client_id: UUID,
+    period_start,
+    period_end,
+    period_label: str,
+    rate: Decimal,
+    pulled_ids: set[UUID],
+) -> dict | None:
+    """Hourly charge for approved logs that were not pulled onto a manual line."""
+    approved, _submitted = _period_logs(db, client_id, period_start, period_end)
+    remaining = [log for log in approved if log.id not in pulled_ids]
+    hours = sum((log.hours for log in remaining), Decimal("0"))
+    if hours <= 0:
+        return None
+    amount = (hours * rate).quantize(Decimal("0.01"))
+    label = period_label.replace("\u2013", "-").replace("\u2014", "-")
+    return {
+        "project_id": None,
+        "billing_type": "hourly",
+        "description": f"Social Media VA Services - {label}",
+        "hours": quantize_money(hours),
+        "rate": quantize_money(rate),
+        "amount": amount,
+    }
+
+
+def _project_hours_excluding(db: Session, client_id: UUID, period_start, period_end, project_id: UUID, pulled_ids: set[UUID]) -> Decimal:
+    approved, _submitted = _period_logs(db, client_id, period_start, period_end)
+    hours = sum(
+        (log.hours for log in approved if log.project_id == project_id and log.id not in pulled_ids),
+        Decimal("0"),
+    )
+    return quantize_money(hours)
+
+
 def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client | None, period_start, period_end, period_label) -> Invoice:
     """Create an invoice from the reviewed lines. Logs, presets, and the client list stay as they are."""
     one_off = bool((body.one_off_name or "").strip())
@@ -449,6 +527,15 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
         raise HTTPException(status_code=400, detail="Choose a client or type a one-off client name")
     if not body.lines:
         raise HTTPException(status_code=400, detail="Add at least one billing line or extra charge")
+    pulled_ids: set[UUID] = set()
+    prepared_lines = []
+    for raw in body.lines:
+        if raw.billing_type == "manual" and raw.pulled_log_ids:
+            pulled_ids.update(raw.pulled_log_ids)
+            # Hours on a pulled line are a reference in the admin screen only.
+            raw = raw.model_copy(update={"hours": None, "rate": None})
+        prepared_lines.append(raw)
+    body = body.model_copy(update={"lines": prepared_lines})
     currency = (body.currency or "USD").upper()
     if currency not in ("USD", "PHP"):
         raise HTTPException(status_code=400, detail="Currency must be USD or PHP")
@@ -460,9 +547,37 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
                 raise HTTPException(status_code=400, detail="A one-off invoice can only use manual lines and extra charges")
             project_name = _project_for_client(db, client.id, raw.project_id).name
         try:
-            normalized.append(normalize_invoice_line(raw, project_name, one_off=one_off, currency=currency))
+            row = normalize_invoice_line(raw, project_name, one_off=one_off, currency=currency)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if raw.billing_type == "actual_hours" and pulled_ids and raw.project_id is not None and client is not None:
+            hours = _project_hours_excluding(db, client.id, period_start, period_end, raw.project_id, pulled_ids)
+            if hours <= 0:
+                continue
+            rate = quantize_money(raw.rate if raw.rate is not None else (body.rate or 0))
+            amount = quantize_money(hours * rate)
+            row = {
+                "project_id": raw.project_id,
+                "billing_type": "actual_hours",
+                "description": hour_description(project_name, hours, rate, amount, currency),
+                "hours": hours,
+                "rate": rate,
+                "amount": amount,
+            }
+        normalized.append(row)
+    has_hour_line = any(row["billing_type"] in {"entered_hours", "actual_hours", "hourly"} for row in normalized)
+    if (
+        pulled_ids
+        and not has_hour_line
+        and client is not None
+        and body.billing_type == BillingType.hourly
+        and body.rate is not None
+    ):
+        hourly_line = _remaining_hourly_line(
+            db, client.id, period_start, period_end, period_label, body.rate, pulled_ids,
+        )
+        if hourly_line is not None:
+            normalized.insert(0, hourly_line)
     hour_kinds = {"entered_hours", "actual_hours", "hourly", "manual"}
     kinds = {row["billing_type"] for row in normalized if row["billing_type"] != "extra"}
     if kinds <= {"flat_fee", "package", "extra"} or not kinds:

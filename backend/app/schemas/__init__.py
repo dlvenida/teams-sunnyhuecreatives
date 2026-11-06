@@ -926,6 +926,18 @@ class InvoiceDraftLine(BaseModel):
     hours: Decimal | None = None
     rate: Decimal | None = None
     amount: Decimal | None = None
+    # Approved logs grouped onto this manual line. They are not billed hourly.
+    pulled_log_ids: list[UUID] = []
+
+
+class PeriodLogRow(BaseModel):
+    id: UUID
+    work_date: date
+    task_name: str
+    description: str
+    hours: Decimal
+    va_name: str | None = None
+    project_id: UUID | None = None
 
 
 class InvoiceDraftLineResponse(BaseModel):

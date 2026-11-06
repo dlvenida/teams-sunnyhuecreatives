@@ -535,6 +535,8 @@ class Invoice(Base):
     issue_date: Mapped[date] = mapped_column(Date)
     due_date: Mapped[date] = mapped_column(Date)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    include_task_breakdown: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    task_breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     client: Mapped["Client"] = relationship(back_populates="invoices")

@@ -122,7 +122,38 @@ export interface Invoice {
   issue_date: string
   due_date: string
   paid_at?: string | null
+  include_task_breakdown?: boolean
+  task_breakdown?: InvoiceTaskBreakdown | null
   line_items: InvoiceLineItem[]
+}
+
+export interface InvoiceTaskRow {
+  date?: string
+  date_label?: string
+  name: string
+  description?: string
+  hours?: string | null
+  rate?: string | null
+  amount?: string | null
+  reference_only?: boolean
+}
+
+export interface InvoiceTaskGroup {
+  name: string
+  billing?: "hourly" | "flat" | "extra" | string
+  summary?: string
+  detail?: string
+  client_note?: string
+  hours?: string | null
+  rate?: string | null
+  amount?: string | null
+  reference_hours?: boolean
+  tasks?: InvoiceTaskRow[]
+}
+
+export interface InvoiceTaskBreakdown {
+  service_title?: string
+  groups?: InvoiceTaskGroup[]
 }
 
 export interface InvoiceLineItem {

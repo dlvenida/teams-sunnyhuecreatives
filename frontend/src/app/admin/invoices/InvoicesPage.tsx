@@ -60,6 +60,7 @@ export function InvoicesPage() {
   const [pdfFilename, setPdfFilename] = useState("invoice.pdf")
   const [generateError, setGenerateError] = useState("")
   const [generateSuccess, setGenerateSuccess] = useState("")
+  const [includeBreakdown, setIncludeBreakdown] = useState(false)
   const [source, setSource] = useState<"saved" | "oneoff">("saved")
   const [oneOff, setOneOff] = useState({ name: "", email: "", business: "", address: "", currency: "USD" as "USD" | "PHP" })
   type PeriodLog = {
@@ -258,6 +259,7 @@ export function InvoicesPage() {
     mutationFn: () => {
       const currency = source === "oneoff" ? oneOff.currency : "USD"
       const hasPulls = manualLines.some((line) => (line.pulled_log_ids || []).length > 0)
+      const safeRate = Number.isFinite(rateNum) ? rateNum : null
       const pack = (line: DraftLine) => {
         if (line.billing_type === "actual_hours" && hasPulls) {
           const hours = hoursLeftOnPreset(line)
@@ -298,7 +300,7 @@ export function InvoicesPage() {
           month: form.month,
           cutoff: form.cutoff,
           billing_type: hasPulls ? form.billing_type : (lines.length ? null : form.billing_type),
-          rate: hasPulls ? rateNum : (lines.length ? null : rateNum),
+          rate: hasPulls ? safeRate : (lines.length ? null : safeRate),
           invoice_number: form.invoice_number || null,
           payment_method: form.payment_method,
           bank_details: form.bank_details || null,
@@ -306,7 +308,8 @@ export function InvoicesPage() {
           package_id: lines.length ? null : (form.package_id || null),
           included_hours: lines.length ? null : (form.included_hours ? parseFloat(form.included_hours) : null),
           overage_rate: lines.length ? null : (form.overage_rate ? parseFloat(form.overage_rate) : null),
-          service_description: lines.length ? null : (form.service_description.trim() || null),
+          service_description: form.service_description.trim() || null,
+          include_task_breakdown: includeBreakdown,
           lines: lines.length ? lines : null,
           one_off_name: source === "oneoff" ? oneOff.name.trim() : null,
           one_off_email: source === "oneoff" ? oneOff.email.trim() || null : null,
@@ -612,8 +615,22 @@ export function InvoicesPage() {
               rows={3}
             />
             <p className="mt-1 text-[10px] text-muted-foreground">
-              Type exactly what the client should see on the PDF. Leave blank to use “Social Media VA Services — [period]” (never “Engagement Package”). The grey hint text never appears on the invoice.
+              Type exactly what the client should see on the PDF. Leave blank to title the hourly work "Social Media VA Services - [period]". The grey hint text never appears on the invoice.
             </p>
+            <label className="mt-3 flex items-start gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={includeBreakdown}
+                onChange={(e) => setIncludeBreakdown(e.target.checked)}
+              />
+              <span>
+                <span className="font-semibold">Include detailed task breakdown</span>
+                <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                  Page 1 lists each task with hours, rate, and amount. A second page adds the date, full description, and cost of every task. Leave this off for a one-page summary. The summary still lists the work.
+                </span>
+              </span>
+            </label>
           </div>
         </div>
 
@@ -944,7 +961,7 @@ export function InvoicesPage() {
             </div>
             <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarClock className="h-3.5 w-3.5" /> Net {detail.payment_terms_days} days via {detail.payment_method}{detail.paid_at ? ` · Paid ${formatDate(detail.paid_at.slice(0, 10))}` : ""}</p>
             <p className="mt-4 text-[11px] text-muted-foreground">
-              Customize each service description before sending the PDF to the client. Time logs stay internal and are not shown on the invoice.
+              Customize each service description before sending the PDF. The client PDF lists the task name, date, and description. VA pay stays off this invoice.
             </p>
             <div className="mt-2 overflow-x-auto rounded-xl border">
               <table className="w-full text-xs">

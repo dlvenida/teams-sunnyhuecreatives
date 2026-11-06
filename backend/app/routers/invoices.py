@@ -44,6 +44,16 @@ from app.services.client_billing import (
     normalize_invoice_line,
     quantize_money,
 )
+from app.services.invoice_breakdown import (
+    attach_log_text,
+    breakdown_payload,
+    flat_group,
+    groups_for_charge,
+    group_hourly_logs,
+    line_description,
+    plain_group,
+    pop_private,
+)
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -91,6 +101,8 @@ def _serialize_invoice(inv: Invoice) -> InvoiceResponse:
         issue_date=inv.issue_date,
         due_date=inv.due_date,
         paid_at=inv.paid_at,
+        include_task_breakdown=bool(inv.include_task_breakdown),
+        task_breakdown=inv.task_breakdown,
         line_items=[
             InvoiceLineItemResponse(
                 id=li.id,
@@ -174,7 +186,7 @@ def list_period_logs(
 def _period_logs(db: Session, client_id: UUID, period_start, period_end):
     base = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.sub_client))
+        .options(joinedload(WorkLog.sub_client), joinedload(WorkLog.task))
         .filter(
             WorkLog.client_id == client_id,
             WorkLog.work_date >= period_start,
@@ -291,7 +303,7 @@ def preview_invoice(
         message = "Set a rate/amount to generate. Client invoices do not require VA timesheet approval."
 
     return InvoicePreviewResponse(
-        period_label=period_label,
+        period_label=clean_invoice_text(period_label),
         period_start=period_start,
         period_end=period_end,
         approved_entries=len(approved),
@@ -473,7 +485,7 @@ def prepare_invoice(
     else:
         message = "This client has no saved billing lines yet. Add lines for this invoice, or save a setup on the client."
     return InvoicePrepareResponse(
-        period_label=period_label,
+        period_label=clean_invoice_text(period_label),
         period_start=period_start,
         period_end=period_end,
         client_rate=quantize_money(client.default_rate or 0),
@@ -483,30 +495,30 @@ def prepare_invoice(
 
 
 def _remaining_hourly_line(
-    db: Session,
-    client_id: UUID,
-    period_start,
-    period_end,
+    approved: list[WorkLog],
     period_label: str,
     rate: Decimal,
     pulled_ids: set[UUID],
+    service_title: str | None,
 ) -> dict | None:
-    """Hourly charge for approved logs that were not pulled onto a manual line."""
-    approved, _submitted = _period_logs(db, client_id, period_start, period_end)
+    """Hourly charge for approved logs that were not pulled onto another line."""
     remaining = [log for log in approved if log.id not in pulled_ids]
     hours = sum((log.hours for log in remaining), Decimal("0"))
     if hours <= 0:
         return None
-    amount = (hours * rate).quantize(Decimal("0.01"))
-    label = period_label.replace("\u2013", "-").replace("\u2014", "-")
-    return {
+    safe_rate = quantize_money(rate or 0)
+    amount = quantize_money(hours * safe_rate)
+    label = clean_invoice_text(period_label)
+    title = clean_invoice_text(service_title) or f"Social Media VA Services - {label}"
+    row = {
         "project_id": None,
         "billing_type": "hourly",
-        "description": f"Social Media VA Services - {label}",
+        "description": title,
         "hours": quantize_money(hours),
-        "rate": quantize_money(rate),
+        "rate": safe_rate,
         "amount": amount,
     }
+    return attach_log_text(row, remaining, reference=False, title=title)
 
 
 def _project_hours_excluding(db: Session, client_id: UUID, period_start, period_end, project_id: UUID, pulled_ids: set[UUID]) -> Decimal:
@@ -527,13 +539,18 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
         raise HTTPException(status_code=400, detail="Choose a client or type a one-off client name")
     if not body.lines:
         raise HTTPException(status_code=400, detail="Add at least one billing line or extra charge")
+    approved: list[WorkLog] = []
+    if client is not None:
+        approved, _submitted_count = _period_logs(db, client.id, period_start, period_end)
+    logs_by_id = {log.id: log for log in approved}
     pulled_ids: set[UUID] = set()
     prepared_lines = []
     for raw in body.lines:
-        if raw.billing_type == "manual" and raw.pulled_log_ids:
+        if raw.pulled_log_ids:
             pulled_ids.update(raw.pulled_log_ids)
-            # Hours on a pulled line are a reference in the admin screen only.
-            raw = raw.model_copy(update={"hours": None, "rate": None})
+            # Hours on a pulled package or manual line are a reference in the admin screen only.
+            if raw.billing_type in ("manual", "package", "hourly"):
+                raw = raw.model_copy(update={"hours": None, "rate": None})
         prepared_lines.append(raw)
     body = body.model_copy(update={"lines": prepared_lines})
     currency = (body.currency or "USD").upper()
@@ -550,20 +567,29 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
             row = normalize_invoice_line(raw, project_name, one_off=one_off, currency=currency)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if raw.billing_type == "actual_hours" and pulled_ids and raw.project_id is not None and client is not None:
-            hours = _project_hours_excluding(db, client.id, period_start, period_end, raw.project_id, pulled_ids)
-            if hours <= 0:
-                continue
-            rate = quantize_money(raw.rate if raw.rate is not None else (body.rate or 0))
-            amount = quantize_money(hours * rate)
-            row = {
-                "project_id": raw.project_id,
-                "billing_type": "actual_hours",
-                "description": hour_description(project_name, hours, rate, amount, currency),
-                "hours": hours,
-                "rate": rate,
-                "amount": amount,
-            }
+        pulled_logs = [logs_by_id[log_id] for log_id in raw.pulled_log_ids if log_id in logs_by_id]
+        if raw.billing_type == "actual_hours" and client is not None and raw.project_id is not None:
+            project_logs = [
+                log for log in approved if log.project_id == raw.project_id and log.id not in pulled_ids
+            ]
+            if pulled_ids:
+                hours = _project_hours_excluding(db, client.id, period_start, period_end, raw.project_id, pulled_ids)
+                if hours <= 0:
+                    continue
+                rate = quantize_money(raw.rate if raw.rate is not None else (body.rate or 0))
+                amount = quantize_money(hours * rate)
+                row = {
+                    "project_id": raw.project_id,
+                    "billing_type": "actual_hours",
+                    "description": hour_description(project_name, hours, rate, amount, currency),
+                    "hours": hours,
+                    "rate": rate,
+                    "amount": amount,
+                }
+            if project_logs:
+                row = attach_log_text(row, project_logs, reference=False, title=row["description"])
+        elif pulled_logs and raw.billing_type in ("manual", "package", "hourly"):
+            row = attach_log_text(row, pulled_logs, reference=True)
         normalized.append(row)
     has_hour_line = any(row["billing_type"] in {"entered_hours", "actual_hours", "hourly"} for row in normalized)
     if (
@@ -571,10 +597,12 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
         and not has_hour_line
         and client is not None
         and body.billing_type == BillingType.hourly
-        and body.rate is not None
     ):
+        rate_value = body.rate if body.rate is not None else Decimal("0")
+        if rate_value < 0:
+            raise HTTPException(status_code=400, detail="Rate cannot be negative")
         hourly_line = _remaining_hourly_line(
-            db, client.id, period_start, period_end, period_label, body.rate, pulled_ids,
+            approved, period_label, rate_value, pulled_ids, body.service_description,
         )
         if hourly_line is not None:
             normalized.insert(0, hourly_line)
@@ -600,7 +628,7 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
         one_off_business=clean_invoice_text(body.one_off_business) if one_off and body.one_off_business else None,
         one_off_address=clean_invoice_text(body.one_off_address) if one_off and body.one_off_address else None,
         currency=currency,
-        period_label=period_label,
+        period_label=clean_invoice_text(period_label),
         period_start=period_start,
         period_end=period_end,
         total_hours=quantize_money(total_hours),
@@ -613,21 +641,27 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
         payment_terms_days=body.payment_terms_days,
         issue_date=issue_date,
         due_date=issue_date + timedelta(days=body.payment_terms_days),
+        include_task_breakdown=bool(body.include_task_breakdown),
+        task_breakdown=breakdown_payload(
+            body.service_description,
+            [group for row in normalized for group in groups_for_charge(row)],
+        ),
     )
     db.add(invoice)
     db.flush()
     for row in normalized:
+        stored = pop_private(row)
         db.add(
             InvoiceLineItem(
                 invoice_id=invoice.id,
                 work_log_id=None,
-                project_id=row["project_id"],
-                line_kind=row["billing_type"],
+                project_id=stored["project_id"],
+                line_kind=stored["billing_type"],
                 line_date=period_end,
-                description=row["description"],
-                hours=row["hours"],
-                rate=row["rate"],
-                amount=row["amount"],
+                description=stored["description"],
+                hours=stored["hours"],
+                rate=stored["rate"],
+                amount=stored["amount"],
             )
         )
     db.commit()
@@ -711,7 +745,7 @@ def generate_invoice(
     invoice = Invoice(
         invoice_number=invoice_number,
         client_id=body.client_id,
-        period_label=period_label,
+        period_label=clean_invoice_text(period_label),
         period_start=period_start,
         period_end=period_end,
         total_hours=total_hours,
@@ -732,35 +766,41 @@ def generate_invoice(
         log.status = WorkLogStatus.invoiced
         log.invoice_id = invoice.id
 
-    custom = (body.service_description or "").strip()
+    custom = clean_invoice_text(body.service_description)
     # Never invent package marketing copy. Blank → service title + period only.
-    default_service = f"Social Media VA Services - {period_label}"
+    default_service = clean_invoice_text(f"Social Media VA Services - {period_label}")
+    task_groups: list[dict] = []
 
-    def _client_desc(fallback_title: str) -> str:
-        if custom:
-            return custom
-        return fallback_title
+    def _with_tasks(title: str, detail_logs: list[WorkLog], *, reference: bool) -> str:
+        if detail_logs:
+            return line_description(title, detail_logs, reference=reference)
+        return clean_invoice_text(title)
 
-    # Client-facing lines: custom text exactly as typed, or a clean service + period default.
+    # Client-facing lines: typed text exactly as entered, plus the task writeups.
     if custom:
+        reference = billing_type != BillingType.hourly
         db.add(
             InvoiceLineItem(
                 invoice_id=invoice.id,
                 work_log_id=None,
                 line_date=period_end,
-                description=custom,
-                hours=total_hours,
-                rate=rate,
+                description=_with_tasks(custom, logs, reference=reference),
+                hours=Decimal("0.00") if reference else total_hours,
+                rate=Decimal("0.00") if reference else rate,
                 amount=amount,
             )
         )
+        if billing_type == BillingType.hourly:
+            task_groups = group_hourly_logs(logs, rate, amount) if logs else []
+        elif logs or amount:
+            task_groups = [flat_group(custom, amount, logs)]
     elif billing_type == BillingType.hourly:
         if logs:
-            groups: dict[UUID | None, list[WorkLog]] = {}
+            by_sub: dict[UUID | None, list[WorkLog]] = {}
             for log in logs:
-                groups.setdefault(log.sub_client_id, []).append(log)
+                by_sub.setdefault(log.sub_client_id, []).append(log)
 
-            for group_logs in groups.values():
+            for group_logs in by_sub.values():
                 label = (
                     group_logs[0].sub_client.name
                     if group_logs[0].sub_client is not None
@@ -768,17 +808,19 @@ def generate_invoice(
                 )
                 group_hours = sum((log.hours for log in group_logs), Decimal("0"))
                 group_amount = (group_hours * rate).quantize(Decimal("0.01"))
+                title = clean_invoice_text(f"Social Media VA Services - {label} - {period_label}")
                 db.add(
                     InvoiceLineItem(
                         invoice_id=invoice.id,
                         work_log_id=None,
                         line_date=period_end,
-                        description=_client_desc(f"Social Media VA Services - {label} - {period_label}"),
+                        description=_with_tasks(title, group_logs, reference=False),
                         hours=group_hours,
                         rate=rate,
                         amount=group_amount,
                     )
                 )
+            task_groups = group_hourly_logs(logs, rate, amount)
         else:
             db.add(
                 InvoiceLineItem(
@@ -791,6 +833,8 @@ def generate_invoice(
                     amount=Decimal("0.00"),
                 )
             )
+            empty = plain_group(default_service, 0, rate, 0, "hourly")
+            task_groups = [empty] if empty else []
 
     elif billing_type == BillingType.fixed:
         db.add(
@@ -798,12 +842,14 @@ def generate_invoice(
                 invoice_id=invoice.id,
                 work_log_id=None,
                 line_date=period_end,
-                description=default_service,
-                hours=total_hours,
-                rate=rate,
+                description=_with_tasks(default_service, logs, reference=True),
+                hours=Decimal("0.00"),
+                rate=Decimal("0.00"),
                 amount=amount,
             )
         )
+        if logs or amount:
+            task_groups = [flat_group(default_service, amount, logs)]
     elif billing_type == BillingType.package_hours:
         included = included_hours or Decimal("0")
         package_hours = min(total_hours, included) if included else total_hours
@@ -812,25 +858,32 @@ def generate_invoice(
                 invoice_id=invoice.id,
                 work_log_id=None,
                 line_date=period_end,
-                description=default_service,
-                hours=package_hours,
-                rate=rate,
+                description=_with_tasks(default_service, logs, reference=True),
+                hours=Decimal("0.00"),
+                rate=Decimal("0.00"),
                 amount=rate,
             )
         )
+        task_groups = [flat_group(default_service, rate, logs)]
         if overage_hrs and overage_hrs > 0:
+            overage_title = clean_invoice_text(f"Additional services - {period_label}")
             db.add(
                 InvoiceLineItem(
                     invoice_id=invoice.id,
                     work_log_id=None,
                     line_date=period_end,
-                    description=f"Additional services - {period_label}",
+                    description=overage_title,
                     hours=overage_hrs,
                     rate=overage_rate or Decimal("0"),
                     amount=overage_amt or Decimal("0"),
                 )
             )
+            overage_group = plain_group(overage_title, overage_hrs, overage_rate or 0, overage_amt or 0, "hourly")
+            if overage_group:
+                task_groups.append(overage_group)
 
+    invoice.include_task_breakdown = bool(body.include_task_breakdown)
+    invoice.task_breakdown = breakdown_payload(custom, task_groups)
     db.commit()
     invoice = (
         db.query(Invoice)

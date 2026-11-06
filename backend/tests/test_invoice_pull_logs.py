@@ -5,17 +5,30 @@ from decimal import Decimal
 from uuid import uuid4
 
 from app.database import SessionLocal
-from app.models import Client, Invoice, PaymentMethod, Project, VA, WorkLog, WorkLogStatus
+from app.models import Client, Currency, Invoice, PaymentMethod, Project, User, UserRole, VA, WorkLog, WorkLogStatus
 from app.routers.invoices import _generate_flexible, list_period_logs
 from app.schemas import InvoiceDraftLine, InvoiceGenerateRequest
+from app.services.invoice_breakdown import walk_strings
+
+
+def _va(db):
+    va = db.query(VA).first()
+    if va:
+        return va
+    user = User(email=f"va-{uuid4().hex[:8]}@example.com", password_hash="x", role=UserRole.va, display_name="Tester")
+    db.add(user)
+    db.flush()
+    va = VA(user_id=user.id, name="Tester", currency=Currency.USD)
+    db.add(va)
+    db.flush()
+    return va
 
 
 class PullLogsInvoiceTests(unittest.TestCase):
     def test_pulled_logs_leave_hourly_and_stay_unchanged(self):
         db = SessionLocal()
         try:
-            va = db.query(VA).first()
-            self.assertIsNotNone(va)
+            va = _va(db)
             client = Client(
                 name=f"Item71 {uuid4().hex[:8]}",
                 billing_type="hourly",
@@ -105,14 +118,32 @@ class PullLogsInvoiceTests(unittest.TestCase):
             manual = next(row for row in invoice.line_items if row.line_kind == "manual")
             self.assertEqual(hourly.hours, Decimal("6.00"))
             self.assertEqual(hourly.amount, Decimal("90.00"))
+            self.assertIn("Calendar captions", hourly.description)
+            self.assertIn("Draft November captions", hourly.description)
+            self.assertIn("Story replies", hourly.description)
             self.assertNotIn("IG package shoot", hourly.description)
-            self.assertNotIn("–", hourly.description)
-            self.assertNotIn("—", hourly.description)
+            self.assertNotIn("\u2013", hourly.description)
+            self.assertNotIn("\u2014", hourly.description)
+            self.assertIn("IG package", manual.description)
+            self.assertIn("IG package shoot", manual.description)
+            self.assertIn("One-off shoot", manual.description)
             self.assertEqual(manual.line_kind, "manual")
             self.assertEqual(manual.amount, Decimal("75.00"))
             self.assertEqual(manual.hours or Decimal("0"), Decimal("0"))
             self.assertEqual(invoice.total_hours, Decimal("6.00"))
             self.assertEqual(invoice.amount, Decimal("165.00"))
+            groups = (invoice.task_breakdown or {}).get("groups") or []
+            self.assertEqual(sum(Decimal(group["amount"]) for group in groups), Decimal("165.00"))
+            hourly_groups = [group for group in groups if group["billing"] == "hourly"]
+            self.assertEqual(sum(Decimal(group["hours"]) for group in hourly_groups), Decimal("6.00"))
+            self.assertTrue(all(not group["reference_hours"] for group in hourly_groups))
+            flat_groups = [group for group in groups if group["billing"] == "flat"]
+            self.assertEqual(sum(Decimal(group["amount"]) for group in flat_groups), Decimal("75.00"))
+            self.assertTrue(all(group["reference_hours"] for group in flat_groups))
+            blob = "\n".join(walk_strings(invoice.task_breakdown))
+            self.assertNotIn("IG package shoot", "\n".join(group["detail"] for group in hourly_groups))
+            self.assertNotIn("\u2014", blob)
+            self.assertNotIn("\u2013", blob)
 
             preset = InvoiceGenerateRequest(
                 client_id=client.id,

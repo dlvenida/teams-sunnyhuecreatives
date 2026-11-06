@@ -13,6 +13,7 @@ import { parseUsdPhpRate } from "@/lib/pesoEstimate"
 import { PayrollDocument } from "@/components/pdf/PayrollDocument"
 import { PdfPreviewModal } from "@/components/pdf-viewer/PdfPreviewModal"
 import { PayslipPaperModal } from "@/components/payroll/PayslipPaperModal"
+import { PersonTimesheet } from "@/components/payroll/PersonTimesheet"
 import { TimesheetReviewPanel } from "@/components/payroll/TimesheetReviewPanel"
 import { buildPayslip, type PayslipClient } from "@/lib/payslip"
 import { TimeEntryModeFields, durationError, splitStoredHours, timingBody, type EntryMode } from "@/components/logs/TimeEntryModeFields"
@@ -44,6 +45,16 @@ function payrollRequestWindow(period: string, dateFrom: string, dateTo: string) 
 }
 function initials(name: string) { return name.split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase() }
 const n = (v?: string | number | null) => Number(v ?? 0)
+
+function canOfferPay(va: PayrollVA) {
+  return n(va.total_hours) > 0 || n(va.total_pay) > 0
+}
+
+function markPaidTitle(va: PayrollVA) {
+  if (!va.timesheet_submitted) return "VA must submit timesheet first"
+  if (va.timesheet_status !== "reviewed") return "Approve the timesheet in Timesheet Review first"
+  return undefined
+}
 
 type PackageDraft = { skipped: boolean; mode: "amount" | "deduction"; amount: string; deduction: string; note: string }
 
@@ -230,6 +241,7 @@ export function PayrollPage() {
   const [pdfError, setPdfError] = useState("")
   const [searchParams] = useSearchParams()
   const [reviewTimesheetId, setReviewTimesheetId] = useState<string | null>(null)
+  const [viewingVaId, setViewingVaId] = useState("")
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
   const [usdPhpRate, setUsdPhpRate] = useState("")
   const rateHydrated = useRef(false)
@@ -303,6 +315,14 @@ export function PayrollPage() {
     () => overlayPayroll(payrollSource, drafts),
     [payrollSource, drafts],
   )
+  useEffect(() => {
+    if (!viewingVaId) return
+    document.getElementById("person-timesheet")?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }, [viewingVaId])
+  useEffect(() => {
+    if (!viewingVaId || !payroll) return
+    if (!payroll.vas.some((va) => va.va_id === viewingVaId)) setViewingVaId("")
+  }, [payroll, viewingVaId])
   const { data: runs = [] } = useQuery({
     queryKey: ["payroll-runs"],
     queryFn: () => apiFetch<PayrollRun[]>("/payroll/runs"),
@@ -644,30 +664,35 @@ export function PayrollPage() {
                   </div>
                 </button>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {va.timesheet_id && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className={cn("flex-1", viewingVaId === va.va_id && "border-primary bg-primary/10")}
+                    aria-expanded={viewingVaId === va.va_id}
+                    aria-controls="person-timesheet"
+                    aria-label={`View timesheet for ${va.va_name}`}
+                    onClick={() => setViewingVaId((current) => (current === va.va_id ? "" : va.va_id))}
+                  >
+                    <ClipboardCheck className="h-3.5 w-3.5" /> View timesheet
+                  </Button>
+                  {va.timesheet_id && va.timesheet_status !== "reviewed" && (
                     <Button
                       size="sm"
-                      variant={va.timesheet_status === "reviewed" ? "outline" : "gold"}
+                      variant="gold"
                       className="flex-1"
                       onClick={() => setReviewTimesheetId(va.timesheet_id!)}
                     >
-                      <ClipboardCheck className="h-3.5 w-3.5" />
-                      {va.timesheet_status === "reviewed" ? "View timesheet" : "Review"}
+                      <ClipboardCheck className="h-3.5 w-3.5" /> Review
                     </Button>
                   )}
-                  {isAdmin && !va.is_paid && (n(va.total_hours) > 0 || n(va.total_pay) > 0) && (
+                  {isAdmin && !va.is_paid && canOfferPay(va) && (
                     <Button
                       size="sm"
                       variant="success"
                       className="flex-1"
                       disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
-                      title={
-                        !va.timesheet_submitted
-                          ? "VA must submit timesheet first"
-                          : va.timesheet_status !== "reviewed"
-                            ? "Approve the timesheet in Timesheet Review first"
-                            : undefined
-                      }
+                      title={markPaidTitle(va)}
                       onClick={() => setPayReview(va)}
                     >
                       <Wallet className="h-3.5 w-3.5" /> Mark Paid
@@ -690,6 +715,22 @@ export function PayrollPage() {
             ))}
           </div>
           {payroll.vas.length === 0 && <p className="rounded-2xl border bg-card p-6 text-center text-sm text-muted-foreground">No approved or pending work in this period. Approved logs appear here automatically.</p>}
+          {payroll.vas.filter((va) => va.va_id === viewingVaId).map((va) => (
+            <PersonTimesheet
+              key={va.va_id}
+              va={va}
+              periodStart={payroll.period_start}
+              periodEnd={payroll.period_end}
+              showMoney={showPricing}
+              onClose={() => setViewingVaId("")}
+              onMarkPaid={isAdmin && !va.is_paid && canOfferPay(va) ? () => setPayReview(va) : undefined}
+              markPaidPending={markPaid.isPending}
+              markPaidDisabled={va.timesheet_status !== "reviewed"}
+              markPaidTitle={markPaidTitle(va)}
+              onUndoPaid={isAdmin && va.is_paid && va.run_id ? () => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) } : undefined}
+              onOpenApproval={va.timesheet_id && va.timesheet_status === "reviewed" ? () => setReviewTimesheetId(va.timesheet_id!) : undefined}
+            />
+          ))}
         </div>
 
         {/* Per-client task breakdown — what the payslip prints, reviewed before Mark Paid */}

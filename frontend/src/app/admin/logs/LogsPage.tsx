@@ -231,7 +231,14 @@ export function LogsPage() {
                     </td>
                     <td className="whitespace-nowrap p-3 text-xs font-extrabold">{formatHoursMinutes(log.hours)}</td>
                     {showPricing && <td className="whitespace-nowrap p-3 text-xs">{formatCurrency(log.va_pay)}</td>}
-                    <td className="p-3"><span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-bold", STATUS_META[log.status]?.pill)}>{STATUS_META[log.status]?.label ?? log.status}</span></td>
+                    <td className="p-3">
+                      {log.status === "submitted" && log.review_reason ? (
+                        <span className="whitespace-nowrap rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">Needs review</span>
+                      ) : (
+                        <span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-bold", STATUS_META[log.status]?.pill)}>{STATUS_META[log.status]?.label ?? log.status}</span>
+                      )}
+                      {log.review_reason && <span className="mt-1 block max-w-[240px] text-[10px] font-medium leading-snug text-amber-900">{log.review_reason}</span>}
+                    </td>
                     <td className="p-3"><div className="flex justify-end gap-1">
                       {!readOnly && log.status === "submitted" && <><Button size="sm" variant="success" title="Approve" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" title="Reject" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></>}
                       {!readOnly && <Button size="sm" variant="ghost" title="Edit" onClick={() => openEdit(log)}><Pencil className="h-3 w-3" /></Button>}

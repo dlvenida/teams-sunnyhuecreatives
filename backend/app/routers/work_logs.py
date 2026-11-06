@@ -17,6 +17,7 @@ from app.schemas import WorkLogAttachmentResponse, WorkLogResponse, WorkLogUpdat
 from app.services import storage
 from app.services.log_display import log_task_name
 from app.services.calculations import calculate_pay
+from app.services.va_rates import approved_rate_amounts, pay_from_approved_rate
 from app.services.work_log_entry import apply_work_log_timing
 from app.services.images import ALLOWED_CONTENT_TYPES, optimize_image
 from app.services.notifications import push, va_user_id
@@ -35,7 +36,11 @@ def _va_full_name(va: VA | None) -> str | None:
     return display or va.name
 
 
-def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
+def _serialize_log(log: WorkLog, redact_money: bool = False, amounts=None) -> WorkLogResponse:
+    if redact_money or amounts is None:
+        rate, pay = log.va_rate, log.va_pay
+    else:
+        rate, pay = pay_from_approved_rate(log, amounts)
     return WorkLogResponse(
         id=log.id,
         work_date=log.work_date,
@@ -51,9 +56,10 @@ def _serialize_log(log: WorkLog, redact_money: bool = False) -> WorkLogResponse:
         start_time=log.start_time,
         end_time=log.end_time,
         hours=log.hours,
-        va_rate=None if redact_money else log.va_rate,
-        va_pay=None if redact_money else log.va_pay,
+        va_rate=None if redact_money else rate,
+        va_pay=None if redact_money else pay,
         notes=log.notes,
+        review_reason=getattr(log, "review_reason", None),
         status=log.status,
         invoice_id=log.invoice_id,
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
@@ -78,7 +84,9 @@ def list_work_logs(
     date_to: date | None = None,
 ):
     redact = hide_team_money(current.role)
-    return [_serialize_log(log, redact) for log in _query_logs(db, client_id, va_id, status_filter, date_from, date_to)]
+    logs = _query_logs(db, client_id, va_id, status_filter, date_from, date_to)
+    amounts = None if redact else approved_rate_amounts(db, {log.va_id for log in logs})
+    return [_serialize_log(log, redact, amounts) for log in logs]
 
 
 def _query_logs(
@@ -121,7 +129,9 @@ def export_csv(
     date_from: date | None = None,
     date_to: date | None = None,
 ):
-    logs = [_serialize_log(log) for log in _query_logs(db, client_id, va_id, status_filter, date_from, date_to)]
+    rows = _query_logs(db, client_id, va_id, status_filter, date_from, date_to)
+    amounts = approved_rate_amounts(db, {log.va_id for log in rows})
+    logs = [_serialize_log(log, False, amounts) for log in rows]
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Date", "VA", "Client", "Sub-client", "Description", "Hours", "VA Rate", "VA Pay", "Status"])
@@ -171,6 +181,8 @@ def update_work_log(
         data.pop(key, None)
     for k, v in data.items():
         setattr(log, k, v)
+    if log.status in (WorkLogStatus.approved, WorkLogStatus.rejected):
+        log.review_reason = None
 
     timing_changed = apply_work_log_timing(db, log, body)
     rate_changed = body.va_rate is not None and current.role == UserRole.admin
@@ -180,9 +192,15 @@ def update_work_log(
             log.va_rate = rate
         log.va_pay = calculate_pay(log.hours, rate)
 
+    if log.status == WorkLogStatus.approved:
+        from app.services.work_log_review import hold_open_matches
+        hold_open_matches(db, log)
+
     db.commit()
     log = _get_log(db, log.id)
-    return _serialize_log(log, redact_money=hide_team_money(current.role))
+    redact = hide_team_money(current.role)
+    amounts = None if redact else approved_rate_amounts(db, [log.va_id])
+    return _serialize_log(log, redact_money=redact, amounts=amounts)
 
 
 @router.post("/{log_id}/approve", response_model=WorkLogResponse, response_model_exclude_none=True)

@@ -81,6 +81,7 @@ export interface WorkLog {
   va_rate: string
   va_pay: string
   notes?: string | null
+  review_reason?: string | null
   status: "submitted" | "approved" | "rejected" | "invoiced"
   invoice_id?: string | null
   project_id?: string | null

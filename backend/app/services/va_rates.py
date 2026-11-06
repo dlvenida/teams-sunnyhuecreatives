@@ -32,7 +32,12 @@ def get_approved_rate(db: Session, va_id: UUID, client_id: UUID) -> VARate | Non
 
 
 def resolve_log_pay(db: Session, va_id: UUID, client_id: UUID, hours: Decimal) -> tuple[Decimal, Decimal, PayType | None]:
-    """Return (va_rate, va_pay, pay_type). Package logs store rate amount but va_pay=0 (flat applied in payroll)."""
+    """Return (va_rate, va_pay, pay_type). Package logs store rate amount but va_pay=0 (flat applied in payroll).
+
+    The company default (often $75) is only a snapshot for a log saved before this VA
+    has an approved rate. It is not the client's billable rate. Pay views re-read the
+    approved rate through pay_from_approved_rate so a later approval replaces that snapshot.
+    """
     rate = get_approved_rate(db, va_id, client_id)
     if not rate:
         fallback = _fallback_rate(db)
@@ -40,6 +45,45 @@ def resolve_log_pay(db: Session, va_id: UUID, client_id: UUID, hours: Decimal) -
     if rate.pay_type == PayType.package:
         return rate.amount, Decimal("0.00"), PayType.package
     return rate.amount, calculate_pay(hours, rate.amount), PayType.hourly
+
+
+def approved_rate_amounts(db: Session, va_ids) -> dict[tuple[UUID, UUID], tuple[str, Decimal]]:
+    """Latest approved rate for each of these VAs and their clients.
+
+    The key is (va_id, client_id). Another VA's rate is never stored under this VA.
+    """
+    ids = [va_id for va_id in va_ids if va_id is not None]
+    if not ids:
+        return {}
+    rows = (
+        db.query(VARate)
+        .filter(VARate.va_id.in_(ids), VARate.status == RateStatus.approved)
+        .order_by(VARate.reviewed_at.desc().nullslast(), VARate.created_at.desc())
+        .all()
+    )
+    chosen: dict[tuple[UUID, UUID], tuple[str, Decimal]] = {}
+    for rate in rows:
+        kind = rate.pay_type.value if hasattr(rate.pay_type, "value") else str(rate.pay_type)
+        chosen.setdefault((rate.va_id, rate.client_id), (kind, Decimal(rate.amount).quantize(Decimal("0.01"))))
+    return chosen
+
+
+def pay_from_approved_rate(log, amounts: dict[tuple[UUID, UUID], tuple[str, Decimal]]) -> tuple[Decimal, Decimal]:
+    """Rate and pay for one log, from that VA's approved rate for that client.
+
+    Hourly: hours times the approved amount, not the number frozen on the log and not
+    the client's billable rate. Package: the log line does not add hourly pay. The
+    period package is applied separately. No approved rate: keep the stored snapshot.
+    """
+    stored_rate = Decimal(log.va_rate or 0)
+    stored_pay = Decimal(log.va_pay or 0)
+    found = amounts.get((log.va_id, log.client_id))
+    if found is None:
+        return stored_rate, stored_pay
+    kind, amount = found
+    if kind == PayType.package.value:
+        return amount, Decimal("0.00")
+    return amount, calculate_pay(Decimal(log.hours or 0), amount)
 
 
 def frequency_for_save(pay_type: PayType, raw: str | None) -> str | None:
@@ -190,7 +234,7 @@ def earned_for_window(db: Session, va_id: UUID, start: date, end: date) -> tuple
     """Approved pay for a date window. Same rules as the VA earnings page.
 
     Package clients use the period amount, including bi-weekly halves and any
-    saved period override. Hourly clients use the pay already stored on approved logs.
+    saved period override. Hourly clients use this VA's approved rate for each client.
     """
     from app.models import WorkLog, WorkLogStatus
     from app.services.package_overrides import effective_package_amount, load_overrides
@@ -206,9 +250,11 @@ def earned_for_window(db: Session, va_id: UUID, start: date, end: date) -> tuple
         .all()
     )
     hours = sum((log.hours for log in logs), Decimal("0"))
+    amounts = approved_rate_amounts(db, [va_id])
     log_pay: dict[UUID, Decimal] = {}
     for log in logs:
-        log_pay[log.client_id] = log_pay.get(log.client_id, Decimal("0")) + (log.va_pay or Decimal("0"))
+        _rate, pay = pay_from_approved_rate(log, amounts)
+        log_pay[log.client_id] = log_pay.get(log.client_id, Decimal("0")) + pay
     saved = load_overrides(db, {va_id}, start, end)
     dues: dict[UUID, Decimal] = {}
     for client_id, _name, calculated, _currency in package_period_amounts(db, va_id, start, end):

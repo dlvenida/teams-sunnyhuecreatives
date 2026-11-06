@@ -488,7 +488,15 @@ export function VATimeLogPage() {
                     <td className="p-2 whitespace-nowrap">{log.clock_in_at ? `${new Date(log.clock_in_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}–${log.clock_out_at ? new Date(log.clock_out_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "…"}` : isDurationEntry(log) ? formatEnteredDuration(log.hours) : `${log.start_time?.slice(0, 5)}–${log.end_time?.slice(0, 5)}`}<span className="block text-[10px] text-muted-foreground">{log.source === "clock" ? "clock" : isDurationEntry(log) ? "duration" : "manual"}</span></td>
                     <td className="p-2">{log.hours}</td>
                     {showMoney && <><td className="p-2">{formatCurrency(log.va_rate)}</td><td className="p-2">{formatCurrency(log.va_pay)}</td></>}
-                    <td className="p-2"><StatusBadge status={log.status} />{(log.attachment_count ?? 0) > 0 && <span className="ml-1 text-[10px] text-muted-foreground">📎{log.attachment_count}</span>}</td>
+                    <td className="p-2">
+                      {log.status === "submitted" && log.review_reason ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">Needs review</span>
+                      ) : (
+                        <StatusBadge status={log.status} />
+                      )}
+                      {(log.attachment_count ?? 0) > 0 && <span className="ml-1 text-[10px] text-muted-foreground">📎{log.attachment_count}</span>}
+                      {log.review_reason && <span className="mt-1 block max-w-[220px] text-[10px] font-medium leading-snug text-amber-900">{log.review_reason}</span>}
+                    </td>
                     <td className="p-2 whitespace-nowrap">
                       {(log.status === "submitted" || log.status === "rejected") ? <>
                         <button className="underline mr-2" onClick={() => openEdit(log)}>Edit</button>

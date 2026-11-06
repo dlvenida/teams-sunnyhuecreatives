@@ -488,6 +488,8 @@ class WorkLog(Base):
     va_rate: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     va_pay: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when a duplicate or short extra log is held for a person to approve or reject.
+    review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[WorkLogStatus] = mapped_column(
         Enum(WorkLogStatus, name="work_log_status"), default=WorkLogStatus.submitted
     )

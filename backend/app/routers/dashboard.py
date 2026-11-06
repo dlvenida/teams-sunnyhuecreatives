@@ -303,7 +303,8 @@ def get_team_activity(_: Annotated[CurrentUser, Depends(require_admin_or_auditor
             "last_activity": str(last_activity) if last_activity else None,
         })
 
-    # Daily alert: VA logged no time or has no tasks today → admins + project managers (auditors)
+    # Daily alert: no hours or no tasks. Bell stays with admins and project managers.
+    # Email goes to the VA and project managers, not to Jane.
     try:
         from app.services.task_deadlines import notify_task_deadlines
         from app.services.va_inactivity import notify_daily_inactivity

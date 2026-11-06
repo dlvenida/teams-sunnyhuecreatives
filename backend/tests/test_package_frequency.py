@@ -5,7 +5,19 @@ from decimal import Decimal
 
 from uuid import uuid4
 
-from app.services.va_rates import combine_period_pay, package_amount_for_dates, package_amount_for_window, split_biweekly
+from fastapi import HTTPException
+
+from app.models import PayType
+from app.services.va_rates import (
+    combine_period_pay,
+    currency_code,
+    frequency_for_save,
+    frequency_for_update,
+    package_amount_for_dates,
+    package_amount_for_window,
+    resolved_frequency,
+    split_biweekly,
+)
 
 
 class SplitTests(unittest.TestCase):
@@ -136,6 +148,60 @@ class DatesTests(unittest.TestCase):
     def test_monthly_dates_only_in_the_second_half_do_not_add_a_second_payment(self):
         due = package_amount_for_dates(Decimal("2000"), None, [date(2026, 11, 20)])
         self.assertEqual(due, Decimal("0.00"))
+
+
+class _Rate:
+    def __init__(self, pay_type, payment_frequency):
+        self.pay_type = pay_type
+        self.payment_frequency = payment_frequency
+
+
+class FrequencyDefaultTests(unittest.TestCase):
+    """New package rates omit frequency as Bi-weekly. Stored nulls stay Monthly."""
+
+    def test_omitted_package_frequency_is_biweekly(self):
+        self.assertEqual(frequency_for_save(PayType.package, None), "biweekly")
+        self.assertEqual(frequency_for_save(PayType.package, ""), "biweekly")
+        self.assertEqual(frequency_for_save(PayType.package, "   "), "biweekly")
+
+    def test_explicit_monthly_and_biweekly_are_kept(self):
+        self.assertEqual(frequency_for_save(PayType.package, "monthly"), "monthly")
+        self.assertEqual(frequency_for_save(PayType.package, "Bi-Weekly"), "biweekly")
+
+    def test_hourly_drops_frequency(self):
+        self.assertIsNone(frequency_for_save(PayType.hourly, None))
+        self.assertIsNone(frequency_for_save(PayType.hourly, "biweekly"))
+
+    def test_unknown_frequency_is_rejected(self):
+        with self.assertRaises(HTTPException):
+            frequency_for_save(PayType.package, "weekly")
+
+    def test_edit_requires_an_explicit_choice(self):
+        self.assertEqual(frequency_for_update("monthly"), "monthly")
+        self.assertEqual(frequency_for_update("biweekly"), "biweekly")
+        with self.assertRaises(HTTPException):
+            frequency_for_update(None)
+        with self.assertRaises(HTTPException):
+            frequency_for_update("  ")
+
+    def test_null_on_an_existing_package_stays_monthly(self):
+        self.assertEqual(resolved_frequency(_Rate(PayType.package, None)), "monthly")
+        self.assertEqual(resolved_frequency(_Rate(PayType.package, "biweekly")), "biweekly")
+        self.assertEqual(resolved_frequency(_Rate(PayType.package, "monthly")), "monthly")
+        self.assertEqual(resolved_frequency(None), "monthly")
+
+    def test_angeline_monthly_amount_is_half_only_when_biweekly(self):
+        amount = Decimal("8400")
+        first = date(2026, 11, 1)
+        mid = date(2026, 11, 15)
+        self.assertEqual(package_amount_for_window(amount, "biweekly", first, mid), Decimal("4200.00"))
+        self.assertEqual(package_amount_for_window(amount, "monthly", first, mid), Decimal("8400.00"))
+        self.assertEqual(package_amount_for_window(amount, None, first, mid), Decimal("8400.00"))
+
+    def test_currency_code_keeps_php(self):
+        self.assertEqual(currency_code("PHP"), "PHP")
+        self.assertEqual(currency_code("usd"), "USD")
+        self.assertEqual(currency_code(None), "USD")
 
 
 if __name__ == "__main__":

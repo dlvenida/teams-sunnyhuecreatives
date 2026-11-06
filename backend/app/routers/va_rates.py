@@ -8,11 +8,11 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_va
-from app.models import Client, RateStatus, User, UserRole, VA, VARate
-from app.schemas import PayablePerson, VARateAdminCreate, VARateCreate, VARateResponse
+from app.models import Client, PayType, RateStatus, User, UserRole, VA, VARate
+from app.schemas import PayablePerson, VARateAdminCreate, VARateCreate, VARateFrequencyUpdate, VARateResponse
 from app.services.notifications import admin_user_ids, push, va_user_id
 from app.services.pay_access import person_role_label, rates_notice_path
-from app.services.va_rates import frequency_for_save, get_approved_rate
+from app.services.va_rates import frequency_for_save, frequency_for_update, get_approved_rate
 
 router = APIRouter(prefix="/va-rates", tags=["va-rates"])
 
@@ -245,6 +245,29 @@ def admin_set_rate(
         rates_notice_path(_owner_role(rate)),
     )
     return _serialize(rate, rate.id)
+
+
+@router.patch("/{rate_id}", response_model=VARateResponse)
+def update_rate_frequency(
+    rate_id: UUID,
+    body: VARateFrequencyUpdate,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Switch a package rate between Monthly and Bi-weekly without re-entering the amount.
+
+    Pending and approved rows both accept it, so Jane can correct the choice before
+    or after approval. A blank frequency is rejected here. Creating a rate is the
+    path that fills a missing frequency with Bi-weekly.
+    """
+    rate = _load(db, rate_id)
+    if rate.pay_type != PayType.package:
+        raise HTTPException(status_code=400, detail="Only a Fixed Package rate has a payment frequency.")
+    rate.payment_frequency = frequency_for_update(body.payment_frequency)
+    db.commit()
+    rate = _load(db, rate.id)
+    active = get_approved_rate(db, rate.va_id, rate.client_id)
+    return _serialize(rate, active.id if active else None)
 
 
 @router.post("/{rate_id}/approve", response_model=VARateResponse)

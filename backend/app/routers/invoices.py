@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
@@ -17,14 +17,18 @@ from app.models import (
     InvoiceLineItem,
     InvoiceStatus,
     Project,
+    Task,
     WorkLog,
     WorkLogStatus,
 )
 from app.schemas import (
     ClientBillingLineResponse,
     ClientBillingLineWrite,
+    InvoiceDraftLine,
     InvoiceDraftLineResponse,
     InvoiceGenerateRequest,
+    InvoiceTaskReview,
+    PackageTasksWrite,
     InvoiceLineItemResponse,
     InvoiceLineItemUpdate,
     InvoicePrepareResponse,
@@ -35,10 +39,11 @@ from app.services.billing import get_billing_period, next_invoice_number
 from app.services.client_billing import (
     MANUAL_TYPES,
     ONE_OFF_TYPES,
+    PACKAGE_LINE_TYPES,
     PROJECT_TYPES,
     SETUP_TYPES,
-    build_setup_drafts,
     clean_invoice_text,
+    compose_invoice,
     normalize_invoice_line,
     quantize_money,
 )
@@ -89,6 +94,8 @@ def _serialize_invoice(inv: Invoice) -> InvoiceResponse:
         issue_date=inv.issue_date,
         due_date=inv.due_date,
         paid_at=inv.paid_at,
+        show_hourly_breakdown=bool(getattr(inv, "show_hourly_breakdown", True)),
+        show_package_time=bool(getattr(inv, "show_package_time", False)),
         line_items=[
             InvoiceLineItemResponse(
                 id=li.id,
@@ -265,7 +272,18 @@ def preview_invoice(
     )
 
 
-def _billing_line_response(line: ClientBillingLine) -> ClientBillingLineResponse:
+def _linked_tasks(db: Session, client_id: UUID) -> dict:
+    rows = db.query(Task).filter(Task.client_id == client_id, Task.package_line_id.isnot(None)).all()
+    grouped: dict = {}
+    for task in rows:
+        grouped.setdefault(task.package_line_id, []).append(task)
+    for tasks in grouped.values():
+        tasks.sort(key=lambda task: task.title.lower())
+    return grouped
+
+
+def _billing_line_response(line: ClientBillingLine, linked: list | None = None) -> ClientBillingLineResponse:
+    linked = linked or []
     return ClientBillingLineResponse(
         id=line.id,
         client_id=line.client_id,
@@ -277,7 +295,14 @@ def _billing_line_response(line: ClientBillingLine) -> ClientBillingLineResponse
         default_rate=line.default_rate,
         default_amount=line.default_amount,
         sort_order=line.sort_order,
+        linked_task_ids=[task.id for task in linked],
+        linked_task_titles=[task.title for task in linked],
     )
+
+
+def _billing_responses(db: Session, client_id: UUID, lines: list[ClientBillingLine]) -> list[ClientBillingLineResponse]:
+    grouped = _linked_tasks(db, client_id)
+    return [_billing_line_response(line, grouped.get(line.id, [])) for line in lines]
 
 
 def _load_billing_lines(db: Session, client_id: UUID) -> list[ClientBillingLine]:
@@ -305,7 +330,8 @@ def list_billing_lines(
 ):
     if not db.query(Client.id).filter(Client.id == client_id).first():
         raise HTTPException(status_code=404, detail="Client not found")
-    return [_billing_line_response(line) for line in _load_billing_lines(db, client_id)]
+    lines = _load_billing_lines(db, client_id)
+    return _billing_responses(db, client_id, lines)
 
 
 @router.put("/clients/{client_id}/billing-lines", response_model=list[ClientBillingLineResponse])
@@ -346,7 +372,8 @@ def save_billing_lines(
             )
         )
     db.commit()
-    return [_billing_line_response(line) for line in _load_billing_lines(db, client_id)]
+    lines = _load_billing_lines(db, client_id)
+    return _billing_responses(db, client_id, lines)
 
 
 @router.post("/clients/{client_id}/billing-lines", response_model=ClientBillingLineResponse, status_code=status.HTTP_201_CREATED)
@@ -389,7 +416,7 @@ def add_billing_preset(
         .filter(ClientBillingLine.id == row.id)
         .first()
     )
-    return _billing_line_response(row)
+    return _billing_line_response(row, _linked_tasks(db, client_id).get(row.id, []))
 
 
 @router.delete("/clients/{client_id}/billing-lines/{line_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -409,6 +436,42 @@ def delete_billing_preset(
     db.commit()
 
 
+@router.put("/clients/{client_id}/billing-lines/{line_id}/tasks", response_model=ClientBillingLineResponse)
+def link_package_tasks(
+    client_id: UUID,
+    line_id: UUID,
+    body: PackageTasksWrite,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Cover these tasks with one saved package or flat fee. Several tasks can share the line."""
+    line = (
+        db.query(ClientBillingLine)
+        .options(joinedload(ClientBillingLine.project))
+        .filter(ClientBillingLine.id == line_id, ClientBillingLine.client_id == client_id)
+        .first()
+    )
+    if not line:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    if line.billing_type not in PACKAGE_LINE_TYPES:
+        raise HTTPException(status_code=400, detail="Only a package or flat fee line can cover tasks")
+    chosen_ids = list(dict.fromkeys(body.task_ids))
+    tasks = db.query(Task).filter(Task.client_id == client_id, Task.id.in_(chosen_ids)).all() if chosen_ids else []
+    if len(tasks) != len(chosen_ids):
+        raise HTTPException(status_code=400, detail="Choose tasks for this client")
+    current = db.query(Task).filter(Task.package_line_id == line.id).all()
+    chosen = {task.id for task in tasks}
+    for task in current:
+        if task.id not in chosen:
+            task.package_line_id = None
+    for task in tasks:
+        task.billing_mode = "package"
+        task.package_line_id = line.id
+    db.commit()
+    db.refresh(line)
+    return _billing_line_response(line, tasks)
+
+
 @router.get("/prepare", response_model=InvoicePrepareResponse)
 def prepare_invoice(
     client_id: UUID,
@@ -417,6 +480,10 @@ def prepare_invoice(
     cutoff: int,
     _: Annotated[CurrentUser, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
+    show_hourly_breakdown: bool = True,
+    show_package_time: bool = False,
+    included_task_ids: Annotated[list[UUID] | None, Query()] = None,
+    excluded_task_ids: Annotated[list[UUID] | None, Query()] = None,
 ):
     """Pre-fill one period from the saved setup. Nothing is stored."""
     client = db.query(Client).filter(Client.id == client_id).first()
@@ -425,9 +492,19 @@ def prepare_invoice(
     period_start, period_end, period_label = get_billing_period(year, month, cutoff)
     approved, _submitted = _period_logs(db, client_id, period_start, period_end)
     setup = _load_billing_lines(db, client_id)
-    drafts = build_setup_drafts(setup, approved, client.default_rate or 0)
+    tasks = db.query(Task).filter(Task.client_id == client_id).all()
+    composed = compose_invoice(
+        setup,
+        approved,
+        tasks,
+        client.default_rate or 0,
+        show_hourly_breakdown=show_hourly_breakdown,
+        show_package_time=show_package_time,
+        included_task_ids=included_task_ids,
+        excluded_task_ids=excluded_task_ids,
+    )
     if setup:
-        message = "Lines are filled from this client's billing setup. Changes here stay on this invoice."
+        message = "Lines are filled from this client's billing setup. Task hours and the toggles below stay on this invoice."
     else:
         message = "This client has no saved billing lines yet. Add lines for this invoice, or save a setup on the client."
     return InvoicePrepareResponse(
@@ -435,8 +512,16 @@ def prepare_invoice(
         period_start=period_start,
         period_end=period_end,
         client_rate=quantize_money(client.default_rate or 0),
-        lines=[InvoiceDraftLineResponse(**row) for row in drafts],
+        lines=[InvoiceDraftLineResponse(**row) for row in composed["lines"]],
         message=message,
+        show_hourly_breakdown=show_hourly_breakdown,
+        show_package_time=show_package_time,
+        hourly_subtotal=composed["hourly_subtotal"],
+        package_total=composed["package_total"],
+        amount=composed["amount"],
+        total_hours=composed["total_hours"],
+        task_reviews=[InvoiceTaskReview(**row) for row in composed["task_reviews"]],
+        package_tasks=[InvoiceTaskReview(**row) for row in composed["package_tasks"]],
     )
 
 
@@ -447,6 +532,36 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
         raise HTTPException(status_code=400, detail="A one-off invoice does not use a saved client")
     if not one_off and client is None:
         raise HTTPException(status_code=400, detail="Choose a client or type a one-off client name")
+    if body.compose_from_tasks:
+        if one_off or client is None:
+            raise HTTPException(status_code=400, detail="Task billing is for a saved client")
+        approved, _submitted = _period_logs(db, client.id, period_start, period_end)
+        setup = _load_billing_lines(db, client.id)
+        task_rows = db.query(Task).filter(Task.client_id == client.id).all()
+        composed = compose_invoice(
+            setup,
+            approved,
+            task_rows,
+            client.default_rate or 0,
+            currency=(body.currency or "USD"),
+            show_hourly_breakdown=body.show_hourly_breakdown,
+            show_package_time=body.show_package_time,
+            included_task_ids=body.included_task_ids,
+            excluded_task_ids=body.excluded_task_ids,
+            include_unassigned=body.include_unassigned,
+        )
+        extras = [line for line in (body.lines or []) if line.billing_type == "extra"]
+        body.lines = [
+            InvoiceDraftLine(
+                project_id=row.get("project_id"),
+                billing_type=row["billing_type"],
+                description=row.get("description") or "",
+                hours=row.get("hours"),
+                rate=row.get("rate"),
+                amount=row.get("amount"),
+            )
+            for row in composed["lines"]
+        ] + extras
     if not body.lines:
         raise HTTPException(status_code=400, detail="Add at least one billing line or extra charge")
     currency = (body.currency or "USD").upper()
@@ -463,7 +578,7 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
             normalized.append(normalize_invoice_line(raw, project_name, one_off=one_off, currency=currency))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    hour_kinds = {"entered_hours", "actual_hours", "hourly", "manual"}
+    hour_kinds = {"entered_hours", "actual_hours", "hourly", "manual", "hourly_task", "hourly_summary"}
     kinds = {row["billing_type"] for row in normalized if row["billing_type"] != "extra"}
     if kinds <= {"flat_fee", "package", "extra"} or not kinds:
         billing_type = BillingType.fixed
@@ -498,6 +613,8 @@ def _generate_flexible(db: Session, body: InvoiceGenerateRequest, client: Client
         payment_terms_days=body.payment_terms_days,
         issue_date=issue_date,
         due_date=issue_date + timedelta(days=body.payment_terms_days),
+        show_hourly_breakdown=body.show_hourly_breakdown,
+        show_package_time=body.show_package_time,
     )
     db.add(invoice)
     db.flush()
@@ -531,7 +648,7 @@ def generate_invoice(
     db: Annotated[Session, Depends(get_db)],
 ):
     one_off_name = (body.one_off_name or "").strip()
-    if one_off_name or body.lines is not None:
+    if one_off_name or body.lines is not None or body.compose_from_tasks:
         client = None
         if not one_off_name:
             client = db.query(Client).filter(Client.id == body.client_id).first()

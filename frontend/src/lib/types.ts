@@ -121,6 +121,8 @@ export interface Invoice {
   issue_date: string
   due_date: string
   paid_at?: string | null
+  show_hourly_breakdown?: boolean
+  show_package_time?: boolean
   line_items: InvoiceLineItem[]
 }
 
@@ -346,6 +348,8 @@ export interface TaskItem {
   completed_at?: string | null
   created_at?: string | null
   updated_at?: string | null
+  billing_mode?: "hourly" | "package" | null
+  package_line_id?: string | null
 }
 
 export interface MentionRef { user_id: string; name: string }

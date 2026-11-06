@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
-import type { Client, Invoice, InvoicePreview, ReportClientsResponse, Settings } from "@/lib/types"
+import type { Client, Invoice, InvoicePreview, ReportClientsResponse, Settings, TaskItem } from "@/lib/types"
+import { InvoiceBreakdown } from "@/components/invoices/InvoiceBreakdown"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { StatusBadge } from "@/components/ui/badge"
@@ -65,7 +66,7 @@ export function InvoicesPage() {
   type DraftLine = {
     key: string
     description: string
-    billing_type: "hourly" | "package" | "manual" | "extra" | "entered_hours" | "actual_hours" | "flat_fee"
+    billing_type: "hourly" | "package" | "manual" | "extra" | "entered_hours" | "actual_hours" | "flat_fee" | "hourly_task" | "hourly_summary"
     hours: string
     rate: string
     amount: string
@@ -73,7 +74,24 @@ export function InvoicesPage() {
     project_name?: string | null
     preset_id?: string | null
   }
+  type TaskReview = {
+    task_id: string | null
+    title: string
+    hours: string
+    billing_mode: string
+    included: boolean
+    package_line_id?: string | null
+  }
   const [presetLines, setPresetLines] = useState<DraftLine[]>([])
+  const [showHourlyBreakdown, setShowHourlyBreakdown] = useState(true)
+  const [showPackageTime, setShowPackageTime] = useState(false)
+  const [includedTaskIds, setIncludedTaskIds] = useState<string[] | null>(null)
+  const [taskReviews, setTaskReviews] = useState<TaskReview[]>([])
+  const [packageTasks, setPackageTasks] = useState<TaskReview[]>([])
+  const [hourlySubtotal, setHourlySubtotal] = useState("0")
+  const [composedAmount, setComposedAmount] = useState("0")
+  const [linesEdited, setLinesEdited] = useState(false)
+  const [setupTick, setSetupTick] = useState(0)
   const [manualLines, setManualLines] = useState<DraftLine[]>([])
   const [extras, setExtras] = useState<DraftLine[]>([])
   const { showPricing } = useDisplaySettings()
@@ -144,9 +162,21 @@ export function InvoicesPage() {
       .catch(() => {})
   }, [form.client_id, form.year, source])
 
+  const { data: clientTasks = [] } = useQuery({
+    queryKey: ["tasks", "invoice-link", form.client_id],
+    queryFn: () => apiFetch<TaskItem[]>(`/tasks?client_id=${form.client_id}`),
+    enabled: source === "saved" && !!form.client_id,
+  })
+
+  useEffect(() => {
+    setIncludedTaskIds(null)
+  }, [form.client_id, form.year, form.month, form.cutoff])
+
   useEffect(() => {
     if (source !== "saved" || !form.client_id) {
       setPresetLines([])
+      setTaskReviews([])
+      setPackageTasks([])
       return
     }
     const qs = new URLSearchParams({
@@ -154,23 +184,37 @@ export function InvoicesPage() {
       year: String(form.year),
       month: String(form.month),
       cutoff: String(form.cutoff),
+      show_hourly_breakdown: String(showHourlyBreakdown),
+      show_package_time: String(showPackageTime),
     })
-    apiFetch<{ lines: DraftLine[] }>(`/invoices/prepare?${qs}`)
+    if (includedTaskIds) includedTaskIds.forEach((id) => qs.append("included_task_ids", id))
+    apiFetch<{
+      lines: DraftLine[]
+      task_reviews?: TaskReview[]
+      package_tasks?: TaskReview[]
+      hourly_subtotal?: string
+      amount?: string
+    }>(`/invoices/prepare?${qs}`)
       .then((data) => {
         setPresetLines((data.lines || []).map((line) => ({
           key: crypto.randomUUID(),
           description: line.description || "",
           billing_type: line.billing_type,
-          hours: line.billing_type === "package" || line.hours == null ? "" : String(line.hours),
+          hours: line.billing_type === "package" || line.billing_type === "flat_fee" || line.hours == null ? "" : String(line.hours),
           rate: line.billing_type === "package" || line.rate == null ? "" : String(line.rate),
           amount: line.amount == null ? "" : String(line.amount),
           project_id: line.project_id,
           project_name: line.project_name,
           preset_id: (line as { preset_id?: string | null }).preset_id,
         })))
+        setTaskReviews(data.task_reviews || [])
+        setPackageTasks(data.package_tasks || [])
+        setHourlySubtotal(String(data.hourly_subtotal ?? "0"))
+        setComposedAmount(String(data.amount ?? "0"))
+        setLinesEdited(false)
       })
       .catch(() => setPresetLines([]))
-  }, [source, form.client_id, form.year, form.month, form.cutoff])
+  }, [source, form.client_id, form.year, form.month, form.cutoff, showHourlyBreakdown, showPackageTime, includedTaskIds, setupTick])
 
   useEffect(() => {
     if (!settings) return
@@ -231,6 +275,7 @@ export function InvoicesPage() {
           amount,
         }
       }
+      const custom = linesEdited || manualLines.length > 0 || extras.length > 0 || source === "oneoff"
       const lines = [...presetLines, ...manualLines, ...extras].map(pack)
       return apiFetch<Invoice>("/invoices/generate", {
         method: "POST",
@@ -249,7 +294,11 @@ export function InvoicesPage() {
           included_hours: lines.length ? null : (form.included_hours ? parseFloat(form.included_hours) : null),
           overage_rate: lines.length ? null : (form.overage_rate ? parseFloat(form.overage_rate) : null),
           service_description: lines.length ? null : (form.service_description.trim() || null),
-          lines: lines.length ? lines : null,
+          lines: custom ? (lines.length ? lines : null) : null,
+          compose_from_tasks: source === "saved" && !custom,
+          show_hourly_breakdown: showHourlyBreakdown,
+          show_package_time: showPackageTime,
+          included_task_ids: includedTaskIds,
           one_off_name: source === "oneoff" ? oneOff.name.trim() : null,
           one_off_email: source === "oneoff" ? oneOff.email.trim() || null : null,
           one_off_business: source === "oneoff" ? oneOff.business.trim() || null : null,
@@ -559,6 +608,50 @@ export function InvoicesPage() {
           </div>
         </div>
 
+        {source === "saved" && form.client_id && (
+          <div className="mt-4 space-y-3 rounded-xl border p-3">
+            <label className="flex items-center gap-2 text-xs">
+              <input aria-label="Hourly breakdown" type="checkbox" checked={showHourlyBreakdown} onChange={(e) => setShowHourlyBreakdown(e.target.checked)} />
+              List each hourly task with its hours. On by default. Turn off to show one summary line only.
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              <input aria-label="Package time" type="checkbox" checked={showPackageTime} onChange={(e) => setShowPackageTime(e.target.checked)} />
+              Show package time as a note. Off by default. The note is not added to the total.
+            </label>
+            <p className="text-[11px] text-muted-foreground">Hourly subtotal {formatCurrency(hourlySubtotal)} · Invoice total {formatCurrency(composedAmount)}. These choices stay on this invoice.</p>
+            {taskReviews.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs font-semibold">Tasks on the hourly section</p>
+                {taskReviews.filter((review) => review.billing_mode !== "package").map((review) => (
+                  <label key={review.task_id || review.title} className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      aria-label={`Include ${review.title}`}
+                      checked={review.included}
+                      onChange={() => {
+                        const current = includedTaskIds ?? taskReviews.filter((row) => row.included && row.task_id).map((row) => row.task_id as string)
+                        const id = review.task_id
+                        if (!id) return
+                        setIncludedTaskIds(current.includes(id) ? current.filter((row) => row !== id) : [...current, id])
+                      }}
+                    />
+                    <span>{review.title} · {review.hours} hrs</span>
+                    {review.billing_mode === "package" && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">Package</span>}
+                  </label>
+                ))}
+              </div>
+            )}
+            {packageTasks.length > 0 && (
+              <div aria-label="Package tasks">
+                <p className="text-xs font-semibold">Covered by package</p>
+                {packageTasks.map((review) => (
+                  <p key={review.task_id || review.title} className="text-xs text-muted-foreground">{review.title} · {review.hours} hrs · Package</p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="mt-4 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-sm font-semibold">Invoice lines</h3>
@@ -567,12 +660,41 @@ export function InvoicesPage() {
               <Button type="button" size="sm" variant="outline" onClick={() => setExtras((rows) => [...rows, { key: crypto.randomUUID(), description: "", billing_type: "extra", hours: "", rate: "", amount: "" }])}>Add extra charge</Button>
             </div>
           </div>
+          {source === "saved" && presetLines.length > 0 && (
+            <InvoiceBreakdown lines={presetLines.map((line) => ({ description: line.description, amount: line.amount || 0, billing_type: line.billing_type }))} />
+          )}
           {source === "saved" && presetLines.map((line) => (
             <div key={line.key} className="rounded-xl border p-3">
-              <p className="text-[11px] font-semibold text-muted-foreground">Preset · {line.project_name || line.billing_type}</p>
-              <p className="mt-1 whitespace-pre-wrap text-sm">{line.description}</p>
-              <p className="text-xs text-muted-foreground">{line.amount ? formatCurrency(line.amount, "USD") : ""}</p>
-              {line.preset_id && form.client_id && (
+              <p className="text-[11px] font-semibold text-muted-foreground">{line.billing_type === "hourly_task" ? "Hourly task" : line.billing_type === "hourly_summary" ? "Hourly summary" : line.billing_type === "package" || line.billing_type === "flat_fee" ? "Fixed amount, no hours" : `Preset · ${line.project_name || line.billing_type}`}</p>
+              <Textarea className="mt-1" rows={2} value={line.description} onChange={(e) => { setLinesEdited(true); setPresetLines((rows) => rows.map((row) => row.key === line.key ? { ...row, description: e.target.value } : row)) }} />
+              <p className="mt-1 text-xs text-muted-foreground">{line.amount ? formatCurrency(line.amount, "USD") : ""}{line.billing_type === "package" || line.billing_type === "flat_fee" ? " · no hours" : ""}</p>
+              {(line.billing_type === "package" || line.billing_type === "flat_fee") && line.preset_id && (
+                <div className="mt-2 space-y-1">
+                  <p className="text-[11px] font-semibold">Saved on the client. These tasks share this line.</p>
+                  {clientTasks.map((task) => (
+                    <label key={task.id} className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={task.package_line_id === line.preset_id}
+                        onChange={(e) => {
+                          const chosen = clientTasks.filter((row) => row.package_line_id === line.preset_id).map((row) => row.id)
+                          const next = e.target.checked ? [...chosen, task.id] : chosen.filter((id) => id !== task.id)
+                          apiFetch(`/invoices/clients/${form.client_id}/billing-lines/${line.preset_id}/tasks`, {
+                            method: "PUT",
+                            body: JSON.stringify({ task_ids: next }),
+                          }).then(() => {
+                            qc.invalidateQueries({ queryKey: ["tasks"] })
+                            setIncludedTaskIds(null)
+                            setSetupTick((tick) => tick + 1)
+                          }).catch((err: Error) => setGenerateError(err.message))
+                        }}
+                      />
+                      {task.title}
+                    </label>
+                  ))}
+                </div>
+              )}
+              {line.preset_id && form.client_id && line.billing_type !== "hourly_task" && line.billing_type !== "hourly_summary" && (
                 <Button type="button" size="sm" variant="ghost" onClick={() => {
                   apiFetch(`/invoices/clients/${form.client_id}/billing-lines/${line.preset_id}`, { method: "DELETE" })
                     .then(() => setPresetLines((rows) => rows.filter((row) => row.preset_id !== line.preset_id)))
@@ -814,8 +936,9 @@ export function InvoicesPage() {
               <div className="rounded-xl border p-3"><p className="text-muted-foreground">{showPricing ? "Amount" : "Payment"}</p><p className="mt-1 font-bold">{showPricing ? formatCurrency(detail.amount) : detail.payment_method}</p></div>
             </div>
             <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarClock className="h-3.5 w-3.5" /> Net {detail.payment_terms_days} days via {detail.payment_method}{detail.paid_at ? ` · Paid ${formatDate(detail.paid_at.slice(0, 10))}` : ""}</p>
+            <div className="mt-4"><InvoiceBreakdown lines={detail.line_items || []} currency={detail.currency || "USD"} /></div>
             <p className="mt-4 text-[11px] text-muted-foreground">
-              Customize each service description before sending the PDF to the client. Time logs stay internal and are not shown on the invoice.
+              Hourly tasks are listed for the client. Package time stays off the invoice unless the package time note was turned on for this invoice. Time logs themselves are not changed.
             </p>
             <div className="mt-2 overflow-x-auto rounded-xl border">
               <table className="w-full text-xs">

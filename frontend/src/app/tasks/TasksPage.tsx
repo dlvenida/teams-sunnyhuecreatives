@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input, Label, Select, Textarea } from "@/components/ui/input"
 import { Card, CardContent } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
-import { formatDate } from "@/lib/utils"
+import { formatCurrency, formatDate } from "@/lib/utils"
 import { TASK_STATUSES, PRIORITY_META, RECURRENCE_OPTIONS, WEEKDAY_OPTIONS, groupByPeriod, isDueToday, isOverdue } from "@/components/tasks/task-utils"
 import { CommentThread } from "@/components/comments/CommentThread"
 import { DetailAttachments } from "@/components/comments/DetailAttachments"
@@ -22,6 +22,7 @@ const emptyForm = {
   estimated_hours: "", tags: "",
   recurrence: "none" as TaskRecurrence, recurrence_interval: "1", recurrence_unit: "week",
   recurrence_weekdays: [0, 1, 2, 3, 4] as number[], recurrence_until: "",
+  billing_mode: "hourly" as "hourly" | "package", package_line_id: "",
 }
 
 export function TasksPage() {
@@ -70,6 +71,12 @@ export function TasksPage() {
   })
   const { data: projects = [] } = useQuery({ queryKey: ["projects"], queryFn: () => apiFetch<Project[]>("/projects?include_archived=false") })
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas"), enabled: isStaff })
+  const { data: billingLines = [] } = useQuery({
+    queryKey: ["client-billing-lines", form.client_id],
+    queryFn: () => apiFetch<{ id: string; billing_type: string; description?: string | null; default_amount?: string | null }[]>(`/invoices/clients/${form.client_id}/billing-lines`),
+    enabled: isAdmin && !!modal && !!form.client_id,
+  })
+  const packageLines = billingLines.filter((line) => line.billing_type === "package" || line.billing_type === "flat_fee")
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["tasks"] }); qc.invalidateQueries({ queryKey: ["task-stats"] }); qc.invalidateQueries({ queryKey: ["projects"] }) }
 
   // Deep-link from mention / comment notifications: ?task=&comment=
@@ -115,6 +122,7 @@ export function TasksPage() {
         recurrence_unit: form.recurrence === "custom" ? form.recurrence_unit : null,
         recurrence_weekdays: form.recurrence === "custom" && form.recurrence_unit === "week" ? form.recurrence_weekdays : null,
         recurrence_until: form.recurrence !== "none" && form.recurrence_until ? form.recurrence_until : null,
+        ...(isAdmin ? { billing_mode: form.billing_mode, package_line_id: form.billing_mode === "package" && form.package_line_id ? form.package_line_id : null } : {}),
       }
       return modal?.mode === "edit" && modal.task
         ? apiFetch(`/tasks/${modal.task.id}`, { method: "PATCH", body: JSON.stringify(body) })
@@ -145,6 +153,8 @@ export function TasksPage() {
       recurrence_unit: t.recurrence_unit || "week",
       recurrence_weekdays: t.recurrence_weekdays?.length ? t.recurrence_weekdays : [0, 1, 2, 3, 4],
       recurrence_until: t.recurrence_until || "",
+      billing_mode: t.billing_mode === "package" ? "package" : "hourly",
+      package_line_id: t.package_line_id || "",
     })
     setModal({ mode: "edit", task: t })
     setError("")
@@ -212,7 +222,7 @@ export function TasksPage() {
                 <div className="h-1.5" style={{ background: col.color }} />
                 <div className="flex items-center justify-between px-3 py-2.5"><span className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide"><span className="h-2.5 w-2.5 rounded-full" style={{ background: col.color }} />{col.label}</span><span className="rounded-full px-2 py-0.5 text-[11px] font-bold text-white" style={{ background: col.color }}>{colTasks.length}</span></div>
                 <div className="space-y-2 px-2 pb-2">
-                  {colTasks.map(t => <TaskCard key={t.id} t={t} onComments={() => setCommentTask(t)} draggable onDragStart={() => setDragId(t.id)} />)}
+                  {colTasks.map(t => <TaskCard key={t.id} t={t} showBilling={isStaff} onComments={() => setCommentTask(t)} draggable onDragStart={() => setDragId(t.id)} />)}
                   <button onClick={() => openCreate(col.id)} className="w-full rounded-lg border border-dashed py-2 text-xs text-muted-foreground hover:bg-white">+ Add task</button>
                 </div>
               </div>
@@ -224,7 +234,7 @@ export function TasksPage() {
           <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-3">Task</th><th className="p-3">Client / Project</th><th className="p-3">Assignee</th><th className="p-3">Status</th><th className="p-3">Priority</th><th className="p-3">Deadline</th><th className="p-3">Repeat</th><th className="p-3">Hours</th><th className="p-3"></th></tr></thead>
           <tbody>{tasks.map(t => (
             <tr key={t.id} className="border-b hover:bg-muted/20">
-              <td className="p-3"><button className="font-medium hover:underline text-left" onClick={() => setCommentTask(t)} title="Open task detail">{t.title}</button>{isOverdue(t) && <span className="ml-2 text-red-600 inline-flex items-center gap-1"><AlertTriangle className="h-3 w-3" />overdue</span>}</td>
+              <td className="p-3"><button className="font-medium hover:underline text-left" onClick={() => setCommentTask(t)} title="Open task detail">{t.title}</button>{isStaff && <BillingBadge mode={t.billing_mode} />}{isOverdue(t) && <span className="ml-2 text-red-600 inline-flex items-center gap-1"><AlertTriangle className="h-3 w-3" />overdue</span>}</td>
               <td className="p-3">{t.client_name}{t.project_name ? <span className="text-muted-foreground"> · {t.project_name}</span> : null}</td>
               <td className="p-3">{t.assignee_name || <span className="text-amber-600">Unassigned</span>}</td>
               <td className="p-3"><Select value={t.status} onChange={e => move.mutate({ id: t.id, status: e.target.value as TaskStatus })} className="h-7 w-auto text-[11px]">{TASK_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select></td>
@@ -241,7 +251,7 @@ export function TasksPage() {
           {groupByPeriod(tasks, cadence).map(([period, items]) => (
             <div key={period}>
               <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold"><CalendarDays className="h-4 w-4 text-primary" />{period} <span className="text-xs font-normal text-muted-foreground">({items.length})</span></h3>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{items.map(t => <TaskCard key={t.id} t={t} onComments={() => setCommentTask(t)} />)}</div>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{items.map(t => <TaskCard key={t.id} t={t} showBilling={isStaff} onComments={() => setCommentTask(t)} />)}</div>
             </div>
           ))}
           {tasks.length === 0 && <p className="text-sm text-muted-foreground">No tasks in this view.</p>}
@@ -314,6 +324,29 @@ export function TasksPage() {
                   </div>
                 )}
               </div>
+              {isAdmin && (
+                <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                  <Label>Client billing</Label>
+                  <Select aria-label="Client billing" value={form.billing_mode} onChange={e => setForm({ ...form, billing_mode: e.target.value as "hourly" | "package", package_line_id: e.target.value === "hourly" ? "" : form.package_line_id })}>
+                    <option value="hourly">Hourly</option>
+                    <option value="package">Package</option>
+                  </Select>
+                  {form.billing_mode === "package" && (
+                    <div>
+                      <Label>Package line</Label>
+                      <Select aria-label="Package line" value={form.package_line_id} onChange={e => setForm({ ...form, package_line_id: e.target.value })}>
+                        <option value="">Exclude from hourly billing</option>
+                        {packageLines.map((line) => (
+                          <option key={line.id} value={line.id}>
+                            {(line.description || (line.billing_type === "flat_fee" ? "Flat fee" : "Package")) + (line.default_amount ? ` - ${formatCurrency(line.default_amount)}` : "")}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  )}
+                  <p className="text-[11px] text-muted-foreground">Hours are still logged. Package tasks stay off hourly invoice charges. Several tasks can share one package line.</p>
+                </div>
+              )}
               <div><Label>Tags (comma separated)</Label><Input value={form.tags} onChange={e => setForm({ ...form, tags: e.target.value })} placeholder="design, urgent-client" /></div>
               {error && <p className="text-xs text-red-600">{error}</p>}
               <div className="flex gap-2 pt-1">
@@ -341,6 +374,7 @@ export function TasksPage() {
               <div>
                 <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Task View</div>
                 <h2 className="text-base font-semibold leading-snug">{commentTask.title}</h2>
+                {isStaff && <div className="mt-1"><BillingBadge mode={commentTask.billing_mode} /></div>}
               </div>
               <span className="flex gap-1">
                 <Button size="sm" variant="outline" onClick={() => openEdit(commentTask)}><Pencil className="h-3 w-3" /> Edit Task</Button>
@@ -394,7 +428,17 @@ function TaskTimeLogs({ taskId }: { taskId: string }) {
   )
 }
 
-function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onComments: () => void; draggable?: boolean; onDragStart?: () => void }) {
+function BillingBadge({ mode }: { mode?: string | null }) {
+  if (mode !== "hourly" && mode !== "package") return null
+  const isPackage = mode === "package"
+  return (
+    <span className={cn("ml-1 rounded-full px-2 py-0.5 text-[10px] font-semibold", isPackage ? "bg-amber-100 text-amber-800" : "bg-sky-100 text-sky-800")}>
+      {isPackage ? "Package" : "Hourly"}
+    </span>
+  )
+}
+
+function TaskCard({ t, showBilling, onComments, draggable, onDragStart }: { t: TaskItem; showBilling?: boolean; onComments: () => void; draggable?: boolean; onDragStart?: () => void }) {
   return (
     <div
       role="button"
@@ -418,6 +462,7 @@ function TaskCard({ t, onComments, draggable, onDragStart }: { t: TaskItem; onCo
       <span className="text-left w-full"><span className="text-xs font-semibold leading-snug">{t.title}</span></span>
       <div className="mt-2 flex flex-wrap gap-1.5">
         <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ color: TASK_STATUSES.find((s) => s.id === t.status)?.color, background: TASK_STATUSES.find((s) => s.id === t.status)?.bg }}>{TASK_STATUSES.find((s) => s.id === t.status)?.label}</span>
+        {showBilling && <BillingBadge mode={t.billing_mode} />}
         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", PRIORITY_META[t.priority].className)}>{PRIORITY_META[t.priority].label}</span>
         {t.recurrence_label && <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700"><Repeat className="h-2.5 w-2.5" />{t.recurrence_label}</span>}
         {isOverdue(t) && t.recurrence_label && (

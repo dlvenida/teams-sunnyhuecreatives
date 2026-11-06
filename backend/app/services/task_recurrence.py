@@ -209,6 +209,8 @@ def spawn_next_occurrence(db: Session, done_task: Task) -> Task | None:
         recurrence_until=done_task.recurrence_until,
         series_id=series,
         parent_task_id=done_task.id,
+        billing_mode=getattr(done_task, "billing_mode", None) or "hourly",
+        package_line_id=getattr(done_task, "package_line_id", None),
     )
     db.add(child)
     return child

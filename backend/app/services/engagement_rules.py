@@ -366,9 +366,9 @@ def classify_activities(
                 "status": "rejected",
                 "counted": False,
                 "alerts": [_alert("UNCLEAR_SCREENSHOT", item.get("decision_reason") or "Management rejected this activity.")],
-                "explanation": item.get("decision_reason") or "Management rejected this activity.",
                 "username_key": normalize_profile(item.get("username")),
             })
+            item["explanation"] = rejection_reason(item)
             results.append(item)
             continue
 
@@ -492,8 +492,8 @@ def classify_activities(
                 "status": status,
                 "counted": False,
                 "alerts": alerts,
-                "explanation": blocking[0]["explanation"],
             })
+            item["explanation"] = rejection_reason(item)
             results.append(item)
             continue
 
@@ -569,13 +569,38 @@ def overall_status(
     return "in_progress"
 
 
+def rejection_reason(item: dict) -> str:
+    """A rejected or not-counted item always has a readable reason."""
+    for key in ("explanation", "decision_reason", "rejection_note"):
+        text = " ".join(str(item.get(key) or "").split())
+        if text:
+            return text
+    for alert in item.get("alerts") or []:
+        text = " ".join(str((alert or {}).get("explanation") or "").split())
+        if text:
+            return text
+        code = (alert or {}).get("code")
+        if code in ALERT_LABELS:
+            return f"{ALERT_LABELS[code]}. This was not counted."
+    status = item.get("status")
+    if status == "duplicate":
+        return "Duplicate activity. This was already counted."
+    if status == "invalid":
+        return "Not counted. The screenshot check could not confirm this activity."
+    return "Rejected. Approve it here if this evidence should count."
+
+
 def review_log_order(items: list[dict]) -> list[dict]:
-    """Needs review and pending approval, newest first, so management does not scroll for the latest."""
+    """Needs review, sent back, and rejected evidence, newest first."""
     def waiting(item: dict) -> bool:
-        return item.get("status") == "needs_review" or item.get("approval") == "Pending management review"
+        if item.get("status") == "needs_review":
+            return True
+        if item.get("approval") in {"Pending management review", "Sent back"}:
+            return True
+        return bool(item.get("rejection_reasons"))
 
     def stamp(item: dict) -> str:
-        return str(item.get("latest_at") or item.get("submitted_at") or "")
+        return str(item.get("latest_at") or item.get("submitted_at") or item.get("rejected_at") or "")
 
     return sorted((item for item in items if waiting(item)), key=stamp, reverse=True)
 

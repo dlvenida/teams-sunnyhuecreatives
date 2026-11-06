@@ -22,6 +22,7 @@ from app.services.engagement_rules import (
     overall_status,
     parse_extraction_document,
     platform_from_title,
+    rejection_reason,
     review_log_order,
     summarize,
 )
@@ -362,6 +363,28 @@ class StatusTests(unittest.TestCase):
             {"task_id": "pending", "status": "target_met", "approval": "Pending management review", "submitted_at": "2026-11-06T12:00:00+00:00"},
         ]
         self.assertEqual([row["task_id"] for row in review_log_order(items)], ["newest", "pending", "old"])
+
+    def test_rejected_item_keeps_a_reason_and_stays_in_the_review_log(self):
+        rejected = _count("instagram", [_act(activity_date=date(2026, 11, 5))])[0]
+        self.assertEqual(rejected["status"], "invalid")
+        self.assertTrue(rejected["explanation"].strip())
+        self.assertIn("date", rejected["explanation"].casefold())
+        blank = rejection_reason({"status": "rejected", "decision_reason": "   ", "alerts": []})
+        self.assertTrue(blank.strip())
+        items = [
+            {"task_id": "older", "status": "needs_review", "latest_at": "2026-11-06T09:00:00+00:00", "rejection_reasons": ["Direct Messages are below the minimum of 20. 15 verified."]},
+            {
+                "task_id": "chef",
+                "status": "target_met",
+                "approval": "Sent back",
+                "latest_at": "2026-11-06T16:00:00+00:00",
+                "rejection_reasons": ["Account mismatch for Chef Stephanie Tranchina"],
+            },
+        ]
+        ordered = review_log_order(items)
+        self.assertEqual(ordered[0]["task_id"], "chef")
+        self.assertIn("chef", [row["task_id"] for row in ordered])
+        self.assertTrue(all(row.get("rejection_reasons") and row["rejection_reasons"][0].strip() for row in ordered))
 
     def test_summarize_does_not_accept_a_typed_total(self):
         self.assertNotIn("verified_total", inspect.signature(summarize).parameters)

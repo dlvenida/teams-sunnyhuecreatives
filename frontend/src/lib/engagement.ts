@@ -70,9 +70,12 @@ export interface EngagementTask {
   status_label: string
   completion_pct: number
   time_logged: string
+  rejection_note?: string | null
+  rejection_reasons?: string[]
   approval: string
   latest_at?: string | null
   submitted_at?: string | null
+  rejected_at?: string | null
   pending_review: number
   duplicate_count: number
   invalid_count: number

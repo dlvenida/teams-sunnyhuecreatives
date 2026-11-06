@@ -101,6 +101,7 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
               <p className="brand-label text-[11px] font-bold uppercase tracking-wide text-[#B8325F]">{row.label}</p>
               <p className="mt-1 text-3xl leading-none text-[#B8325F]">{row.verified}</p>
               <p className="mt-1 text-xs text-muted-foreground">Target {row.min} to {row.max} · {row.remaining} still to go · {row.completion_pct}%</p>
+              {row.verified > row.max && <p className="text-[11px] font-semibold text-[#B8325F]">Above the daily maximum. The full verified count is kept.</p>}
               <p className="text-[11px] text-muted-foreground">Seen {row.detected} · duplicates {row.duplicates} · not counted {row.invalid} · to review {row.needs_review}</p>
               <div className="mt-2 h-1.5 rounded-full bg-white"><div className="h-1.5 rounded-full bg-[#E8578A]" style={{ width: `${row.completion_pct}%` }} /></div>
             </div>
@@ -196,6 +197,42 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
   )
 }
 
+function AccessRoster() {
+  const qc = useQueryClient()
+  const { data } = useQuery({
+    queryKey: ["engagement-vas"],
+    queryFn: () => apiFetch<{ vas: { va_id: string; name: string; enabled: boolean; manual: boolean; has_engagement_tasks: boolean }[] }>("/engagement/vas"),
+  })
+  const toggle = useMutation({
+    mutationFn: (row: { va_id: string; enabled: boolean }) =>
+      apiFetch(`/engagement/vas/${row.va_id}`, { method: "PATCH", body: JSON.stringify({ enabled: row.enabled }) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["engagement-vas"] })
+      qc.invalidateQueries({ queryKey: ["engagement-access"] })
+      qc.invalidateQueries({ queryKey: ["engagement-tasks"] })
+    },
+  })
+  if (!data) return null
+  return (
+    <Card>
+      <CardContent className="space-y-2 p-4">
+        <p className="brand-label text-[11px] font-bold uppercase tracking-[0.12em] text-[#B8325F]">Who can upload</p>
+        <p className="text-xs text-muted-foreground">Virtual Assistants with Instagram, Facebook, or LinkedIn tasks are included. You can turn screenshot check on or off for one person. Pay is not shown here.</p>
+        <ul className="space-y-1.5">
+          {data.vas.map((row) => (
+            <li key={row.va_id} className="flex items-center justify-between gap-2 rounded-xl border bg-card px-3 py-2 text-sm">
+              <span className="min-w-0 truncate">{row.name}{row.has_engagement_tasks ? "" : " · no engagement tasks"}</span>
+              <Button type="button" size="sm" variant={row.enabled ? "outline" : "gold"} onClick={() => toggle.mutate({ va_id: row.va_id, enabled: !row.enabled })}>
+                {row.enabled ? "On" : "Off"}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function EngagementPage() {
   const user = getAuthUser()
   const access = useEngagementAccess()
@@ -228,7 +265,7 @@ export function EngagementPage() {
         <div>
           <p className="brand-label text-[11px] font-bold uppercase tracking-[0.14em] text-[#B8325F]">Screenshot check</p>
           <h1 className="text-4xl text-[#B8325F]">Daily engagement evidence</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Upload screenshots on the client task that is already on the board. Verified totals come only from those screenshots. This does not change clock-in, timesheets, or the task list.</p>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">Upload screenshots on the client task that is already on the board. Verified totals come only from those screenshots. You can go past the daily maximum, and that extra count stays. This does not change clock-in, timesheets, or the task list.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Input type="date" value={day || data?.work_date || ""} onChange={(event) => setDay(event.target.value)} className="w-auto" />
@@ -237,6 +274,7 @@ export function EngagementPage() {
         </div>
       </div>
       {error && <p className="text-sm text-red-600">{error instanceof Error ? error.message : "Could not load tasks."}</p>}
+      {user?.role === "admin" && <AccessRoster />}
       {data && data.tasks.length === 0 && (
         <Card><CardContent className="p-5 text-sm text-muted-foreground">No Instagram, Facebook, or LinkedIn engagement tasks for this date. The check uses tasks already on the board. It does not create a second task.</CardContent></Card>
       )}

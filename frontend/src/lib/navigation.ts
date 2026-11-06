@@ -86,7 +86,7 @@ const ENGAGEMENT_ITEM: NavItem = {
   to: "/admin/engagement",
   label: "Screenshot check",
   icon: ClipboardCheck,
-  keywords: ["screenshots", "engagement", "instagram", "facebook", "linkedin", "arby"],
+  keywords: ["screenshots", "engagement", "instagram", "facebook", "linkedin", "community"],
   section: "Work",
   color: "#E8578A",
 }

@@ -70,6 +70,9 @@ def actor_name(db: Session, current) -> str:
 
 
 def _subject_va(db: Session, current) -> VA | None:
+    from app.services.engagement_access import sync_engagement_subject
+
+    sync_engagement_subject(db)
     if not current.va_id:
         return None
     return (

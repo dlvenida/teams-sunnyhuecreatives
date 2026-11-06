@@ -1,4 +1,4 @@
-"""Engagement screenshot verification. Arby uploads. Management reviews. No pay fields."""
+"""Engagement screenshot verification. Community Engagement VAs upload. Management reviews. No pay fields."""
 from datetime import date, timedelta
 from typing import Annotated
 from urllib.parse import quote
@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user
+from app.models import UserRole
 from app.services import engagement_service as svc
+from app.services.engagement_access import engagement_roster, set_engagement_access
 from app.services.payroll_calendar import manila_today
 
 router = APIRouter(prefix="/engagement", tags=["engagement"])
@@ -35,13 +37,40 @@ class TargetBody(BaseModel):
     account_names: list[str] | None = None
 
 
+class AccessBody(BaseModel):
+    enabled: bool
+
+
 def _day(value: date | None) -> date:
     return value or manila_today()
 
 
 @router.get("/access")
 def access(current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    from app.services.engagement_access import sync_engagement_subject
+
+    sync_engagement_subject(db)
     return svc.access_payload(db, current)
+
+
+@router.get("/vas")
+def list_vas(current: Annotated[CurrentUser, Depends(get_current_user)], db: Annotated[Session, Depends(get_db)]):
+    if current.role != UserRole.admin:
+        raise HTTPException(403, "Only an administrator can change who uses screenshot check.")
+    return {"vas": engagement_roster(db)}
+
+
+@router.patch("/vas/{va_id}")
+def update_va_access(
+    va_id: UUID,
+    body: AccessBody,
+    current: Annotated[CurrentUser, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    if current.role != UserRole.admin:
+        raise HTTPException(403, "Only an administrator can change who uses screenshot check.")
+    va = set_engagement_access(db, va_id, body.enabled)
+    return {"va_id": str(va.id), "name": va.name, "enabled": bool(va.engagement_verification), "manual": True}
 
 
 @router.get("/tasks")

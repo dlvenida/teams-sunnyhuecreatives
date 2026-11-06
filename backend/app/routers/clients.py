@@ -13,6 +13,7 @@ from app.models import (
     ClientApprovalStatus,
     ClientPackage,
     Currency,
+    ManualEarning,
     SubClient,
     UserRole,
     WorkLog,
@@ -548,10 +549,11 @@ def delete_client(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Client not found")
     has_logs = db.query(WorkLog).filter(WorkLog.client_id == client_id).first()
     has_invoices = db.query(Invoice).filter(Invoice.client_id == client_id).first()
-    if has_logs or has_invoices:
+    has_manual = db.query(ManualEarning).filter(ManualEarning.client_id == client_id).first()
+    if has_logs or has_invoices or has_manual:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot delete client with work logs or invoices. Archive instead.",
+            detail="Cannot delete client with work logs, invoices, or manual earnings. Archive instead.",
         )
     db.delete(client)
     db.commit()

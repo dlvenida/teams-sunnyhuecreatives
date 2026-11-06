@@ -1254,6 +1254,34 @@ class BusinessExpenseResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ManualEarningCreate(BaseModel):
+    client_id: UUID
+    earned_date: date
+    amount: Decimal
+    currency: str = "USD"
+    description: str | None = Field(default=None, max_length=500)
+
+
+class ManualEarningUpdate(BaseModel):
+    client_id: UUID | None = None
+    earned_date: date | None = None
+    amount: Decimal | None = None
+    currency: str | None = None
+    description: str | None = Field(default=None, max_length=500)
+
+
+class ManualEarningResponse(BaseModel):
+    id: UUID
+    client_id: UUID
+    client_name: str | None = None
+    client_active: bool | None = None
+    earned_date: date
+    description: str | None = None
+    amount: Decimal
+    currency: str
+    created_at: datetime
+
+
 class ReportRequest(BaseModel):
     client_id: UUID
     year: int | None = None

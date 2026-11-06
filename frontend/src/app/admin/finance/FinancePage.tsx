@@ -6,7 +6,7 @@ export function FinancePage() {
       <div className="px-1 pt-1">
         <h1 className="font-display text-xl font-bold">Earnings & expenses</h1>
         <p className="text-xs text-muted-foreground">
-          Client income, VA payroll, and other expenses. Private to Admin. A short version also sits on Today, under the day's status.
+          Client income in USD and PHP, VA payroll, and expenses for the dates you pick. Private to Admin. A short version also sits on Today, under the day's status.
         </p>
       </div>
       <OwnerFinancePanel />

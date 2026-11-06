@@ -1,74 +1,186 @@
-import { useMemo, useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useEffect, useMemo, useState } from "react"
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
-import { formatCurrency, formatDate } from "@/lib/utils"
+import { formatCurrency, formatDate, localISODate } from "@/lib/utils"
+import type { Client } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input, Label } from "@/components/ui/input"
+import { Input, Label, Select } from "@/components/ui/input"
 import { PiggyBank, Plus, Trash2, Wallet } from "lucide-react"
+
+type MoneySide = {
+  usd: string
+  php: string
+  combined_usd: string | null
+  combined_php: string | null
+}
+
+type ByClient = {
+  client_id: string | null
+  client_name: string
+  earned_usd: string
+  earned_php: string
+  combined_usd: string | null
+  combined_php: string | null
+  invoices: number
+  manual: number
+}
+
+type ManualEarningRow = {
+  id: string
+  client_id: string
+  client_name: string
+  client_active: boolean
+  earned_date: string
+  description: string | null
+  amount: string
+  currency: string
+}
 
 type OwnerFinance = {
   period_start: string
   period_end: string
   usd_php_rate: string | null
-  total_earned: string
-  total_earned_php: string | null
-  total_va_payroll: string
-  total_va_payroll_php: string | null
-  total_expenses: string
-  total_expenses_php: string | null
-  net_profit: string
-  net_profit_php: string | null
-  by_client: { client_name: string; earned: string; earned_php: string | null; invoices: number }[]
+  earned: MoneySide
+  va_payroll: MoneySide
+  expense_totals: MoneySide
+  net: MoneySide
+  by_client: ByClient[]
+  manual_earnings: ManualEarningRow[]
   expenses: { id: string; expense_date: string; description: string; amount: string; currency: string }[]
   va_runs_count: number
   invoices_count: number
+  manual_count: number
+}
+
+function isIsoDate(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+function rangeBounds(from: string, to: string) {
+  if (!isIsoDate(from) || !isIsoDate(to)) return null
+  return from <= to ? { start: from, end: to } : { start: to, end: from }
 }
 
 function monthBounds(d = new Date()) {
-  const y = d.getFullYear()
-  const m = d.getMonth()
-  const start = new Date(y, m, 1)
-  const end = new Date(y, m + 1, 0)
-  const iso = (x: Date) => x.toISOString().slice(0, 10)
-  return { from: iso(start), to: iso(end) }
+  const start = new Date(d.getFullYear(), d.getMonth(), 1)
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+  return { from: localISODate(start), to: localISODate(end) }
 }
 
-function Dual({ usd, php }: { usd: string | number; php?: string | null }) {
+function hasAmount(value: string | null | undefined) {
+  const num = Number(value || 0)
+  return !Number.isNaN(num) && num !== 0
+}
+
+function isCurrentClient(client: Client) {
+  return client.is_active && (client.approval_status || "approved") === "approved"
+}
+
+function pastClientLabel(client: Client) {
+  const status = client.approval_status || "approved"
+  if (status === "pending") return `${client.name} (pending)`
+  if (status === "rejected") return `${client.name} (declined)`
+  return `${client.name} (past)`
+}
+
+function sourceLabel(row: ByClient) {
+  const parts: string[] = []
+  if (row.invoices) parts.push(`${row.invoices} invoice${row.invoices === 1 ? "" : "s"}`)
+  if (row.manual) parts.push(`${row.manual} manual entr${row.manual === 1 ? "y" : "ies"}`)
+  return parts.join(", ")
+}
+
+function MoneyFigures({
+  side,
+  tone = "",
+  compact = false,
+}: {
+  side: { usd: string; php: string; combined_usd: string | null; combined_php: string | null }
+  tone?: string
+  compact?: boolean
+}) {
+  const rateOn = side.combined_usd != null && side.combined_php != null
+  const usdOn = hasAmount(side.usd)
+  const phpOn = hasAmount(side.php)
+  const mixed = usdOn && phpOn
+  const primary = compact ? "text-sm font-extrabold" : "text-2xl font-extrabold leading-none tracking-tight"
+  const secondary = compact ? "text-xs font-extrabold" : "mt-1 text-lg font-extrabold leading-none tracking-tight"
+  if (rateOn) {
+    return (
+      <div className={tone}>
+        <p className={primary}>{formatCurrency(side.combined_usd, "USD")}</p>
+        <p className={secondary}>{formatCurrency(side.combined_php, "PHP")}</p>
+        {mixed && (
+          <p className="mt-1 text-[10px] font-medium text-muted-foreground">
+            Recorded {formatCurrency(side.usd, "USD")} · {formatCurrency(side.php, "PHP")}
+          </p>
+        )}
+      </div>
+    )
+  }
   return (
-    <div>
-      <p className="text-2xl font-extrabold leading-none tracking-tight">{formatCurrency(usd, "USD")}</p>
-      {php != null && php !== "" && (
-        <p className="mt-1 text-xs font-semibold text-muted-foreground">{formatCurrency(php, "PHP")}</p>
-      )}
+    <div className={tone}>
+      {(usdOn || !phpOn) && <p className={primary}>{formatCurrency(side.usd, "USD")}</p>}
+      {phpOn && <p className={usdOn ? secondary : primary}>{formatCurrency(side.php, "PHP")}</p>}
     </div>
   )
+}
+
+function sideHasBoth(side: MoneySide) {
+  return hasAmount(side.usd) && hasAmount(side.php)
 }
 
 export function OwnerFinancePanel() {
   const qc = useQueryClient()
   const defaults = useMemo(() => monthBounds(), [])
+  const today = useMemo(() => localISODate(new Date()), [])
   const [dateFrom, setDateFrom] = useState(defaults.from)
   const [dateTo, setDateTo] = useState(defaults.to)
+  const [appliedFrom, setAppliedFrom] = useState(defaults.from)
+  const [appliedTo, setAppliedTo] = useState(defaults.to)
   const [rate, setRate] = useState("")
-  const [expDate, setExpDate] = useState(new Date().toISOString().slice(0, 10))
+  const [expDate, setExpDate] = useState(today)
   const [expDesc, setExpDesc] = useState("")
   const [expAmount, setExpAmount] = useState("")
-  const [formError, setFormError] = useState("")
+  const [expenseError, setExpenseError] = useState("")
+  const [earnDate, setEarnDate] = useState(today)
+  const [earnClient, setEarnClient] = useState("")
+  const [earnNote, setEarnNote] = useState("")
+  const [earnAmount, setEarnAmount] = useState("")
+  const [earnCurrency, setEarnCurrency] = useState<"USD" | "PHP">("USD")
+  const [earnError, setEarnError] = useState("")
+
+  useEffect(() => {
+    const next = rangeBounds(dateFrom, dateTo)
+    if (!next) return
+    setAppliedFrom(next.start)
+    setAppliedTo(next.end)
+    setEarnDate((current) => (current < next.start || current > next.end ? next.start : current))
+  }, [dateFrom, dateTo])
 
   const qs = useMemo(() => {
     const p = new URLSearchParams()
-    if (dateFrom) p.set("date_from", dateFrom)
-    if (dateTo) p.set("date_to", dateTo)
+    p.set("date_from", appliedFrom)
+    p.set("date_to", appliedTo)
     const r = parseFloat(rate)
     if (rate && !Number.isNaN(r) && r > 0) p.set("usd_php_rate", String(r))
     return p.toString()
-  }, [dateFrom, dateTo, rate])
+  }, [appliedFrom, appliedTo, rate])
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ["owner-finance", qs],
     queryFn: () => apiFetch<OwnerFinance>(`/dashboard/owner-finance?${qs}`),
+    placeholderData: keepPreviousData,
   })
+
+  const { data: clients = [] } = useQuery({
+    queryKey: ["clients", "manual-earnings"],
+    queryFn: () => apiFetch<Client[]>("/clients?include_archived=true"),
+  })
+
+  const currentClients = clients.filter(isCurrentClient)
+  const pastClients = clients.filter((client) => !isCurrentClient(client))
 
   const addExpense = useMutation({
     mutationFn: () =>
@@ -82,12 +194,12 @@ export function OwnerFinancePanel() {
         }),
       }),
     onSuccess: () => {
-      setFormError("")
+      setExpenseError("")
       setExpDesc("")
       setExpAmount("")
       qc.invalidateQueries({ queryKey: ["owner-finance"] })
     },
-    onError: (err: Error) => setFormError(err.message),
+    onError: (err: Error) => setExpenseError(err.message),
   })
 
   const removeExpense = useMutation({
@@ -95,7 +207,63 @@ export function OwnerFinancePanel() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["owner-finance"] }),
   })
 
-  const netPositive = data ? Number(data.net_profit) >= 0 : true
+  const addEarning = useMutation({
+    mutationFn: () =>
+      apiFetch("/manual-earnings", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: earnClient,
+          earned_date: earnDate,
+          description: earnNote.trim() || null,
+          amount: parseFloat(earnAmount),
+          currency: earnCurrency,
+        }),
+      }),
+    onSuccess: () => {
+      setEarnError("")
+      setEarnNote("")
+      setEarnAmount("")
+      qc.invalidateQueries({ queryKey: ["owner-finance"] })
+    },
+    onError: (err: Error) => setEarnError(err.message),
+  })
+
+  const removeEarning = useMutation({
+    mutationFn: (id: string) => apiFetch(`/manual-earnings/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["owner-finance"] }),
+  })
+
+  const netPositive = data
+    ? data.net.combined_usd != null
+      ? Number(data.net.combined_usd) >= 0
+      : Number(data.net.usd) >= 0 && Number(data.net.php) >= 0
+    : true
+
+  const mixedWithoutRate = !!data && !data.usd_php_rate && (
+    sideHasBoth(data.earned) || sideHasBoth(data.va_payroll) || sideHasBoth(data.expense_totals) || sideHasBoth(data.net)
+    || ((hasAmount(data.earned.usd) || hasAmount(data.va_payroll.usd) || hasAmount(data.expense_totals.usd))
+      && (hasAmount(data.earned.php) || hasAmount(data.va_payroll.php) || hasAmount(data.expense_totals.php)))
+  )
+
+  const bounds = rangeBounds(dateFrom, dateTo)
+
+  const submitEarning = () => {
+    if (bounds && (earnDate < bounds.start || earnDate > bounds.end)) {
+      setEarnError(`Pick a date from ${formatDate(bounds.start)} to ${formatDate(bounds.end)} so it counts in these totals.`)
+      return
+    }
+    if (!earnClient) {
+      setEarnError("Select a client.")
+      return
+    }
+    const amount = parseFloat(earnAmount)
+    if (!earnAmount || Number.isNaN(amount) || amount <= 0) {
+      setEarnError("Enter an amount greater than zero.")
+      return
+    }
+    setEarnError("")
+    addEarning.mutate()
+  }
 
   return (
     <div className="space-y-4 rounded-3xl border border-primary/20 bg-gradient-to-br from-rose-50/80 via-card to-amber-50/50 p-4 shadow-sm sm:p-5">
@@ -106,21 +274,22 @@ export function OwnerFinancePanel() {
           </p>
           <h2 className="font-display text-lg font-bold">Your money at a glance</h2>
           <p className="text-xs text-muted-foreground">
-            Client income, VA payroll, and other expenses. Private to you. Pick dates and a USD to PHP rate to see pesos too.
+            Totals follow the dates you pick. Enter a USD to PHP rate to see one total in dollars and the same total in pesos. Private to you.
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
           <div>
             <Label className="text-[10px]">From</Label>
-            <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-9 w-[140px]" />
+            <Input aria-label="From" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-9 w-[140px]" />
           </div>
           <div>
             <Label className="text-[10px]">To</Label>
-            <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-9 w-[140px]" />
+            <Input aria-label="To" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-9 w-[140px]" />
           </div>
           <div>
             <Label className="text-[10px]">USD to PHP Rate</Label>
             <Input
+              aria-label="USD to PHP Rate"
               type="number"
               step="0.01"
               min="0"
@@ -144,28 +313,42 @@ export function OwnerFinancePanel() {
         </div>
       </div>
 
-      {isLoading && <p className="text-sm text-muted-foreground">Loading earnings…</p>}
+      {mixedWithoutRate && (
+        <p className="text-xs text-muted-foreground">
+          This range has both USD and PHP. Enter a rate above to turn them into one total in dollars and one total in pesos.
+        </p>
+      )}
+      {data?.usd_php_rate && (
+        <p className="text-xs text-muted-foreground">
+          Each total below is the same money in USD and in PHP, using 1 USD = {data.usd_php_rate} PHP. Recorded lines are the original amounts.
+        </p>
+      )}
+
+      {isLoading && !data && <p className="text-sm text-muted-foreground">Loading earnings…</p>}
+      {isError && !data && <p className="text-sm text-red-600">{error instanceof Error ? error.message : "Could not load earnings."}</p>}
+      {!rangeBounds(dateFrom, dateTo) && (
+        <p className="text-xs text-muted-foreground">Enter a real From date and To date. Totals stay on the last complete range until both dates are set.</p>
+      )}
 
       {data && (
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[
-              { label: "Total Earned", hint: "From clients", usd: data.total_earned, php: data.total_earned_php, tone: "" },
-              { label: "Total Paid to VAs", hint: `${data.va_runs_count} payroll run(s)`, usd: data.total_va_payroll, php: data.total_va_payroll_php, tone: "" },
-              { label: "Total Expenses", hint: "Tools & misc", usd: data.total_expenses, php: data.total_expenses_php, tone: "" },
+              { label: "Total Earned", hint: data.usd_php_rate ? "Combined for these dates" : "Invoices and manual entries", side: data.earned, tone: "" },
+              { label: "Total Paid to VAs", hint: `${data.va_runs_count} payroll run(s)`, side: data.va_payroll, tone: "" },
+              { label: "Total Expenses", hint: "Tools and misc", side: data.expense_totals, tone: "" },
               {
                 label: "Net Profit",
-                hint: "Income − payroll − expenses",
-                usd: data.net_profit,
-                php: data.net_profit_php,
+                hint: "After VA pay and expenses",
+                side: data.net,
                 tone: netPositive ? "text-green-700" : "text-red-600",
               },
             ].map((s) => (
               <Card key={s.label} className="min-w-0 border-primary/10 bg-white/80">
                 <CardContent className="p-4">
                   <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
-                  <div className={s.tone}>
-                    <Dual usd={s.usd} php={s.php} />
+                  <div className="mt-1">
+                    <MoneyFigures side={s.side} tone={s.tone} />
                   </div>
                   <p className="mt-1 text-[10px] text-muted-foreground">{s.hint}</p>
                 </CardContent>
@@ -180,26 +363,141 @@ export function OwnerFinancePanel() {
                   <Wallet className="h-4 w-4 text-primary" /> Earned per client
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2">
-                {data.by_client.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No invoices in this period yet.</p>
-                )}
-                {data.by_client.map((row) => (
-                  <div key={row.client_name} className="flex items-center justify-between gap-3 rounded-xl border border-rose-100/80 bg-rose-50/40 px-3 py-2.5">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold">{row.client_name}</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {row.invoices} invoice{row.invoices === 1 ? "" : "s"}
-                      </p>
+              <CardContent className="space-y-3">
+                <div className="grid gap-2 rounded-xl border border-dashed border-primary/25 bg-primary/[0.03] p-3">
+                  <p className="text-[11px] font-bold">Add an earning</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Current and past clients are both listed. Choose USD or PHP. The date must fall inside From and To.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div>
+                      <Label className="text-[10px]">Date</Label>
+                      <Input aria-label="Earning date" type="date" min={bounds?.start} max={bounds?.end} value={earnDate} onChange={(e) => setEarnDate(e.target.value)} className="h-9" />
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-extrabold">{formatCurrency(row.earned, "USD")}</p>
-                      {row.earned_php && (
-                        <p className="text-[10px] font-semibold text-muted-foreground">{formatCurrency(row.earned_php, "PHP")}</p>
-                      )}
+                    <div>
+                      <Label className="text-[10px]">Currency</Label>
+                      <Select aria-label="Earning currency" value={earnCurrency} onChange={(e) => setEarnCurrency(e.target.value === "PHP" ? "PHP" : "USD")} className="h-9">
+                        <option value="USD">USD ($)</option>
+                        <option value="PHP">PHP (₱)</option>
+                      </Select>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Label className="text-[10px]">Client</Label>
+                      <Select aria-label="Earning client" value={earnClient} onChange={(e) => setEarnClient(e.target.value)} className="h-9">
+                        <option value="">Select a client</option>
+                        {currentClients.length > 0 && (
+                          <optgroup label="Current clients">
+                            {currentClients.map((client) => (
+                              <option key={client.id} value={client.id}>{client.name}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {pastClients.length > 0 && (
+                          <optgroup label="Past clients">
+                            {pastClients.map((client) => (
+                              <option key={client.id} value={client.id}>{pastClientLabel(client)}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-[10px]">Note</Label>
+                      <Input
+                        aria-label="Earning note"
+                        placeholder="Optional note"
+                        value={earnNote}
+                        onChange={(e) => setEarnNote(e.target.value)}
+                        className="h-9"
+                      />
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+                      <div>
+                        <Label className="text-[10px]">Amount</Label>
+                        <Input
+                          aria-label="Earning amount"
+                          type="number"
+                          step="0.01"
+                          min="0.01"
+                          placeholder="0.00"
+                          value={earnAmount}
+                          onChange={(e) => setEarnAmount(e.target.value)}
+                          className="h-9"
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="gold"
+                        disabled={addEarning.isPending || !earnClient || !earnAmount}
+                        onClick={submitEarning}
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add
+                      </Button>
                     </div>
                   </div>
-                ))}
+                </div>
+                {earnError && <p className="text-xs text-red-600">{earnError}</p>}
+
+                <div className="max-h-40 space-y-1.5 overflow-y-auto">
+                  {data.manual_earnings.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No manual earnings in this period.</p>
+                  )}
+                  {data.manual_earnings.map((row) => (
+                    <div key={row.id} className="flex items-center gap-2 rounded-lg border px-2.5 py-2 text-xs">
+                      <span className="w-[88px] shrink-0 text-muted-foreground">{formatDate(row.earned_date)}</span>
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        {row.client_name}
+                        {!row.client_active && <span className="font-normal text-muted-foreground"> (past)</span>}
+                        {row.description ? <span className="font-normal text-muted-foreground"> · {row.description}</span> : null}
+                      </span>
+                      <span className="shrink-0 font-bold">{formatCurrency(row.amount, row.currency)}</span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Remove earning"
+                        onClick={() => {
+                          if (confirm(`Remove this earning for ${row.client_name}?`)) removeEarning.mutate(row.id)
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-red-600" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  {data.by_client.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No earnings in this period yet.</p>
+                  )}
+                  {data.by_client.map((row) => (
+                    <div key={row.client_id || row.client_name} className="flex items-center justify-between gap-3 rounded-xl border border-rose-100/80 bg-rose-50/40 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{row.client_name}</p>
+                        <p className="text-[10px] text-muted-foreground">{sourceLabel(row)}</p>
+                      </div>
+                      <MoneyFigures
+                        compact
+                        side={{
+                          usd: row.earned_usd,
+                          php: row.earned_php,
+                          combined_usd: row.combined_usd,
+                          combined_php: row.combined_php,
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  In this date range:{" "}
+                  <b>
+                    {data.earned.combined_usd
+                      ? `${formatCurrency(data.earned.combined_usd, "USD")} · ${formatCurrency(data.earned.combined_php, "PHP")}`
+                      : [
+                          (hasAmount(data.earned.usd) || !hasAmount(data.earned.php)) ? formatCurrency(data.earned.usd, "USD") : null,
+                          hasAmount(data.earned.php) ? formatCurrency(data.earned.php, "PHP") : null,
+                        ].filter(Boolean).join(" · ")}
+                  </b>
+                </p>
               </CardContent>
             </Card>
 
@@ -246,7 +544,7 @@ export function OwnerFinancePanel() {
                     </Button>
                   </div>
                 </div>
-                {formError && <p className="text-xs text-red-600">{formError}</p>}
+                {expenseError && <p className="text-xs text-red-600">{expenseError}</p>}
 
                 <div className="max-h-64 space-y-1.5 overflow-y-auto">
                   {data.expenses.length === 0 && (
@@ -262,7 +560,7 @@ export function OwnerFinancePanel() {
                         variant="ghost"
                         title="Remove expense"
                         onClick={() => {
-                          if (confirm(`Remove “${e.description}”?`)) removeExpense.mutate(e.id)
+                          if (confirm(`Remove "${e.description}"?`)) removeExpense.mutate(e.id)
                         }}
                       >
                         <Trash2 className="h-3.5 w-3.5 text-red-600" />
@@ -271,8 +569,18 @@ export function OwnerFinancePanel() {
                   ))}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  Period total expenses: <b>{formatCurrency(data.total_expenses, "USD")}</b>
-                  {data.total_expenses_php ? <> · <b>{formatCurrency(data.total_expenses_php, "PHP")}</b></> : null}
+                  Period total expenses:{" "}
+                  <b>
+                    {data.expense_totals.combined_usd
+                      ? `${formatCurrency(data.expense_totals.combined_usd, "USD")} · ${formatCurrency(data.expense_totals.combined_php, "PHP")}`
+                      : [
+                          (hasAmount(data.expense_totals.usd) || !hasAmount(data.expense_totals.php)) ? formatCurrency(data.expense_totals.usd, "USD") : null,
+                          hasAmount(data.expense_totals.php) ? formatCurrency(data.expense_totals.php, "PHP") : null,
+                        ].filter(Boolean).join(" · ")}
+                  </b>
+                  {data.usd_php_rate && sideHasBoth(data.expense_totals) && (
+                    <> · recorded {formatCurrency(data.expense_totals.usd, "USD")} · {formatCurrency(data.expense_totals.php, "PHP")}</>
+                  )}
                 </p>
               </CardContent>
             </Card>

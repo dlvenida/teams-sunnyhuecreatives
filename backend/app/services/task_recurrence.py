@@ -15,7 +15,7 @@ from datetime import date, timedelta
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.models import Task, TaskRecurrence, TaskStatus
+from app.models import CommentAttachment, Task, TaskRecurrence, TaskStatus
 
 
 def _add_months(d: date, months: int) -> date:
@@ -134,6 +134,61 @@ def _has_open_successor(db: Session, series, after_task_id) -> bool:
     return q.first() is not None
 
 
+def _is_url_attachment(row: CommentAttachment) -> bool:
+    """URL attachments are stored as links. Uploaded files use bucket or local storage."""
+    return (row.storage_backend or "") == "link" and bool((row.link_url or "").strip())
+
+
+def copy_recurring_link_attachments(db: Session, source: Task, dest: Task) -> int:
+    """Copy URL attachments onto a newly generated recurring task. Files stay behind.
+
+    A second call for the same destination does not add the same link again.
+    The completed task's rows are not changed.
+    """
+    sources = (
+        db.query(CommentAttachment)
+        .filter(CommentAttachment.scope == "task", CommentAttachment.scope_id == source.id)
+        .order_by(CommentAttachment.created_at.asc())
+        .all()
+    )
+    already = (
+        db.query(CommentAttachment)
+        .filter(
+            CommentAttachment.scope == "task",
+            CommentAttachment.scope_id == dest.id,
+            CommentAttachment.storage_backend == "link",
+        )
+        .all()
+    )
+    seen = {(row.link_url, row.original_name or "") for row in already}
+    copied = 0
+    for row in sources:
+        if not _is_url_attachment(row):
+            continue
+        key = (row.link_url, row.original_name or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        db.add(CommentAttachment(
+            scope="task",
+            scope_id=dest.id,
+            comment_id=None,
+            uploaded_by=row.uploaded_by,
+            uploader_name=row.uploader_name or "",
+            storage_key="",
+            storage_backend="link",
+            link_url=row.link_url,
+            provider=row.provider,
+            original_name=row.original_name or "",
+            original_size=0,
+            size_bytes=0,
+            format="link",
+            is_annotation=False,
+        ))
+        copied += 1
+    return copied
+
+
 def spawn_next_occurrence(db: Session, done_task: Task) -> Task | None:
     """If `done_task` is recurring and Done, create the next open occurrence and return it.
 
@@ -211,6 +266,7 @@ def spawn_next_occurrence(db: Session, done_task: Task) -> Task | None:
         parent_task_id=done_task.id,
     )
     db.add(child)
+    copy_recurring_link_attachments(db, done_task, child)
     return child
 
 

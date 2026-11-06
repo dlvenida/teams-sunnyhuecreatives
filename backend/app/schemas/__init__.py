@@ -982,6 +982,8 @@ class InvoiceGenerateRequest(BaseModel):
     included_hours: Decimal | None = None
     overage_rate: Decimal | None = None
     service_description: str | None = None  # client-facing text on generated line items
+    # Off by default. When on, the client PDF adds a per-task page after the summary.
+    include_task_breakdown: bool = False
     # When set, this invoice uses the reviewed lines. The saved client setup is not changed.
     lines: list[InvoiceDraftLine] | None = None
     one_off_name: str | None = None
@@ -1051,6 +1053,8 @@ class InvoiceResponse(BaseModel):
     issue_date: date
     due_date: date
     paid_at: datetime | None
+    include_task_breakdown: bool = False
+    task_breakdown: dict | None = None
     line_items: list[InvoiceLineItemResponse] = []
 
     model_config = {"from_attributes": True}

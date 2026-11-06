@@ -70,9 +70,8 @@ def _filled(value) -> bool:
 def resolve_amount(kind: str, hours, rate, amount) -> Decimal:
     """Hours x rate when both are filled. Otherwise the typed flat amount. Package is always flat."""
     if kind == "package":
-        if not _filled(amount):
-            raise ValueError("A package line needs an amount")
-        total = quantize_money(amount)
+        # A blank flat amount is $0. The task description still belongs on the invoice.
+        total = quantize_money(amount) if _filled(amount) else Decimal("0.00")
     elif kind in ("hourly", "manual", "extra") and _filled(hours) and _filled(rate):
         total = quantize_money(Decimal(str(hours)) * Decimal(str(rate)))
     elif _filled(amount):

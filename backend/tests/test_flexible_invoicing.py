@@ -156,7 +156,14 @@ class DatabaseInvoiceTests(unittest.TestCase):
         try:
             before = db.query(Client).count()
             va = db.query(VA).first()
-            self.assertIsNotNone(va)
+            if va is None:
+                from app.models import Currency, User, UserRole
+                user = User(email=f"va-{uuid4().hex[:8]}@example.com", password_hash="x", role=UserRole.va, display_name="Tester")
+                db.add(user)
+                db.flush()
+                va = VA(user_id=user.id, name="Tester", currency=Currency.USD)
+                db.add(va)
+                db.flush()
             client = Client(name=f"Item70 {uuid4().hex[:8]}", billing_type="hourly", default_rate=Decimal("10"), is_active=True)
             db.add(client)
             db.flush()

@@ -12,11 +12,13 @@ from PIL import Image
 from app.auth import create_access_token, create_token_payload, hash_password
 from app.database import SessionLocal
 from app.main import app
-from app.models import BillingType, Client, Task, TaskStatus, User, UserRole, VA
-from app.models.engagement import EngagementActivity, EngagementAudit, EngagementVerification
+from app.models import BillingType, Client, ClockStatus, Task, TaskStatus, TimeClockEntry, User, UserRole, VA
+from app.models.engagement import EngagementActivity, EngagementAudit, EngagementTarget, EngagementVerification
 from app.services.engagement_access import sync_engagement_subject
 from app.services.engagement_rules import (
+    UNREAD_SCREENSHOT_NOTE,
     classify_activities,
+    in_review_queue,
     is_arby_name,
     manual_override,
     overall_status,
@@ -258,7 +260,11 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=False, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=1, workday_ended=False, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(20), pending_review=0, workday_ended=False, approved=False), "target_met")
+        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(20), pending_review=4, workday_ended=False, approved=False), "target_met")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(26), pending_review=0, workday_ended=False, approved=False), "target_exceeded")
+        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(20), pending_review=0, workday_ended=False, approved=False, unreadable_screenshots=1), "needs_review")
+        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(0), pending_review=1, workday_ended=True, approved=False, reader_failed=True), "needs_review")
+        self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(0), pending_review=1, workday_ended=True, approved=True, reader_failed=True), "completed")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(4), pending_review=0, workday_ended=True, approved=False), "needs_review")
         self.assertEqual(overall_status(screenshot_count=1, categories=self._cats(22), pending_review=0, workday_ended=True, approved=True), "completed")
         self.assertNotEqual(overall_status(screenshot_count=1, categories=self._cats(22), pending_review=0, workday_ended=True, approved=False), "completed")
@@ -487,6 +493,160 @@ class StatusTests(unittest.TestCase):
 
         self.assertEqual(review_reasons({"status": "needs_review", "categories": [], "alerts": [], "activities": []}), ["Needs review."])
 
+    def _ig_summary(self, classified, *, shots=1, unclear=None, ended=False, approved=False):
+        return summarize(
+            "instagram",
+            classified,
+            screenshot_count=shots,
+            unclear_screenshots=unclear or [],
+            targets=[
+                {"key": "dm", "label": "Direct Messages", "min": 20, "max": 25},
+                {"key": "comment", "label": "Comments", "min": 10, "max": 15},
+            ],
+            workday_ended=ended,
+            approved=approved,
+            submitted=False,
+        )
+
+    def _counted(self, kind, count):
+        return [
+            {"id": f"{kind}{index}", "activity_type": kind, "counted": True, "status": "verified", "alerts": []}
+            for index in range(count)
+        ]
+
+    def test_unread_screenshots_are_not_labeled_lacking(self):
+        unread = self._ig_summary(
+            [],
+            shots=2,
+            unclear=[
+                {"id": "s1", "note": UNREAD_SCREENSHOT_NOTE},
+                {"id": "s2", "note": UNREAD_SCREENSHOT_NOTE},
+            ],
+            ended=True,
+        )
+        self.assertEqual(unread["status"], "needs_review")
+        self.assertTrue(unread["reader_failed"])
+        self.assertTrue(unread["counts_not_measured"])
+        self.assertEqual(unread["verified_total"], 0)
+        self.assertFalse(unread["all_minimums_met"])
+        self.assertFalse(any(alert["code"] == "BELOW_TARGET" for alert in unread["alerts"]))
+        reasons = review_reasons({"platform": "instagram", **unread})
+        self.assertEqual(reasons, [UNREAD_SCREENSHOT_NOTE])
+        self.assertNotIn("Lacking", " ".join(reasons))
+        self.assertTrue(in_review_queue({"platform": "instagram", **unread}))
+
+        approved = self._ig_summary(
+            [],
+            shots=2,
+            unclear=[{"id": "s1", "note": UNREAD_SCREENSHOT_NOTE}, {"id": "s2", "note": UNREAD_SCREENSHOT_NOTE}],
+            ended=True,
+            approved=True,
+        )
+        self.assertEqual(approved["status"], "completed")
+        self.assertEqual(approved["verified_total"], 0)
+        self.assertEqual(approved["categories"][0]["verified"], 0)
+        approved_row = {"platform": "instagram", **approved, "approval": "Approved"}
+        self.assertEqual(review_reasons(approved_row), [])
+        self.assertFalse(in_review_queue(approved_row))
+
+        empty = self._ig_summary([], shots=0, ended=True)
+        self.assertEqual(empty["status"], "needs_review")
+        self.assertFalse(empty["reader_failed"])
+        self.assertTrue(review_reasons({"platform": "instagram", **empty})[0].startswith("Lacking DMs and comments."))
+
+        from_files = review_reasons({
+            "platform": "instagram",
+            "status": "needs_review",
+            "categories": [
+                {"key": "dm", "verified": 0, "min": 20},
+                {"key": "comment", "verified": 0, "min": 10},
+            ],
+            "screenshots": [
+                {"id": "s1", "extraction_status": "unclear", "extraction_note": UNREAD_SCREENSHOT_NOTE},
+            ],
+            "alerts": [{"code": "UNCLEAR_SCREENSHOT", "explanation": UNREAD_SCREENSHOT_NOTE, "activity_id": None}],
+        })
+        self.assertEqual(from_files, [UNREAD_SCREENSHOT_NOTE])
+
+    def test_read_but_uncounted_rows_are_not_called_a_short_day(self):
+        classified = _count("instagram", [
+            _act(id=f"a{index}", username=f"@person{index}", confidence="low", activity_time=time(21, index % 50))
+            for index in range(8)
+        ])
+        self.assertTrue(classified)
+        self.assertTrue(all(not row["counted"] for row in classified))
+        summary = self._ig_summary(classified, shots=1)
+        self.assertEqual(summary["status"], "needs_review")
+        self.assertTrue(summary["counts_not_measured"])
+        self.assertFalse(summary["reader_failed"])
+        reasons = review_reasons({"platform": "instagram", **summary, "activities": classified})
+        self.assertTrue(reasons)
+        self.assertFalse(any(line.startswith("Lacking") for line in reasons))
+        self.assertIn("not counted", reasons[0].casefold())
+
+    def test_target_met_stays_out_of_review_when_extra_rows_are_flagged(self):
+        classified = self._counted("dm", 22) + self._counted("comment", 12)
+        classified.append({
+            "id": "partial",
+            "activity_type": "dm",
+            "counted": False,
+            "status": "needs_review",
+            "explanation": "The username could not be read, so this activity was not counted.",
+            "alerts": [{"code": "UNCLEAR_SCREENSHOT", "explanation": "The username could not be read, so this activity was not counted."}],
+        })
+        met = self._ig_summary(classified, shots=1)
+        self.assertEqual(met["status"], "target_met")
+        self.assertEqual(met["categories"][0]["verified"], 22)
+        self.assertEqual(met["categories"][1]["verified"], 12)
+        self.assertGreater(met["pending_review"], 0)
+        met_row = {"platform": "instagram", **met, "activities": classified, "approval": "Not submitted"}
+        self.assertEqual(review_reasons(met_row), [])
+        self.assertFalse(in_review_queue(met_row))
+
+        exceeded = self._ig_summary(self._counted("dm", 26) + self._counted("comment", 16), shots=1)
+        self.assertEqual(exceeded["status"], "target_exceeded")
+        duplicate_note = "This activity was already counted for this client and workday."
+        duplicate_row = {
+            "platform": "instagram",
+            "status": "target_exceeded",
+            "approval": "Not submitted",
+            "categories": exceeded["categories"],
+            "rejection_reasons": [duplicate_note],
+            "activities": [{"status": "duplicate", "counted": False, "explanation": duplicate_note}],
+        }
+        self.assertFalse(in_review_queue(duplicate_row))
+        self.assertEqual(review_reasons(duplicate_row), [])
+        self.assertEqual(review_log_order([duplicate_row, {"task_id": "short", "status": "needs_review", "latest_at": "2026-11-06T12:00:00+00:00"}])[0]["task_id"], "short")
+
+        rejected_row = {
+            "platform": "instagram",
+            "status": "target_met",
+            "approval": "Not submitted",
+            "categories": met["categories"],
+            "activities": [{"status": "rejected", "decision": "rejected", "explanation": "Wrong account on the screenshot"}],
+        }
+        self.assertTrue(in_review_queue(rejected_row))
+        self.assertEqual(review_reasons(rejected_row), ["Rejected: Wrong account on the screenshot"])
+
+        mixed = self._ig_summary(
+            self._counted("dm", 20) + self._counted("comment", 10),
+            shots=2,
+            unclear=[{"id": "bad", "note": UNREAD_SCREENSHOT_NOTE}],
+        )
+        self.assertEqual(mixed["status"], "needs_review")
+        self.assertFalse(mixed["reader_failed"])
+        self.assertEqual(review_reasons({"platform": "instagram", **mixed}), [UNREAD_SCREENSHOT_NOTE])
+
+        short_and_unread = self._ig_summary(
+            self._counted("dm", 15) + self._counted("comment", 10),
+            shots=2,
+            unclear=[{"id": "bad", "note": UNREAD_SCREENSHOT_NOTE}],
+        )
+        self.assertEqual(short_and_unread["status"], "needs_review")
+        short_reasons = review_reasons({"platform": "instagram", **short_and_unread})
+        self.assertEqual(short_reasons[0], "Lacking DMs. Instagram DMs 15 of 20.")
+        self.assertIn(UNREAD_SCREENSHOT_NOTE, short_reasons)
+
     def test_summarize_does_not_accept_a_typed_total(self):
         self.assertNotIn("verified_total", inspect.signature(summarize).parameters)
         self.assertNotIn("claimed", inspect.signature(summarize).parameters)
@@ -550,16 +710,16 @@ class AccessAndAuditTests(unittest.TestCase):
 
     def tearDown(self):
         self.db.rollback()
-        if self.task.id:
-            self.db.query(EngagementAudit).filter(EngagementAudit.client_id == self.client_row.id).delete(synchronize_session=False)
-            ver_ids = [row.id for row in self.db.query(EngagementVerification).filter(EngagementVerification.task_id == self.task.id).all()]
-            if ver_ids:
-                self.db.query(EngagementActivity).filter(EngagementActivity.verification_id.in_(ver_ids)).delete(synchronize_session=False)
-                from app.models.engagement import EngagementScreenshot
-                self.db.query(EngagementScreenshot).filter(EngagementScreenshot.verification_id.in_(ver_ids)).delete(synchronize_session=False)
-                self.db.query(EngagementAudit).filter(EngagementAudit.verification_id.in_(ver_ids)).delete(synchronize_session=False)
-                self.db.query(EngagementVerification).filter(EngagementVerification.id.in_(ver_ids)).delete(synchronize_session=False)
-            self.db.query(Task).filter(Task.id == self.task.id).delete(synchronize_session=False)
+        self.db.query(EngagementAudit).filter(EngagementAudit.client_id == self.client_row.id).delete(synchronize_session=False)
+        ver_ids = [row.id for row in self.db.query(EngagementVerification).filter(EngagementVerification.client_id == self.client_row.id).all()]
+        if ver_ids:
+            self.db.query(EngagementActivity).filter(EngagementActivity.verification_id.in_(ver_ids)).delete(synchronize_session=False)
+            from app.models.engagement import EngagementScreenshot
+            self.db.query(EngagementScreenshot).filter(EngagementScreenshot.verification_id.in_(ver_ids)).delete(synchronize_session=False)
+            self.db.query(EngagementAudit).filter(EngagementAudit.verification_id.in_(ver_ids)).delete(synchronize_session=False)
+            self.db.query(EngagementVerification).filter(EngagementVerification.id.in_(ver_ids)).delete(synchronize_session=False)
+        self.db.query(EngagementTarget).filter(EngagementTarget.client_id == self.client_row.id).delete(synchronize_session=False)
+        self.db.query(TimeClockEntry).filter(TimeClockEntry.client_id == self.client_row.id).delete(synchronize_session=False)
         self.db.query(Task).filter(Task.client_id == self.client_row.id).delete(synchronize_session=False)
         self.db.query(VA).filter(VA.user_id.in_(self.created_user_ids)).delete(synchronize_session=False)
         self.db.query(User).filter(User.id.in_(self.created_user_ids)).delete(synchronize_session=False)
@@ -650,7 +810,11 @@ class AccessAndAuditTests(unittest.TestCase):
         self.db.refresh(content)
         self.assertFalse(content.engagement_verification)
         admin = self.db.query(User).filter(User.role == UserRole.admin).first()
-        self.assertIsNotNone(admin)
+        if admin is None:
+            # The roster route is admin-only. Seed creates that user on startup;
+            # create one here when this test runs without the app lifespan.
+            admin, _ = self._person("Roster Admin", UserRole.admin, flag=False)
+            self.db.commit()
         roster = self.client.get("/engagement/vas", headers=_auth(admin))
         self.assertEqual(roster.status_code, 200)
         self.assertNotIn("rate", roster.text.lower())
@@ -722,6 +886,122 @@ class AccessAndAuditTests(unittest.TestCase):
                 [row["task_id"] for row in sorted(pair, key=lambda row: row.get("latest_at") or "", reverse=True)],
             )
         self.assertEqual(gem_user.role, UserRole.va)
+
+    def test_complete_uploads_auto_clear_and_unread_uploads_do_not_say_lacking(self):
+        workday = self.task.due_date
+        short = Task(
+            title="Instagram Community Management",
+            client_id=self.client_row.id,
+            assignee_va_id=self.arby.id,
+            status=TaskStatus.todo,
+            due_date=workday,
+        )
+        unread = Task(
+            title="Instagram Community Management",
+            client_id=self.client_row.id,
+            assignee_va_id=self.arby.id,
+            status=TaskStatus.todo,
+            due_date=workday,
+        )
+        self.db.add(EngagementTarget(client_id=self.client_row.id, platform="instagram", reporting_timezone="Asia/Manila"))
+        self.db.add_all([short, unread])
+        self.db.flush()
+        self.db.add(TimeClockEntry(
+            va_id=self.arby.id,
+            client_id=self.client_row.id,
+            clock_in=datetime.combine(workday, time(0, 0), tzinfo=MANILA),
+            clock_out=datetime.combine(workday, time(23, 59), tzinfo=MANILA),
+            status=ClockStatus.completed,
+        ))
+        self.db.commit()
+        hit_id, short_id, unread_id = str(self.task.id), str(short.id), str(unread.id)
+        current = CurrentUser(user=self.arby_user, va_id=self.arby.id)
+
+        def packed(dms, comments):
+            rows = []
+            for index in range(dms):
+                rows.append({
+                    "activity_type": "dm",
+                    "username": f"@dm{index}",
+                    "activity_date": workday,
+                    "activity_time": time(10, index % 50),
+                    "text": f"Direct message {index} about the brief",
+                    "confidence": "high",
+                    "platform_hint": "instagram",
+                    "account_hint": self.client_row.name,
+                })
+            for index in range(comments):
+                rows.append({
+                    "activity_type": "comment",
+                    "username": f"@comment{index}",
+                    "activity_date": workday,
+                    "activity_time": time(12, index % 50),
+                    "text": f"Comment {index} on the post",
+                    "confidence": "high",
+                    "platform_hint": "instagram",
+                    "account_hint": self.client_row.name,
+                })
+            return {"platform": "instagram", "account": self.client_row.name, "readable": True, "activities": rows}
+
+        def upload(task, extract):
+            add_screenshot_bytes(
+                self.db,
+                task=task,
+                owner=self.arby,
+                current=current,
+                filename="shot.png",
+                content_type="image/png",
+                raw=_png(),
+                extract=extract,
+            )
+
+        upload(self.task, lambda _raw: packed(20, 10))
+        upload(short, lambda _raw: packed(15, 10))
+        upload(unread, lambda _raw: {"readable": False, "activities": [], "platform": None, "account": None, "note": UNREAD_SCREENSHOT_NOTE})
+
+        listed = self.client.get(f"/engagement/tasks?work_date={workday.isoformat()}", headers=_auth(self.pm_user))
+        self.assertEqual(listed.status_code, 200, listed.text)
+        by_id = {row["task_id"]: row for row in listed.json()["tasks"]}
+        hit, short_row, unread_row = by_id[hit_id], by_id[short_id], by_id[unread_id]
+
+        self.assertEqual(hit["status"], "target_met")
+        self.assertEqual(hit["status_label"], "Target met")
+        self.assertEqual([row["verified"] for row in hit["categories"]], [20, 10])
+        self.assertEqual(hit["review_reasons"], [])
+        self.assertFalse(in_review_queue(hit))
+
+        self.assertEqual(short_row["status"], "needs_review")
+        self.assertEqual(short_row["review_reasons"][0], "Lacking DMs. Instagram DMs 15 of 20.")
+        self.assertNotIn("comment", short_row["review_reasons"][0].casefold())
+
+        self.assertEqual(unread_row["status"], "needs_review")
+        self.assertTrue(unread_row["reader_failed"])
+        self.assertEqual(unread_row["verified_total"], 0)
+        self.assertEqual(unread_row["review_reasons"], [UNREAD_SCREENSHOT_NOTE])
+        self.assertFalse(any(line.startswith("Lacking") for line in unread_row["review_reasons"]))
+
+        blocked = self.client.post(
+            f"/engagement/tasks/{short_id}/approve",
+            headers=_auth(self.pm_user),
+            json={"reason": "The screenshots look full."},
+        )
+        self.assertEqual(blocked.status_code, 400, blocked.text)
+        self.assertIn("Minimum targets", blocked.json()["detail"])
+
+        opened = self.client.post(
+            f"/engagement/tasks/{unread_id}/approve",
+            headers=_auth(self.pm_user),
+            json={"reason": "I opened the screenshots and the DMs and comments are there."},
+        )
+        self.assertEqual(opened.status_code, 200, opened.text)
+        approved = opened.json()
+        self.assertEqual(approved["status"], "completed")
+        self.assertEqual(approved["approval"], "Approved")
+        self.assertEqual(approved["verified_total"], 0)
+        self.assertEqual([row["verified"] for row in approved["categories"]], [0, 0])
+        self.assertEqual(approved["review_reasons"], [])
+        self.assertNotIn("rate", opened.text.lower())
+        self.assertNotIn("amount", opened.text.lower())
 
     def test_name_sync_follows_engagement_tasks_not_only_a_name(self):
         self.arby.engagement_verification = False

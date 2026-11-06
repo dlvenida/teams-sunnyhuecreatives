@@ -24,6 +24,7 @@ from app.services import storage
 from app.services.engagement_access import engagement_subjects, is_manager
 from app.services.engagement_extract import extract_from_image, register_image_plugins
 from app.services.engagement_rules import (
+    UNREAD_SCREENSHOT_NOTE,
     category_targets,
     classify_activities,
     manual_override,
@@ -413,7 +414,7 @@ def add_screenshot_bytes(
         width=stored.get("width"),
         height=stored.get("height"),
         extraction_status="read" if readable else "unclear",
-        extraction_note=None if readable else (extraction.get("note") or "This screenshot could not be checked automatically. Nothing on it was counted."),
+        extraction_note=None if readable else (extraction.get("note") or UNREAD_SCREENSHOT_NOTE),
         platform_seen=(extraction.get("platform") or None),
         account_seen=extraction.get("account"),
         alerts=[],
@@ -771,9 +772,13 @@ def decide_task(db: Session, current, task_id, decision: str, reason: str) -> di
         raise HTTPException(400, "A reason is required.")
     summary = refresh(db, verification, task)
     if decision == "approved":
-        if summary["pending_review"]:
-            raise HTTPException(400, "Review the flagged screenshots before completing this task.")
-        if not summary["all_minimums_met"]:
+        # An unread upload has no counted rows to tick off. Management can open
+        # the images and approve that evidence. The verified totals stay at the
+        # counted number, which is zero when the reader returned nothing.
+        # A day that was counted and is still short cannot be completed.
+        if not summary.get("reader_failed") and not summary["all_minimums_met"]:
+            if summary.get("unreadable_screenshots"):
+                raise HTTPException(400, "A screenshot could not be read, and the counted work is still below the daily minimum.")
             raise HTTPException(400, "Minimum targets are not met, so this task cannot be completed.")
         original = {"status": summary["status"], "approved_at": None}
         verification.approved_at = datetime.now(timezone.utc)

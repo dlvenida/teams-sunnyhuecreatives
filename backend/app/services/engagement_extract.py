@@ -14,9 +14,9 @@ import tempfile
 from pathlib import Path
 
 from app.config import settings
-from app.services.engagement_rules import parse_extraction_payload
+from app.services.engagement_rules import UNREAD_SCREENSHOT_NOTE, parse_extraction_payload
 
-UNCLEAR_NOTE = "This screenshot could not be checked automatically. Nothing on it was counted."
+UNCLEAR_NOTE = UNREAD_SCREENSHOT_NOTE
 
 
 def register_image_plugins() -> None:

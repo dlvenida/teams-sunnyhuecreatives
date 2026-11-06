@@ -71,6 +71,8 @@ export interface EngagementTask {
   completion_pct: number
   time_logged: string
   approval: string
+  latest_at?: string | null
+  submitted_at?: string | null
   pending_review: number
   duplicate_count: number
   invalid_count: number

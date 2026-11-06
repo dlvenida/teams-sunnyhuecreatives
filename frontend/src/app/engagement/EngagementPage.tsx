@@ -198,12 +198,13 @@ function TaskCard({ task, management }: { task: EngagementTask; management: bool
 }
 
 function ReviewLog({ tasks }: { tasks: EngagementTask[] }) {
-  const waiting = tasks.filter((task) => task.status === "needs_review")
+  const waiting = [...tasks.filter((task) => task.status === "needs_review" || task.approval === "Pending management review")]
+    .sort((a, b) => (b.latest_at || b.submitted_at || "").localeCompare(a.latest_at || a.submitted_at || ""))
   return (
     <Card className="border-amber-200">
       <CardContent className="space-y-2 p-4">
         <p className="brand-label text-[11px] font-bold uppercase tracking-[0.12em] text-amber-900">Review log</p>
-        <p className="text-xs text-muted-foreground">Tasks below a daily minimum, or with unclear evidence, wait here for management. Uploads can still be added.</p>
+        <p className="text-xs text-muted-foreground">Newest items waiting for approval are first. Tasks below a daily minimum, or with unclear evidence, stay here. Uploads can still be added.</p>
         {waiting.length === 0 && <p className="text-sm text-muted-foreground">Nothing is waiting for review.</p>}
         <ul className="space-y-1.5">
           {waiting.map((task) => (

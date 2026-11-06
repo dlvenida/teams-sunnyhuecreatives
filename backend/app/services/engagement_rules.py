@@ -569,6 +569,17 @@ def overall_status(
     return "in_progress"
 
 
+def review_log_order(items: list[dict]) -> list[dict]:
+    """Needs review and pending approval, newest first, so management does not scroll for the latest."""
+    def waiting(item: dict) -> bool:
+        return item.get("status") == "needs_review" or item.get("approval") == "Pending management review"
+
+    def stamp(item: dict) -> str:
+        return str(item.get("latest_at") or item.get("submitted_at") or "")
+
+    return sorted((item for item in items if waiting(item)), key=stamp, reverse=True)
+
+
 def summarize(
     platform: str,
     classified: list[dict],

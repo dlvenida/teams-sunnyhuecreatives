@@ -28,6 +28,7 @@ from app.services.engagement_rules import (
     classify_activities,
     manual_override,
     platform_from_title,
+    review_log_order,
     summarize,
     workday_has_ended,
 )
@@ -568,8 +569,33 @@ def serialize_task(db: Session, task: Task, owner: VA, verification: EngagementV
         "screenshots": screenshots,
         "activities": activities,
         "audits": audits,
+        "latest_at": _latest_stamp(task, verification),
         **summary,
     }
+
+
+def _latest_stamp(task: Task, verification: EngagementVerification | None) -> str | None:
+    stamps = []
+    for value in (task.updated_at, task.created_at):
+        if value is not None:
+            stamps.append(value)
+    if verification is not None:
+        for value in (verification.updated_at, verification.submitted_at, verification.created_at):
+            if value is not None:
+                stamps.append(value)
+        for shot in verification.screenshots:
+            if shot.created_at is not None:
+                stamps.append(shot.created_at)
+        for activity in verification.activities:
+            if activity.created_at is not None:
+                stamps.append(activity.created_at)
+    if not stamps:
+        return None
+    def _as_utc(value):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    return max(_as_utc(value) for value in stamps).isoformat()
 
 
 def list_tasks(db: Session, current, work_date: date) -> list[dict]:
@@ -599,7 +625,17 @@ def list_tasks(db: Session, current, work_date: date) -> list[dict]:
         if owner is None:
             continue
         tasks.append(serialize_task(db, task, owner, verification))
-    tasks.sort(key=lambda row: (row["client_name"].casefold(), row["platform"] or ""))
+    if subject is None:
+        review = review_log_order(tasks)
+        review_ids = {row["task_id"] for row in review}
+        rest = sorted(
+            (row for row in tasks if row["task_id"] not in review_ids),
+            key=lambda item: item.get("latest_at") or "",
+            reverse=True,
+        )
+        tasks = review + rest
+    else:
+        tasks.sort(key=lambda row: (row["client_name"].casefold(), row["platform"] or ""))
     db.commit()
     return tasks
 

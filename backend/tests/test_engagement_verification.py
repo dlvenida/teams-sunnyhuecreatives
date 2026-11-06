@@ -22,6 +22,7 @@ from app.services.engagement_rules import (
     overall_status,
     parse_extraction_document,
     platform_from_title,
+    review_log_order,
     summarize,
 )
 from app.services.engagement_service import add_screenshot_bytes
@@ -352,6 +353,15 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(review_log[0]["categories"][0]["verified"], 15)
         self.assertEqual(met["status"], "target_met")
         self.assertFalse(any(alert["code"] == "BELOW_TARGET" for alert in met["alerts"]))
+
+    def test_review_log_lists_the_newest_first(self):
+        items = [
+            {"task_id": "old", "status": "needs_review", "latest_at": "2026-11-06T08:00:00+00:00"},
+            {"task_id": "approved", "status": "target_met", "approval": "Approved", "latest_at": "2026-11-06T19:00:00+00:00"},
+            {"task_id": "newest", "status": "needs_review", "latest_at": "2026-11-06T18:30:00+00:00"},
+            {"task_id": "pending", "status": "target_met", "approval": "Pending management review", "submitted_at": "2026-11-06T12:00:00+00:00"},
+        ]
+        self.assertEqual([row["task_id"] for row in review_log_order(items)], ["newest", "pending", "old"])
 
     def test_summarize_does_not_accept_a_typed_total(self):
         self.assertNotIn("verified_total", inspect.signature(summarize).parameters)

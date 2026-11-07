@@ -9,6 +9,10 @@ export function resolveNotificationLink(link: string | null | undefined): string
   if (!link) return null
   const role = getAuthUser()?.role
   const prefix = role === "va" ? "/va" : "/admin"
+  const path = link.split("?")[0].replace(/\/+$/, "")
+  if (path === "/admin/engagement" || path === "/va/engagement" || path === "/engagement") {
+    return role === "va" ? "/va/dashboard" : "/admin/dashboard"
+  }
 
   if (link.startsWith("/tasks") || link.startsWith("/projects")) {
     return `${prefix}${link}`

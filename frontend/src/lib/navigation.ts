@@ -17,7 +17,6 @@ import {
   CircleUserRound,
   Clock,
   PiggyBank,
-  ClipboardCheck,
 } from "lucide-react"
 
 export interface NavItem {
@@ -82,37 +81,8 @@ export const AUDITOR_NAV: NavItem[] = [
   { to: "/admin/profile", label: "Profile", icon: CircleUserRound, keywords: ["account", "theme", "password"], section: "People", color: "#94a3b8" },
 ]
 
-const ENGAGEMENT_ITEM: NavItem = {
-  to: "/admin/engagement",
-  label: "Screenshot check",
-  icon: ClipboardCheck,
-  keywords: ["screenshots", "engagement", "instagram", "facebook", "linkedin", "community"],
-  section: "Work",
-  color: "#E8578A",
-}
-
-export function getNavForRole(role: "admin" | "auditor" | "va", opts?: { engagement?: boolean }): NavItem[] {
-  if (role === "admin") {
-    const items = [...ADMIN_NAV]
-    const index = items.findIndex((item) => item.to === "/admin/tasks")
-    items.splice(index + 1, 0, ENGAGEMENT_ITEM)
-    return items
-  }
-  if (role === "auditor") {
-    const items = [...AUDITOR_NAV]
-    const index = items.findIndex((item) => item.to === "/admin/tasks")
-    items.splice(index + 1, 0, { ...ENGAGEMENT_ITEM, section: "Team Tasks" })
-    return items
-  }
-  const items = [...VA_NAV]
-  if (opts?.engagement) {
-    const index = items.findIndex((item) => item.to === "/va/tasks")
-    items.splice(index + 1, 0, {
-      ...ENGAGEMENT_ITEM,
-      to: "/va/engagement",
-      section: "My Tasks",
-      keywords: ["screenshots", "engagement", "instagram", "facebook", "linkedin"],
-    })
-  }
-  return items
+export function getNavForRole(role: "admin" | "auditor" | "va"): NavItem[] {
+  if (role === "admin") return ADMIN_NAV
+  if (role === "auditor") return AUDITOR_NAV
+  return VA_NAV
 }

@@ -1,7 +1,10 @@
 """Manual client earnings in USD or PHP
 
-Revision ID: 037
-Revises: 036
+Revision ID: 038
+Revises: 037
+
+037 is already the invoice task breakdown migration. This stays after it
+so `alembic upgrade head` has one head and the API can start.
 """
 from typing import Sequence, Union
 
@@ -9,8 +12,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "037"
-down_revision: Union[str, None] = "036"
+revision: str = "038"
+down_revision: Union[str, None] = "037"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

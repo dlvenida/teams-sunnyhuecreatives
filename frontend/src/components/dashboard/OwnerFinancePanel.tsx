@@ -100,35 +100,104 @@ function MoneyFigures({
   tone?: string
   compact?: boolean
 }) {
-  const rateOn = side.combined_usd != null && side.combined_php != null
-  const usdOn = hasAmount(side.usd)
-  const phpOn = hasAmount(side.php)
+  const money = asMoneySide(side)
+  const rateOn = money.combined_usd != null && money.combined_php != null
+  const usdOn = hasAmount(money.usd)
+  const phpOn = hasAmount(money.php)
   const mixed = usdOn && phpOn
   const primary = compact ? "text-sm font-extrabold" : "text-2xl font-extrabold leading-none tracking-tight"
   const secondary = compact ? "text-xs font-extrabold" : "mt-1 text-lg font-extrabold leading-none tracking-tight"
   if (rateOn) {
     return (
       <div className={tone}>
-        <p className={primary}>{formatCurrency(side.combined_usd, "USD")}</p>
-        <p className={secondary}>{formatCurrency(side.combined_php, "PHP")}</p>
+        <p className={primary}>{formatCurrency(money.combined_usd, "USD")}</p>
+        <p className={secondary}>{formatCurrency(money.combined_php, "PHP")}</p>
         {mixed && (
           <p className="mt-1 text-[10px] font-medium text-muted-foreground">
-            Recorded {formatCurrency(side.usd, "USD")} · {formatCurrency(side.php, "PHP")}
+            Recorded {formatCurrency(money.usd, "USD")} · {formatCurrency(money.php, "PHP")}
           </p>
         )}
       </div>
     )
   }
+  if (!usdOn && !phpOn) {
+    return (
+      <div className={tone}>
+        <p className={primary}>{formatCurrency(0, "USD")}</p>
+        <p className={secondary}>{formatCurrency(0, "PHP")}</p>
+      </div>
+    )
+  }
   return (
     <div className={tone}>
-      {(usdOn || !phpOn) && <p className={primary}>{formatCurrency(side.usd, "USD")}</p>}
-      {phpOn && <p className={usdOn ? secondary : primary}>{formatCurrency(side.php, "PHP")}</p>}
+      {(usdOn || !phpOn) && <p className={primary}>{formatCurrency(money.usd, "USD")}</p>}
+      {phpOn && <p className={usdOn ? secondary : primary}>{formatCurrency(money.php, "PHP")}</p>}
     </div>
   )
 }
 
 function sideHasBoth(side: MoneySide) {
   return hasAmount(side.usd) && hasAmount(side.php)
+}
+
+const EMPTY_MONEY: MoneySide = {
+  usd: "0.00",
+  php: "0.00",
+  combined_usd: null,
+  combined_php: null,
+}
+
+/** A missing total (old payload, empty body, or a field the API did not send) is zero, never a crash. */
+function asMoneySide(side: Partial<MoneySide> | null | undefined): MoneySide {
+  if (!side || typeof side !== "object") return EMPTY_MONEY
+  return {
+    usd: side.usd ?? "0.00",
+    php: side.php ?? "0.00",
+    combined_usd: side.combined_usd ?? null,
+    combined_php: side.combined_php ?? null,
+  }
+}
+
+const LEGACY_MONEY_KEYS = {
+  earned: ["total_earned", "total_earned_php"],
+  va_payroll: ["total_va_payroll", "total_va_payroll_php"],
+  expense_totals: ["total_expenses", "total_expenses_php"],
+  net: ["net_profit", "net_profit_php"],
+} as const
+
+function financeSide(data: OwnerFinance | undefined, key: keyof typeof LEGACY_MONEY_KEYS): MoneySide {
+  const direct = data?.[key]
+  if (direct && typeof direct === "object") return asMoneySide(direct)
+  const record = data as (OwnerFinance & Record<string, unknown>) | undefined
+  const [usdKey, phpKey] = LEGACY_MONEY_KEYS[key]
+  if (!record || (record[usdKey] == null && record[phpKey] == null)) return EMPTY_MONEY
+  return asMoneySide({
+    usd: record[usdKey] != null ? String(record[usdKey]) : "0.00",
+    php: record[phpKey] != null ? String(record[phpKey]) : "0.00",
+  })
+}
+
+function clientMoney(row: (ByClient & { earned?: string | null }) | null | undefined): MoneySide {
+  if (!row) return EMPTY_MONEY
+  return asMoneySide({
+    usd: row.earned_usd ?? row.earned ?? "0.00",
+    php: row.earned_php ?? "0.00",
+    combined_usd: row.combined_usd ?? null,
+    combined_php: row.combined_php ?? null,
+  })
+}
+
+function moneySummary(side: MoneySide) {
+  if (side.combined_usd != null && side.combined_php != null) {
+    return `${formatCurrency(side.combined_usd, "USD")} · ${formatCurrency(side.combined_php, "PHP")}`
+  }
+  if (!hasAmount(side.usd) && !hasAmount(side.php)) {
+    return `${formatCurrency(0, "USD")} · ${formatCurrency(0, "PHP")}`
+  }
+  return [
+    (hasAmount(side.usd) || !hasAmount(side.php)) ? formatCurrency(side.usd, "USD") : null,
+    hasAmount(side.php) ? formatCurrency(side.php, "PHP") : null,
+  ].filter(Boolean).join(" · ")
 }
 
 export function OwnerFinancePanel() {
@@ -233,16 +302,24 @@ export function OwnerFinancePanel() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["owner-finance"] }),
   })
 
-  const netPositive = data
-    ? data.net.combined_usd != null
-      ? Number(data.net.combined_usd) >= 0
-      : Number(data.net.usd) >= 0 && Number(data.net.php) >= 0
-    : true
+  const earned = financeSide(data, "earned")
+  const vaPayroll = financeSide(data, "va_payroll")
+  const expenseTotals = financeSide(data, "expense_totals")
+  const net = financeSide(data, "net")
+  const manualRows = data?.manual_earnings ?? []
+  const expenseRows = data?.expenses ?? []
+  const clientRows = data?.by_client ?? []
+
+  const netPositive = !data
+    ? true
+    : net.combined_usd != null
+      ? Number(net.combined_usd) >= 0
+      : Number(net.usd) >= 0 && Number(net.php) >= 0
 
   const mixedWithoutRate = !!data && !data.usd_php_rate && (
-    sideHasBoth(data.earned) || sideHasBoth(data.va_payroll) || sideHasBoth(data.expense_totals) || sideHasBoth(data.net)
-    || ((hasAmount(data.earned.usd) || hasAmount(data.va_payroll.usd) || hasAmount(data.expense_totals.usd))
-      && (hasAmount(data.earned.php) || hasAmount(data.va_payroll.php) || hasAmount(data.expense_totals.php)))
+    sideHasBoth(earned) || sideHasBoth(vaPayroll) || sideHasBoth(expenseTotals) || sideHasBoth(net)
+    || ((hasAmount(earned.usd) || hasAmount(vaPayroll.usd) || hasAmount(expenseTotals.usd))
+      && (hasAmount(earned.php) || hasAmount(vaPayroll.php) || hasAmount(expenseTotals.php)))
   )
 
   const bounds = rangeBounds(dateFrom, dateTo)
@@ -334,13 +411,13 @@ export function OwnerFinancePanel() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[
-              { label: "Total Earned", hint: data.usd_php_rate ? "Combined for these dates" : "Invoices and manual entries", side: data.earned, tone: "" },
-              { label: "Total Paid to VAs", hint: `${data.va_runs_count} payroll run(s)`, side: data.va_payroll, tone: "" },
-              { label: "Total Expenses", hint: "Tools and misc", side: data.expense_totals, tone: "" },
+              { label: "Total Earned", hint: data.usd_php_rate ? "Combined for these dates" : "Invoices and manual entries", side: earned, tone: "" },
+              { label: "Total Paid to VAs", hint: `${data.va_runs_count ?? 0} payroll run(s)`, side: vaPayroll, tone: "" },
+              { label: "Total Expenses", hint: "Tools and misc", side: expenseTotals, tone: "" },
               {
                 label: "Net Profit",
                 hint: "After VA pay and expenses",
-                side: data.net,
+                side: net,
                 tone: netPositive ? "text-green-700" : "text-red-600",
               },
             ].map((s) => (
@@ -439,10 +516,10 @@ export function OwnerFinancePanel() {
                 {earnError && <p className="text-xs text-red-600">{earnError}</p>}
 
                 <div className="max-h-40 space-y-1.5 overflow-y-auto">
-                  {data.manual_earnings.length === 0 && (
+                  {manualRows.length === 0 && (
                     <p className="text-xs text-muted-foreground">No manual earnings in this period.</p>
                   )}
-                  {data.manual_earnings.map((row) => (
+                  {manualRows.map((row) => (
                     <div key={row.id} className="flex items-center gap-2 rounded-lg border px-2.5 py-2 text-xs">
                       <span className="w-[88px] shrink-0 text-muted-foreground">{formatDate(row.earned_date)}</span>
                       <span className="min-w-0 flex-1 truncate font-medium">
@@ -466,37 +543,21 @@ export function OwnerFinancePanel() {
                 </div>
 
                 <div className="space-y-2">
-                  {data.by_client.length === 0 && (
+                  {clientRows.length === 0 && (
                     <p className="text-xs text-muted-foreground">No earnings in this period yet.</p>
                   )}
-                  {data.by_client.map((row) => (
+                  {clientRows.map((row) => (
                     <div key={row.client_id || row.client_name} className="flex items-center justify-between gap-3 rounded-xl border border-rose-100/80 bg-rose-50/40 px-3 py-2.5">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold">{row.client_name}</p>
                         <p className="text-[10px] text-muted-foreground">{sourceLabel(row)}</p>
                       </div>
-                      <MoneyFigures
-                        compact
-                        side={{
-                          usd: row.earned_usd,
-                          php: row.earned_php,
-                          combined_usd: row.combined_usd,
-                          combined_php: row.combined_php,
-                        }}
-                      />
+                      <MoneyFigures compact side={clientMoney(row)} />
                     </div>
                   ))}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  In this date range:{" "}
-                  <b>
-                    {data.earned.combined_usd
-                      ? `${formatCurrency(data.earned.combined_usd, "USD")} · ${formatCurrency(data.earned.combined_php, "PHP")}`
-                      : [
-                          (hasAmount(data.earned.usd) || !hasAmount(data.earned.php)) ? formatCurrency(data.earned.usd, "USD") : null,
-                          hasAmount(data.earned.php) ? formatCurrency(data.earned.php, "PHP") : null,
-                        ].filter(Boolean).join(" · ")}
-                  </b>
+                  In this date range: <b>{moneySummary(earned)}</b>
                 </p>
               </CardContent>
             </Card>
@@ -547,10 +608,10 @@ export function OwnerFinancePanel() {
                 {expenseError && <p className="text-xs text-red-600">{expenseError}</p>}
 
                 <div className="max-h-64 space-y-1.5 overflow-y-auto">
-                  {data.expenses.length === 0 && (
+                  {expenseRows.length === 0 && (
                     <p className="text-xs text-muted-foreground">No expenses logged for this period. Add tools, subscriptions, or misc costs above.</p>
                   )}
-                  {data.expenses.map((e) => (
+                  {expenseRows.map((e) => (
                     <div key={e.id} className="flex items-center gap-2 rounded-lg border px-2.5 py-2 text-xs">
                       <span className="w-[88px] shrink-0 text-muted-foreground">{formatDate(e.expense_date)}</span>
                       <span className="min-w-0 flex-1 truncate font-medium">{e.description}</span>
@@ -569,17 +630,9 @@ export function OwnerFinancePanel() {
                   ))}
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  Period total expenses:{" "}
-                  <b>
-                    {data.expense_totals.combined_usd
-                      ? `${formatCurrency(data.expense_totals.combined_usd, "USD")} · ${formatCurrency(data.expense_totals.combined_php, "PHP")}`
-                      : [
-                          (hasAmount(data.expense_totals.usd) || !hasAmount(data.expense_totals.php)) ? formatCurrency(data.expense_totals.usd, "USD") : null,
-                          hasAmount(data.expense_totals.php) ? formatCurrency(data.expense_totals.php, "PHP") : null,
-                        ].filter(Boolean).join(" · ")}
-                  </b>
-                  {data.usd_php_rate && sideHasBoth(data.expense_totals) && (
-                    <> · recorded {formatCurrency(data.expense_totals.usd, "USD")} · {formatCurrency(data.expense_totals.php, "PHP")}</>
+                  Period total expenses: <b>{moneySummary(expenseTotals)}</b>
+                  {data.usd_php_rate && sideHasBoth(expenseTotals) && (
+                    <> · recorded {formatCurrency(expenseTotals.usd, "USD")} · {formatCurrency(expenseTotals.php, "PHP")}</>
                   )}
                 </p>
               </CardContent>

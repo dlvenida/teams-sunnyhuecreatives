@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query"
 import { Search } from "lucide-react"
 import { apiFetch, getAuthUser } from "@/lib/api"
 import { getNavForRole } from "@/lib/navigation"
-import { useEngagementAccess } from "@/lib/engagement"
 import type { Client, Project, TaskItem, WorkLog } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -19,7 +18,6 @@ interface SearchResult {
 export function GlobalSearch({ className }: { className?: string }) {
   const navigate = useNavigate()
   const user = getAuthUser()
-  const engagement = useEngagementAccess()
   const [query, setQuery] = useState("")
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -67,7 +65,7 @@ export function GlobalSearch({ className }: { className?: string }) {
   const results: SearchResult[] = []
 
   if (q && user) {
-    for (const item of getNavForRole(user.role, { engagement: engagement.data?.scope === "va" })) {
+    for (const item of getNavForRole(user.role)) {
       if (
         item.label.toLowerCase().includes(q) ||
         item.keywords?.some((k) => k.includes(q))

@@ -116,6 +116,9 @@ async function installApi(page: Page, role: "admin" | "auditor") {
 }
 
 test("earnings shows payday conversion, expenses, and one net profit", async ({ page }, testInfo) => {
+  const errors: string[] = []
+  page.on("console", (msg) => { if (msg.type() === "error") errors.push(msg.text()) })
+  page.on("pageerror", (err) => errors.push(String(err)))
   await installApi(page, "admin")
   await page.goto("/admin/finance")
   await expect(page.getByRole("heading", { name: "Earnings & expenses" })).toBeVisible()
@@ -134,6 +137,7 @@ test("earnings shows payday conversion, expenses, and one net profit", async ({ 
     path: `/opt/cursor/artifacts/finance-earnings-standard-${testInfo.project.name}.png`,
     fullPage: true,
   })
+  expect(errors.filter((line) => !line.includes("favicon"))).toEqual([])
 })
 
 test("project manager cannot open earnings", async ({ page }) => {

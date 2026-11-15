@@ -159,6 +159,9 @@ async function expectNoPageScroll(page: Page) {
 }
 
 test("admin can pick a VA and see the peso rate beside the period", async ({ page }, testInfo) => {
+  const errors: string[] = []
+  page.on("console", (msg) => { if (msg.type() === "error") errors.push(msg.text()) })
+  page.on("pageerror", (err) => errors.push(String(err)))
   const { rejected, posted, applied } = await installApi(page, "admin")
   await page.goto("/admin/payroll")
   await expect(page.getByRole("heading", { name: "Timesheets & pay" })).toBeVisible()
@@ -243,6 +246,7 @@ test("admin can pick a VA and see the peso rate beside the period", async ({ pag
   if (testInfo.project.name === "mobile") {
     await page.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-filtered.png", fullPage: false })
   }
+  expect(errors.filter((line) => !line.includes("favicon"))).toEqual([])
 })
 
 test("project manager does not see the rate or pay", async ({ page }, testInfo) => {

@@ -59,6 +59,8 @@ def _policy(method: str, path: str) -> str | None:
         return "redacted"
     if path.startswith("/settings"):
         return "admin"
+    if path == "/clients/financials":
+        return "admin"
     if method == "GET" and path in {"/clients", "/clients/{client_id}/packages", "/clients/{client_id}/detail"}:
         return "redacted"
     if path == "/auth/users/{user_id}/detail":
@@ -137,6 +139,7 @@ class PayAccessTests(unittest.TestCase):
             ("GET", "/manual-earnings"),
             ("GET", "/dashboard/summary"),
             ("GET", "/dashboard/owner-finance"),
+            ("GET", "/clients/financials"),
             ("GET", "/work-logs"),
             ("POST", "/reports/generate"),
         }

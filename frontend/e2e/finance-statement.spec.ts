@@ -167,6 +167,9 @@ async function installApi(page: Page, role: "admin" | "auditor") {
 }
 
 test("admin can read the calm totals and download the PDF", async ({ page }, testInfo) => {
+  const errors: string[] = []
+  page.on("console", (msg) => { if (msg.type() === "error") errors.push(msg.text()) })
+  page.on("pageerror", (err) => errors.push(String(err)))
   await installApi(page, "admin")
   await page.goto("/admin/finance")
   await expect(page.getByRole("heading", { name: "Earnings & expenses" })).toBeVisible()
@@ -197,6 +200,7 @@ test("admin can read the calm totals and download the PDF", async ({ page }, tes
   await download.saveAs(pdfPath)
   expect(download.suggestedFilename()).toContain("Statement-")
   expect(download.suggestedFilename()).not.toMatch(/[—–]/)
+  expect(errors.filter((line) => !line.includes("favicon"))).toEqual([])
 })
 
 test("project manager cannot open the statement", async ({ page }) => {

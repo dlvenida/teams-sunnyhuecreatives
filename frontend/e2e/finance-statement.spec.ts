@@ -12,7 +12,7 @@ const statement = {
   va_pay: "1000.00",
   business_expenses: "1160.00",
   total_out: "2160.00",
-  net: "4220.08",
+  net: "4220.00",
   lines: [
     {
       date: "2026-11-04",
@@ -173,9 +173,10 @@ test("admin can read the statement and download the PDF", async ({ page }, testI
   await expect(page.getByTestId("statement-view")).toBeVisible()
   await expect(page.getByTestId("statement-view")).toContainText("Client payment: Blue Fawn (Invoice #123)")
   await expect(page.getByTestId("statement-view")).toContainText("VA pay: Kyla Marie S. (Nov 1 to Nov 15) at 60.00 PHP/USD")
-  await expect(page.getByTestId("statement-summary")).toContainText("4220.08")
+  await expect(page.getByTestId("statement-summary")).toContainText("₱4,220.00")
+  await expect(page.getByTestId("statement-summary")).toContainText("₱6,380.00")
   await page.screenshot({
-    path: `/opt/cursor/artifacts/statement-view-${testInfo.project.name}.png`,
+    path: `/opt/cursor/artifacts/statement-fixed-${testInfo.project.name}.png`,
     fullPage: true,
   })
 

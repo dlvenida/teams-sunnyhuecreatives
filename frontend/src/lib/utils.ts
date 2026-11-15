@@ -21,6 +21,15 @@ export function formatCurrency(amount: number | string | null | undefined, curre
   return `$${num.toFixed(2)}`
 }
 
+/** Statement amounts, with thousands separators. Does not change the rest of the app. */
+export function formatStatementMoney(amount: number | string | null | undefined, currency = "USD") {
+  const num = typeof amount === "string" ? parseFloat(amount) : Number(amount)
+  if (amount == null || Number.isNaN(num)) return currency === "PHP" ? "₱0.00" : "$0.00"
+  const body = Math.abs(num).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const sign = num < 0 ? "-" : ""
+  return currency === "PHP" ? `${sign}₱${body}` : `${sign}$${body}`
+}
+
 /** PDF-safe currency: always uses the real ₱ character (must be rendered with NotoSans, not Times/Helvetica). */
 export function formatPdfCurrency(amount: number | string | null | undefined, currency: "PHP" | "USD" | string = "USD") {
   return formatCurrency(amount, currency === "PHP" ? "PHP" : "USD")

@@ -1,5 +1,5 @@
 import { Document, Font, Page, Text, View, StyleSheet, Image } from "@react-pdf/renderer"
-import { formatCurrency } from "@/lib/utils"
+import { formatStatementMoney } from "@/lib/utils"
 import type { Settings } from "@/lib/types"
 
 Font.registerHyphenationCallback((word) => [word])
@@ -123,7 +123,7 @@ function periodLabel(start: string, end: string) {
 
 function money(amount: string | null, currency: string) {
   if (amount == null || amount === "") return ""
-  return formatCurrency(amount, currency)
+  return formatStatementMoney(amount, currency)
 }
 
 export function StatementDocument({

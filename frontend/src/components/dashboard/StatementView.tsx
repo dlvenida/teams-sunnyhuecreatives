@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
-import { formatCurrency, localISODate } from "@/lib/utils"
+import { formatStatementMoney, localISODate } from "@/lib/utils"
 import { generatePdfBlob } from "@/lib/pdf"
 import { StatementDocument, type StatementData } from "@/components/pdf/StatementDocument"
 import { Button } from "@/components/ui/button"
@@ -71,7 +71,7 @@ export function StatementView() {
     }
   }
 
-  const show = (amount: string | null | undefined) => formatCurrency(amount ?? 0, currency)
+  const show = (amount: string | null | undefined) => formatStatementMoney(amount ?? 0, currency)
 
   return (
     <div data-testid="statement-view" className="space-y-4 rounded-3xl border border-primary/20 bg-card p-4 shadow-sm sm:p-5">
@@ -84,24 +84,28 @@ export function StatementView() {
           <Download className="h-3.5 w-3.5" /> Download statement PDF
         </Button>
       </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="min-w-0 flex-1 sm:flex-none">
-          <Label className="text-[10px]">From</Label>
-          <Input aria-label="Statement from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-9 w-full sm:w-[140px]" />
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="min-w-0">
+            <Label className="text-[10px]">From</Label>
+            <Input aria-label="Statement from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="h-9 w-full" />
+          </div>
+          <div className="min-w-0">
+            <Label className="text-[10px]">To</Label>
+            <Input aria-label="Statement to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-9 w-full" />
+          </div>
         </div>
-        <div className="min-w-0 flex-1 sm:flex-none">
-          <Label className="text-[10px]">To</Label>
-          <Input aria-label="Statement to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="h-9 w-full sm:w-[140px]" />
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-0 w-full sm:w-auto">
+            <Label className="text-[10px]">USD to PHP Rate</Label>
+            <Input aria-label="Statement USD to PHP Rate" type="number" step="0.01" min="0" placeholder="e.g. 58.50" value={rate} onChange={(e) => setRate(e.target.value)} className="h-9 w-full sm:w-[140px]" />
+          </div>
+          <div className="flex gap-1">
+            <Button type="button" size="sm" variant={currency === "PHP" ? "gold" : "outline"} onClick={() => setCurrency("PHP")}>PHP</Button>
+            <Button type="button" size="sm" variant={currency === "USD" ? "gold" : "outline"} onClick={() => setCurrency("USD")}>USD</Button>
+          </div>
+          <Button type="button" size="sm" variant="outline" onClick={() => { const next = monthBounds(); setDateFrom(next.from); setDateTo(next.to) }}>This month</Button>
         </div>
-        <div>
-          <Label className="text-[10px]">USD to PHP Rate</Label>
-          <Input aria-label="Statement USD to PHP Rate" type="number" step="0.01" min="0" placeholder="e.g. 58.50" value={rate} onChange={(e) => setRate(e.target.value)} className="h-9 w-[120px]" />
-        </div>
-        <div className="flex gap-1">
-          <Button type="button" size="sm" variant={currency === "PHP" ? "gold" : "outline"} onClick={() => setCurrency("PHP")}>PHP</Button>
-          <Button type="button" size="sm" variant={currency === "USD" ? "gold" : "outline"} onClick={() => setCurrency("USD")}>USD</Button>
-        </div>
-        <Button type="button" size="sm" variant="outline" onClick={() => { const next = monthBounds(); setDateFrom(next.from); setDateTo(next.to) }}>This month</Button>
       </div>
       {pdfError && <p className="text-xs text-red-600">{pdfError}</p>}
       {data?.needs_rate && data.rate_hint && <p className="text-xs text-muted-foreground">{data.rate_hint}</p>}
@@ -146,7 +150,7 @@ export function StatementView() {
                     <td className="py-2 pr-2">
                       {line.description}
                       {line.original_amount && (
-                        <span className="mt-0.5 block text-[10px] text-muted-foreground">Recorded {formatCurrency(line.original_amount, line.original_currency || currency)}</span>
+                        <span className="mt-0.5 block text-[10px] text-muted-foreground">Recorded {formatStatementMoney(line.original_amount, line.original_currency || currency)}</span>
                       )}
                     </td>
                     <td className="py-2 pr-2">{line.category}</td>
@@ -168,7 +172,7 @@ export function StatementView() {
                 </div>
                 <p className="text-[10px] text-muted-foreground">{line.category}</p>
                 {line.original_amount && (
-                  <p className="text-[10px] text-muted-foreground">Recorded {formatCurrency(line.original_amount, line.original_currency || currency)}</p>
+                  <p className="text-[10px] text-muted-foreground">Recorded {formatStatementMoney(line.original_amount, line.original_currency || currency)}</p>
                 )}
                 <div className="mt-1 flex justify-between gap-2">
                   <span>In {line.money_in ? show(line.money_in) : "-"}</span>

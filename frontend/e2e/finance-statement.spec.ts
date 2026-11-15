@@ -142,18 +142,19 @@ async function installApi(page: Page, role: "admin" | "auditor") {
       return json({
         period_start: "2026-11-01",
         period_end: "2026-11-30",
-        usd_php_rate: null,
-        earned: { usd: "0.00", php: "0.00", combined_usd: null, combined_php: null },
-        va_payroll: { usd: "0.00", php: "0.00", combined_usd: null, combined_php: null },
-        expense_totals: { usd: "0.00", php: "0.00", combined_usd: null, combined_php: null },
-        net: { usd: "0.00", php: "0.00", combined_usd: "0.00", combined_php: "0.00" },
+        usd_php_rate: "58",
+        earned: { usd: "100.00", php: "580.00", combined_usd: "110.00", combined_php: "6380.00" },
+        va_payroll: { usd: "0.00", php: "1000.00", combined_usd: "16.67", combined_php: "1000.00" },
+        business_expenses: { usd: "20.00", php: "0.00", combined_usd: "20.00", combined_php: "1160.00" },
+        expense_totals: { usd: "20.00", php: "0.00", combined_usd: "36.67", combined_php: "2160.00" },
+        net: { usd: "73.33", php: "4220.00", combined_usd: "73.33", combined_php: "4220.00" },
         needs_rate: false,
         by_client: [],
         manual_earnings: [],
         expenses: [],
-        va_runs_count: 0,
-        invoices_count: 0,
-        manual_count: 0,
+        va_runs_count: 1,
+        invoices_count: 1,
+        manual_count: 1,
       })
     }
     if (path.startsWith("/dashboard/owner-statement")) {
@@ -165,24 +166,32 @@ async function installApi(page: Page, role: "admin" | "auditor") {
   })
 }
 
-test("admin can read the statement and download the PDF", async ({ page }, testInfo) => {
+test("admin can read the calm totals and download the PDF", async ({ page }, testInfo) => {
   await installApi(page, "admin")
   await page.goto("/admin/finance")
   await expect(page.getByRole("heading", { name: "Earnings & expenses" })).toBeVisible()
-  await page.getByRole("button", { name: "Statement" }).click()
-  await expect(page.getByTestId("statement-view")).toBeVisible()
-  await expect(page.getByTestId("statement-view")).toContainText("Client payment: Blue Fawn (Invoice #123)")
-  await expect(page.getByTestId("statement-view")).toContainText("VA pay: Kyla Marie S. (Nov 1 to Nov 15) at 60.00 PHP/USD")
-  await expect(page.getByTestId("statement-summary")).toContainText("₱4,220.00")
-  await expect(page.getByTestId("statement-summary")).toContainText("₱6,380.00")
+  await expect(page.getByRole("button", { name: "Statement" })).toHaveCount(0)
+  await expect(page.getByLabel("USD to PHP Rate")).toBeVisible()
+  await expect(page.getByRole("button", { name: "This month" })).toBeVisible()
+  await expect(page.getByText("Add an earning")).toBeVisible()
+  const calm = page.getByTestId("calm-summary")
+  await expect(calm.getByText("You earned")).toBeVisible()
+  await expect(calm.getByText("Paid to VAs")).toBeVisible()
+  await expect(calm.getByText("Other expenses")).toBeVisible()
+  await expect(calm.getByText("You kept")).toBeVisible()
+  await expect(calm).toContainText("₱6,380.00")
+  await expect(calm).toContainText("$110.00")
+  await expect(page.getByText("Opening balance")).toHaveCount(0)
+  await expect(page.getByText("Total money in")).toHaveCount(0)
+  await expect(page.getByText("Total money out")).toHaveCount(0)
   await page.screenshot({
-    path: `/opt/cursor/artifacts/statement-fixed-${testInfo.project.name}.png`,
+    path: `/opt/cursor/artifacts/earnings-calm-${testInfo.project.name}.png`,
     fullPage: true,
   })
 
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page.getByRole("button", { name: "Download statement PDF" }).click(),
+    page.getByRole("button", { name: "Download PDF" }).click(),
   ])
   const pdfPath = `/opt/cursor/artifacts/statement-${testInfo.project.name}.pdf`
   await download.saveAs(pdfPath)
@@ -195,5 +204,6 @@ test("project manager cannot open the statement", async ({ page }) => {
   await page.goto("/admin/finance")
   await expect(page.getByRole("heading", { name: "Earnings & expenses" })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Statement" })).toHaveCount(0)
-  await expect(page.getByTestId("statement-view")).toHaveCount(0)
+  await expect(page.getByTestId("calm-summary")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Download PDF" })).toHaveCount(0)
 })

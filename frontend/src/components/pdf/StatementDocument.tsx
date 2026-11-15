@@ -67,10 +67,9 @@ const styles = StyleSheet.create({
   },
   cell: { fontSize: 8, color: COLORS.ink },
   muted: { fontSize: 7, color: COLORS.muted },
-  colDate: { width: "14%" },
-  colDesc: { width: "36%" },
-  colCat: { width: "14%" },
-  colMoney: { width: "12%", textAlign: "right" },
+  colDate: { width: "16%" },
+  colDesc: { width: "48%" },
+  colMoney: { width: "18%", textAlign: "right" },
   footer: {
     position: "absolute",
     bottom: 16,
@@ -97,15 +96,14 @@ export type StatementData = {
   period_start: string
   period_end: string
   display_currency: "PHP" | "USD"
-  needs_rate?: boolean
-  rate_hint?: string | null
-  opening_balance: string
-  total_in: string | null
-  va_pay: string | null
-  business_expenses: string | null
-  total_out: string | null
-  net: string | null
   lines: StatementLine[]
+}
+
+export type StatementSummary = {
+  earned: { php: string; usd: string }
+  va: { php: string; usd: string }
+  other: { php: string; usd: string }
+  kept: { php: string; usd: string }
 }
 
 function clean(value: string) {
@@ -128,9 +126,11 @@ function money(amount: string | null, currency: string) {
 
 export function StatementDocument({
   statement,
+  summary,
   settings,
 }: {
   statement: StatementData
+  summary: StatementSummary
   settings?: Pick<Settings, "company_name" | "location" | "principal_name"> | null
 }) {
   const currency = statement.display_currency === "PHP" ? "PHP" : "USD"
@@ -139,6 +139,12 @@ export function StatementDocument({
     ? `${window.location.origin}/brand/sunnyhue-logo.png`
     : "/brand/sunnyhue-logo.png"
   const period = periodLabel(statement.period_start, statement.period_end)
+  const cards = [
+    ["You earned", summary.earned],
+    ["Paid to VAs", summary.va],
+    ["Other expenses", summary.other],
+    ["You kept", summary.kept],
+  ] as const
 
   return (
     <Document title="Statement of Earnings and Expenses">
@@ -150,49 +156,32 @@ export function StatementDocument({
           <View style={styles.meta}>
             <Text style={styles.metaLabel}>Period</Text>
             <Text style={styles.metaValue}>{period}</Text>
-            <Text style={styles.metaLabel}>Shown in</Text>
-            <Text style={styles.metaValue}>{currency}</Text>
           </View>
         </View>
         <Text style={styles.title}>Statement of Earnings and Expenses</Text>
         <Text style={styles.subtitle}>{company}{settings?.location ? ` · ${clean(settings.location)}` : ""}</Text>
         <View style={styles.banner}>
           <View>
-            <Text style={styles.bannerAmount}>{money(statement.net, currency) || "Needs a rate"}</Text>
-            <Text style={styles.bannerDue}>Net profit</Text>
+            <Text style={styles.bannerAmount}>{money(summary.kept.php, "PHP")}</Text>
+            <Text style={styles.bannerDue}>{money(summary.kept.usd, "USD")}</Text>
+            <Text style={styles.bannerDue}>You kept</Text>
           </View>
           <View>
-            <Text style={styles.bannerSide}>Money in {money(statement.total_in, currency)}</Text>
-            <Text style={styles.bannerSide}>Money out {money(statement.total_out, currency)}</Text>
+            <Text style={styles.bannerSide}>You earned {money(summary.earned.php, "PHP")}</Text>
+            <Text style={styles.bannerSide}>Paid to VAs {money(summary.va.php, "PHP")}</Text>
           </View>
         </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Opening balance</Text>
-          <Text style={styles.summaryValue}>{money(statement.opening_balance, currency)}</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Total money in</Text>
-          <Text style={styles.summaryValue}>{money(statement.total_in, currency)}</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>VA pay</Text>
-          <Text style={styles.summaryValue}>{money(statement.va_pay, currency)}</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Business expenses</Text>
-          <Text style={styles.summaryValue}>{money(statement.business_expenses, currency)}</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Total money out</Text>
-          <Text style={styles.summaryValue}>{money(statement.total_out, currency)}</Text>
-        </View>
+        {cards.map(([label, pair]) => (
+          <View key={label} style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>{label}</Text>
+            <Text style={styles.summaryValue}>{money(pair.php, "PHP")}   {money(pair.usd, "USD")}</Text>
+          </View>
+        ))}
         <View style={styles.tableHeader}>
           <Text style={[styles.th, styles.colDate]}>Date</Text>
-          <Text style={[styles.th, styles.colDesc]}>Description</Text>
-          <Text style={[styles.th, styles.colCat]}>Category</Text>
-          <Text style={[styles.th, styles.colMoney]}>In</Text>
-          <Text style={[styles.th, styles.colMoney]}>Out</Text>
-          <Text style={[styles.th, styles.colMoney]}>Balance</Text>
+          <Text style={[styles.th, styles.colDesc]}>What it was</Text>
+          <Text style={[styles.th, styles.colMoney]}>Earned</Text>
+          <Text style={[styles.th, styles.colMoney]}>Spent</Text>
         </View>
         {statement.lines.map((line, index) => (
           <View key={`${line.date}-${index}`} style={styles.row}>
@@ -203,10 +192,8 @@ export function StatementDocument({
                 <Text style={styles.muted}>Recorded {money(line.original_amount, line.original_currency || currency)}</Text>
               ) : null}
             </View>
-            <Text style={[styles.cell, styles.colCat]}>{line.category}</Text>
             <Text style={[styles.cell, styles.colMoney]}>{money(line.money_in, currency)}</Text>
             <Text style={[styles.cell, styles.colMoney]}>{money(line.money_out, currency)}</Text>
-            <Text style={[styles.cell, styles.colMoney]}>{money(line.balance, currency)}</Text>
           </View>
         ))}
         <Text

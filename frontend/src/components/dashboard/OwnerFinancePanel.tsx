@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react"
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
-import { formatCurrency, formatDate, localISODate } from "@/lib/utils"
-import type { Client } from "@/lib/types"
+import { formatCurrency, formatDate, formatStatementMoney, localISODate } from "@/lib/utils"
+import type { Client, Settings } from "@/lib/types"
+import { generatePdfBlob } from "@/lib/pdf"
+import { StatementDocument, type StatementData } from "@/components/pdf/StatementDocument"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
-import { PiggyBank, Plus, Trash2, Wallet } from "lucide-react"
+import { Download, PiggyBank, Plus, Trash2, Wallet } from "lucide-react"
 
 type MoneySide = {
   usd: string
@@ -194,6 +196,24 @@ function clientMoney(row: (ByClient & { earned?: string | null }) | null | undef
   })
 }
 
+function shownPair(side: MoneySide) {
+  return {
+    php: side.combined_php ?? side.php ?? "0.00",
+    usd: side.combined_usd ?? side.usd ?? "0.00",
+  }
+}
+
+function CalmTotal({ label, side, tone = "" }: { label: string; side: MoneySide; tone?: string }) {
+  const pair = shownPair(side)
+  return (
+    <div className="rounded-3xl border border-primary/15 bg-white/90 p-4 sm:p-5">
+      <p className="text-sm font-medium text-muted-foreground">{label}</p>
+      <p className={`mt-3 font-display text-3xl font-extrabold leading-none tracking-tight sm:text-4xl ${tone}`}>{formatStatementMoney(pair.php, "PHP")}</p>
+      <p className="mt-2 text-base text-muted-foreground">{formatStatementMoney(pair.usd, "USD")}</p>
+    </div>
+  )
+}
+
 function moneySummary(side: MoneySide) {
   if (side.combined_usd != null && side.combined_php != null) {
     return `${formatCurrency(side.combined_usd, "USD")} · ${formatCurrency(side.combined_php, "PHP")}`
@@ -226,6 +246,8 @@ export function OwnerFinancePanel() {
   const [earnAmount, setEarnAmount] = useState("")
   const [earnCurrency, setEarnCurrency] = useState<"USD" | "PHP">("USD")
   const [earnError, setEarnError] = useState("")
+  const [pdfError, setPdfError] = useState("")
+  const [downloading, setDownloading] = useState(false)
 
   useEffect(() => {
     const next = rangeBounds(dateFrom, dateTo)
@@ -248,6 +270,11 @@ export function OwnerFinancePanel() {
     queryKey: ["owner-finance", qs],
     queryFn: () => apiFetch<OwnerFinance>(`/dashboard/owner-finance?${qs}`),
     placeholderData: keepPreviousData,
+  })
+
+  const { data: settings } = useQuery({
+    queryKey: ["settings"],
+    queryFn: () => apiFetch<Settings>("/settings"),
   })
 
   const { data: clients = [] } = useQuery({
@@ -334,6 +361,39 @@ export function OwnerFinancePanel() {
   )
 
   const bounds = rangeBounds(dateFrom, dateTo)
+  const calm = {
+    earned: shownPair(earned),
+    va: shownPair(vaPayroll),
+    other: shownPair(businessExpenses),
+    kept: shownPair(net),
+  }
+  const keptTone = Number(calm.kept.php) >= 0 && Number(calm.kept.usd) >= 0 ? "text-green-700" : "text-red-600"
+
+  const downloadPdf = async () => {
+    if (!bounds) return
+    setPdfError("")
+    setDownloading(true)
+    try {
+      const params = new URLSearchParams()
+      params.set("date_from", bounds.start)
+      params.set("date_to", bounds.end)
+      params.set("display_currency", "PHP")
+      const parsed = parseFloat(rate)
+      if (rate && !Number.isNaN(parsed) && parsed > 0) params.set("usd_php_rate", String(parsed))
+      const statement = await apiFetch<StatementData>(`/dashboard/owner-statement?${params}`)
+      const blob = await generatePdfBlob(<StatementDocument statement={statement} summary={calm} settings={settings} />)
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `Statement-${bounds.start}-to-${bounds.end}.pdf`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setPdfError(err instanceof Error ? err.message : "Could not build the PDF.")
+    } finally {
+      setDownloading(false)
+    }
+  }
 
   const submitEarning = () => {
     if (bounds && (earnDate < bounds.start || earnDate > bounds.end)) {
@@ -354,7 +414,19 @@ export function OwnerFinancePanel() {
   }
 
   return (
-    <div className="space-y-4 rounded-3xl border border-primary/20 bg-gradient-to-br from-rose-50/80 via-card to-amber-50/50 p-4 shadow-sm sm:p-5">
+    <div className="space-y-5 rounded-3xl border border-primary/20 bg-gradient-to-br from-rose-50/80 via-card to-amber-50/50 p-4 shadow-sm sm:p-5">
+      <div className="flex justify-end">
+        <Button variant="gold" disabled={!data || downloading || !bounds} onClick={() => void downloadPdf()}>
+          <Download className="h-3.5 w-3.5" /> Download PDF
+        </Button>
+      </div>
+      {pdfError && <p className="text-xs text-red-600">{pdfError}</p>}
+      <div data-testid="calm-summary" className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+        <CalmTotal label="You earned" side={earned} />
+        <CalmTotal label="Paid to VAs" side={vaPayroll} />
+        <CalmTotal label="Other expenses" side={businessExpenses} />
+        <CalmTotal label="You kept" side={net} tone={data ? keptTone : ""} />
+      </div>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-primary">

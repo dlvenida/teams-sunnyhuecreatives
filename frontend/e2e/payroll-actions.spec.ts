@@ -53,6 +53,14 @@ async function installApi(page: Page, role: "admin" | "auditor") {
   const posted: Record<string, unknown>[] = []
   const applied: Record<string, unknown>[] = []
   const showMoney = role === "admin"
+  const payday = {
+    period_start: "2026-11-01",
+    period_end: "2026-11-15",
+    usd_php_rate: null as string | null,
+    confirmed: false,
+    prefill_rate: showMoney ? "58.00" : null,
+    confirmed_label: null as string | null,
+  }
   await page.addInitScript((user) => {
     localStorage.setItem("access_token", "test-access")
     localStorage.setItem("refresh_token", "test-refresh")
@@ -91,6 +99,19 @@ async function installApi(page: Page, role: "admin" | "auditor") {
     }
     if (path === "/vas") return json(vas.map((item) => ({ id: item.va_id, name: item.va_name, currency: item.currency })))
     if (path === "/payroll/timesheets") return json([])
+    if (path === "/payroll/payday-rate" && method === "GET") {
+      if (!showMoney) return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ detail: "Admin access required" }) })
+      return json(payday)
+    }
+    if (path === "/payroll/payday-rate" && method === "POST") {
+      const body = request.postDataJSON() as { usd_php_rate: number }
+      const rate = Number(body.usd_php_rate).toFixed(2)
+      payday.usd_php_rate = rate
+      payday.confirmed = true
+      payday.prefill_rate = rate
+      payday.confirmed_label = `Confirmed: ${rate} PHP per 1 USD for Nov 1 to Nov 15`
+      return json({ ...payday })
+    }
     if (path === "/payroll/runs" && method === "GET") return json([])
     if (path === "/payroll/runs/apply-rate" && method === "POST") {
       const body = request.postDataJSON() as Record<string, unknown>
@@ -145,21 +166,29 @@ test("admin can pick a VA and see the peso rate beside the period", async ({ pag
   await expect(page.getByLabel("Select VA")).toBeVisible()
   const standardRate = page.getByLabel("Payday rate for all VAs (USD to PHP)")
   await expect(standardRate).toHaveValue("58.00")
+  await expect(page.getByRole("button", { name: "Confirm payday rate" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Apply to all paid runs in this period" })).toBeVisible()
-  await page.locator("#payroll-top").screenshot({ path: `/opt/cursor/artifacts/payroll-standard-rate-${testInfo.project.name}.png` })
+  await page.locator("#payroll-top").screenshot({ path: `/opt/cursor/artifacts/payroll-rate-before-confirm-${testInfo.project.name}.png` })
+  await page.getByRole("button", { name: "Confirm payday rate" }).click()
+  await expect(page.getByTestId("payday-confirmed")).toHaveText("Confirmed: 58.00 PHP per 1 USD for Nov 1 to Nov 15")
+  await expect(page.getByRole("button", { name: "Change rate" })).toBeVisible()
+  await page.locator("#payroll-top").screenshot({ path: `/opt/cursor/artifacts/payroll-rate-after-confirm-${testInfo.project.name}.png` })
+  const gem = page.locator("[data-va=Gem]")
+  await expect(gem.getByTestId("peso-equivalent")).toHaveText("To pay about ₱46400.00 at the payday rate")
+  await expect(page.getByTestId("pay-totals")).toContainText("Combined ₱63400.00")
+  await gem.screenshot({ path: `/opt/cursor/artifacts/payroll-usd-card-peso-${testInfo.project.name}.png` })
   await page.getByRole("button", { name: "Apply to all paid runs in this period" }).click()
   await expect(page.getByText("Updated 2 paid runs to this rate.")).toBeVisible()
   expect(applied.at(-1)).toMatchObject({ period_start: "2026-11-01", period_end: "2026-11-15", usd_php_rate: 58 })
   await expect(page.getByTestId("pay-totals")).toContainText("₱17000.00")
   await expect(page.getByTestId("pay-totals")).toContainText("$800.00")
-  const gem = page.locator("[data-va=Gem]")
   const arby = page.locator("[data-va=Arby]")
   await expect(gem.getByRole("button", { name: "Approve Gem" })).toBeVisible()
   await expect(gem.getByRole("button", { name: "Return timesheet Gem" })).toBeVisible()
   await expect(gem).toContainText("Approve first to mark paid")
   await expect(arby.getByRole("button", { name: "Approve Arby" })).toHaveCount(0)
   await expect(arby.getByRole("button", { name: "Mark Paid Arby" })).toBeEnabled()
-  await expect(page.getByTestId("peso-equivalent").first()).toContainText("₱46400.00")
+  await expect(page.locator("[data-va=Myra]").getByTestId("peso-equivalent")).toHaveCount(0)
   await expectNoPageScroll(page)
   if (testInfo.project.name === "mobile") {
     await gem.screenshot({ path: "/opt/cursor/artifacts/payroll-submitted-card.png" })
@@ -184,14 +213,23 @@ test("admin can pick a VA and see the peso rate beside the period", async ({ pag
   const payday = page.getByTestId("payday-rate-used")
   await expect(payday).toContainText("58.00")
   await expect(page.getByLabel("Payday exchange rate (USD to PHP)")).toHaveCount(0)
-  await page.screenshot({ path: `/opt/cursor/artifacts/payroll-mark-paid-readonly-${testInfo.project.name}.png`, fullPage: false })
+  await page.screenshot({ path: `/opt/cursor/artifacts/payroll-mark-paid-confirmed-${testInfo.project.name}.png`, fullPage: false })
   await page.getByRole("button", { name: "Confirm & mark paid" }).click()
   await expect(myra).toContainText("Paid")
   expect(posted.at(-1)).toMatchObject({ va_id: "myra", currency: "PHP", total_pay: 12000, usd_php_rate: 58 })
 
+  await page.getByRole("button", { name: "Change rate" }).click()
   await standardRate.fill("63.92")
+  await expect(gem.getByTestId("peso-equivalent")).toHaveText("To pay about ₱46400.00 at the payday rate")
+  await expect(page.getByTestId("pay-totals")).toContainText("Combined ₱63400.00")
   await arby.getByRole("button", { name: "Mark Paid Arby" }).click()
-  await expect(payday).toContainText("63.92")
+  await expect(payday).toContainText("Confirmed rate is still 58.00")
+  await page.getByRole("button", { name: "Back" }).click()
+  await page.getByRole("button", { name: "Confirm payday rate" }).click()
+  await expect(page.getByTestId("payday-confirmed")).toHaveText("Confirmed: 63.92 PHP per 1 USD for Nov 1 to Nov 15")
+  await expect(gem.getByTestId("peso-equivalent")).toHaveText("To pay about ₱51136.00 at the payday rate")
+  await expect(page.getByTestId("pay-totals")).toContainText("Combined ₱68136.00")
+  await arby.getByRole("button", { name: "Mark Paid Arby" }).click()
   await page.getByRole("button", { name: "Confirm & mark paid" }).click()
   expect(posted.at(-1)).toMatchObject({ va_id: "arby", currency: "PHP", usd_php_rate: 63.92 })
   if (testInfo.project.name === "mobile") {
@@ -213,7 +251,10 @@ test("project manager does not see the rate or pay", async ({ page }, testInfo) 
   await expect(page.getByRole("heading", { name: "Timesheet review" })).toBeVisible()
   await expect(page.getByLabel("Select VA")).toBeVisible()
   await expect(page.getByLabel("Payday rate for all VAs (USD to PHP)")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Confirm payday rate" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Change rate" })).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Apply to all paid runs in this period" })).toHaveCount(0)
+  await expect(page.getByText("To pay about")).toHaveCount(0)
   await expect(page.getByTestId("payday-rate-used")).toHaveCount(0)
   await expect(page.getByTestId("pay-totals")).toHaveCount(0)
   await expect(page.getByTestId("peso-equivalent")).toHaveCount(0)

@@ -618,6 +618,22 @@ class PayrollRun(Base):
     va: Mapped["VA"] = relationship()
 
 
+class PaydayRate(Base):
+    """One confirmed USD to PHP rate for a payroll period. Pay runs are not changed here."""
+
+    __tablename__ = "payday_rates"
+    __table_args__ = (UniqueConstraint("period_start", "period_end", name="uq_payday_rate_period"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    period_start: Mapped[date] = mapped_column(Date, index=True)
+    period_end: Mapped[date] = mapped_column(Date, index=True)
+    usd_php_rate: Mapped[Decimal] = mapped_column(Numeric(12, 4))
+    confirmed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class PackagePeriodOverride(Base):
     """One period's Fixed Package decision for a VA and client. The VA Rate stays unchanged."""
 

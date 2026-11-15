@@ -1207,6 +1207,21 @@ class PackageOverrideResponse(BaseModel):
     locked: bool = False
 
 
+class PaydayRateConfirm(BaseModel):
+    period_start: date
+    period_end: date
+    usd_php_rate: Decimal
+
+
+class PaydayRateView(BaseModel):
+    period_start: date
+    period_end: date
+    usd_php_rate: Decimal | None = None
+    confirmed: bool
+    prefill_rate: Decimal | None = None
+    confirmed_label: str | None = None
+
+
 class PayrollRateApply(BaseModel):
     period_start: date
     period_end: date

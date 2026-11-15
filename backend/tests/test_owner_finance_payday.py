@@ -12,6 +12,7 @@ from app.database import SessionLocal
 from app.main import app
 from app.models import (
     BusinessExpense,
+    PaydayRate,
     PayrollRun,
     TimesheetStatus,
     TimesheetSubmission,
@@ -147,6 +148,7 @@ class PaydayApiTests(unittest.TestCase):
         self.run_ids = []
         self.sheet_ids = []
         self.expense_ids = []
+        self.payday_ids = []
         stamp = uuid4().hex[:8]
         self.admin = self._staff(f"Jane {stamp}", UserRole.admin)
         self.pm = self._staff(f"PM {stamp}", UserRole.auditor)
@@ -182,6 +184,8 @@ class PaydayApiTests(unittest.TestCase):
             self.db.query(PayrollRun).filter(PayrollRun.id.in_(self.run_ids)).delete(synchronize_session=False)
         if self.expense_ids:
             self.db.query(BusinessExpense).filter(BusinessExpense.id.in_(self.expense_ids)).delete(synchronize_session=False)
+        if self.payday_ids:
+            self.db.query(PaydayRate).filter(PaydayRate.id.in_(self.payday_ids)).delete(synchronize_session=False)
         if self.user_ids:
             self.db.query(VA).filter(VA.user_id.in_(self.user_ids)).delete(synchronize_session=False)
             self.db.query(User).filter(User.id.in_(self.user_ids)).delete(synchronize_session=False)
@@ -293,6 +297,77 @@ class PaydayApiTests(unittest.TestCase):
             "/payroll/runs/apply-rate",
             headers=_auth(self.pm),
             json={"period_start": "2026-11-01", "period_end": "2026-11-30", "usd_php_rate": "63.92"},
+        )
+        self.assertEqual(blocked.status_code, 403, blocked.text)
+
+    def test_each_period_keeps_its_own_rate_and_paid_runs_stay_put(self):
+        run = PayrollRun(
+            va_id=self.va.id,
+            period_start=date(2026, 11, 1),
+            period_end=date(2026, 11, 15),
+            total_hours=Decimal("1"),
+            total_pay=Decimal("10.00"),
+            currency="USD",
+            usd_php_rate=Decimal("50"),
+            paid_at=datetime(2026, 11, 15, tzinfo=timezone.utc),
+        )
+        self.db.add(run)
+        self.db.commit()
+        self.run_ids.append(run.id)
+
+        first = self.client.post(
+            "/payroll/payday-rate",
+            headers=_auth(self.admin),
+            json={"period_start": "2026-11-01", "period_end": "2026-11-15", "usd_php_rate": "58"},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.payday_ids.append(
+            self.db.query(PaydayRate).filter(PaydayRate.period_start == date(2026, 11, 1)).one().id
+        )
+        self.assertEqual(first.json()["confirmed_label"], "Confirmed: 58.00 PHP per 1 USD for Nov 1 to Nov 15")
+        self.db.expire_all()
+        self.assertEqual(run.total_pay, Decimal("10.00"))
+        self.assertEqual(Decimal(run.usd_php_rate), Decimal("50"))
+
+        nxt = self.client.get(
+            "/payroll/payday-rate",
+            headers=_auth(self.admin),
+            params={"period_start": "2026-11-16", "period_end": "2026-11-30"},
+        )
+        self.assertEqual(nxt.status_code, 200, nxt.text)
+        self.assertFalse(nxt.json()["confirmed"])
+        self.assertEqual(Decimal(nxt.json()["prefill_rate"]), Decimal("58"))
+
+        again = self.client.post(
+            "/payroll/payday-rate",
+            headers=_auth(self.admin),
+            json={"period_start": "2026-11-01", "period_end": "2026-11-15", "usd_php_rate": "63.92"},
+        )
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertEqual(again.json()["confirmed_label"], "Confirmed: 63.92 PHP per 1 USD for Nov 1 to Nov 15")
+        self.assertEqual(self.db.query(PaydayRate).filter(PaydayRate.period_start == date(2026, 11, 1)).count(), 1)
+        self.db.expire_all()
+        self.assertEqual(Decimal(run.usd_php_rate), Decimal("50"))
+
+        later = self.client.get(
+            "/payroll/payday-rate",
+            headers=_auth(self.admin),
+            params={"period_start": "2026-12-01", "period_end": "2026-12-15"},
+        )
+        self.assertEqual(Decimal(later.json()["prefill_rate"]), Decimal("63.92"))
+        self.assertFalse(later.json()["confirmed"])
+
+        hidden = self.client.get(
+            "/payroll/payday-rate",
+            headers=_auth(self.pm),
+            params={"period_start": "2026-11-01", "period_end": "2026-11-15"},
+        )
+        self.assertEqual(hidden.status_code, 403, hidden.text)
+        self.assertNotIn("63.92", hidden.text)
+        blocked = self.client.post(
+            "/payroll/payday-rate",
+            headers=_auth(self.pm),
+            json={"period_start": "2026-11-01", "period_end": "2026-11-15", "usd_php_rate": "70"},
         )
         self.assertEqual(blocked.status_code, 403, blocked.text)
 

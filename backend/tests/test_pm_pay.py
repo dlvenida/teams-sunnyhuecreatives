@@ -39,7 +39,7 @@ def _policy(method: str, path: str) -> str | None:
         return "admin"
     if path == "/dashboard/summary":
         return "redacted"
-    if path.startswith("/payroll/runs") or path == "/payroll/package-overrides":
+    if path.startswith("/payroll/runs") or path == "/payroll/package-overrides" or path.startswith("/payroll/payday-rate"):
         return "admin"
     if path in {"/payroll/calculate", "/payroll/timesheets/{timesheet_id}/entries"}:
         return "redacted"

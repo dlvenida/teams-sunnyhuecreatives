@@ -29,7 +29,7 @@ from app.models import (
     WorkLog,
     WorkLogStatus,
 )
-from app.services.owner_finance import MoneySplit, build_owner_totals, combine, currency_code, pack_money, quantize_money
+from app.services.owner_finance import MoneySplit, build_owner_totals, build_statement, combine, currency_code, pack_money, quantize_money
 from app.routers.work_logs import _serialize_log
 from app.schemas import DashboardSummary
 from app.services.billing import get_week_period
@@ -643,3 +643,51 @@ def owner_finance(
         "invoices_count": len(invoices),
         "manual_count": len(manual_rows),
     }
+
+
+@router.get("/owner-statement")
+def owner_statement(
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+    date_from: date | None = None,
+    date_to: date | None = None,
+    usd_php_rate: Decimal | None = None,
+    display_currency: str = "PHP",
+):
+    """Admin-only ledger for the same dates and totals as owner earnings."""
+    today = date.today()
+    if not date_from:
+        date_from = date(today.year, today.month, 1)
+    if not date_to:
+        date_to = today
+    if date_to < date_from:
+        date_from, date_to = date_to, date_from
+
+    rate = Decimal(str(usd_php_rate)) if usd_php_rate and usd_php_rate > 0 else None
+    invoices = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.client))
+        .filter(Invoice.issue_date >= date_from, Invoice.issue_date <= date_to)
+        .all()
+    )
+    manual_rows = (
+        db.query(ManualEarning)
+        .options(joinedload(ManualEarning.client))
+        .filter(ManualEarning.earned_date >= date_from, ManualEarning.earned_date <= date_to)
+        .all()
+    )
+    runs = (
+        db.query(PayrollRun)
+        .options(joinedload(PayrollRun.va))
+        .filter(func.date(PayrollRun.paid_at) >= date_from, func.date(PayrollRun.paid_at) <= date_to)
+        .all()
+    )
+    expenses = (
+        db.query(BusinessExpense)
+        .filter(BusinessExpense.expense_date >= date_from, BusinessExpense.expense_date <= date_to)
+        .all()
+    )
+    body = build_statement(invoices, manual_rows, runs, expenses, rate, display_currency)
+    body["period_start"] = str(date_from)
+    body["period_end"] = str(date_to)
+    return body

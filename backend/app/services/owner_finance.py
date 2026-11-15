@@ -225,3 +225,256 @@ def build_owner_totals(earned: MoneySplit, business: MoneySplit, runs, page_rate
         "needs_rate": needs_rate,
         "rate_hint": hint,
     }
+
+
+def plain_text(value) -> str:
+    text = str(value or "")
+    for dash in ("\u2014", "\u2013", "\u2012"):
+        text = text.replace(dash, " ")
+    return " ".join(text.split())
+
+
+def period_phrase(start, end) -> str:
+    def piece(day) -> str:
+        label = f"{day.strftime('%b')} {day.day}"
+        if start.year != end.year:
+            label = f"{label}, {day.year}"
+        return label
+
+    return f"{piece(start)} to {piece(end)}"
+
+
+def _status_value(row) -> str:
+    status = getattr(row, "status", "")
+    return status.value if hasattr(status, "value") else str(status or "")
+
+
+def _paid_on(run):
+    paid = getattr(run, "paid_at", None)
+    if paid is None:
+        return getattr(run, "period_end", None)
+    if getattr(paid, "tzinfo", None) is not None:
+        from datetime import timezone
+        return paid.astimezone(timezone.utc).date()
+    return paid.date()
+
+
+def convert_amount(amount, currency, rate, display: str) -> tuple[Decimal | None, bool]:
+    """Amount in the statement currency. The second value is true when a rate was required."""
+    code = currency_code(currency)
+    value = quantize_money(Decimal(str(amount or 0)))
+    show = "PHP" if str(display or "PHP").upper() == "PHP" else "USD"
+    if code == show:
+        return value, False
+    chosen = usable_rate(rate)
+    if chosen is None:
+        return None, True
+    if show == "PHP":
+        return quantize_money(value * chosen), True
+    return quantize_money(value / chosen), True
+
+
+def _shown(money: dict, display: str) -> Decimal | None:
+    if display == "PHP":
+        if money.get("combined_php") is not None:
+            return Decimal(money["combined_php"])
+        if Decimal(money.get("usd") or 0) == 0:
+            return Decimal(money.get("php") or 0)
+        return None
+    if money.get("combined_usd") is not None:
+        return Decimal(money["combined_usd"])
+    if Decimal(money.get("php") or 0) == 0:
+        return Decimal(money.get("usd") or 0)
+    return None
+
+
+def _line(when, description, category, money_in, money_out, original_amount=None, original_currency=None) -> dict:
+    return {
+        "date": str(when),
+        "description": plain_text(description),
+        "category": category,
+        "money_in": None if money_in is None else str(quantize_money(money_in)),
+        "money_out": None if money_out is None else str(quantize_money(money_out)),
+        "balance": None,
+        "original_amount": None if original_amount is None else str(quantize_money(original_amount)),
+        "original_currency": original_currency,
+    }
+
+
+def _sum_side(lines, category, side: str) -> Decimal:
+    total = Decimal("0")
+    for line in lines:
+        if line["category"] != category:
+            continue
+        raw = line["money_in"] if side == "in" else line["money_out"]
+        if raw is None:
+            continue
+        total += Decimal(raw)
+    return quantize_money(total)
+
+
+def _reconcile(lines, category, target: Decimal | None, when, side: str) -> None:
+    """A cent from combining the whole total, kept off the real descriptions."""
+    if target is None or when is None:
+        return
+    gap = quantize_money(target - _sum_side(lines, category, side))
+    if gap == 0:
+        return
+    if gap > 0:
+        money_in = gap if side == "in" else Decimal("0")
+        money_out = gap if side == "out" else Decimal("0")
+    else:
+        money_in = abs(gap) if side == "out" else Decimal("0")
+        money_out = abs(gap) if side == "in" else Decimal("0")
+    lines.append(_line(when, "Rounding to match the earnings total", "Rounding", money_in, money_out))
+
+
+def build_statement(invoices, manuals, runs, expenses, page_rate, display: str = "PHP") -> dict:
+    """A readable ledger whose summary matches the earnings page for the same range."""
+    show = "PHP" if str(display or "PHP").upper() == "PHP" else "USD"
+    page = usable_rate(page_rate)
+    earned = MoneySplit()
+    business = MoneySplit()
+    lines: list[dict] = []
+
+    for inv in invoices:
+        client = getattr(inv, "client", None)
+        name = plain_text(getattr(client, "name", None) or getattr(inv, "one_off_name", None) or "Client")
+        number = plain_text(getattr(inv, "invoice_number", "") or "")
+        paid = _status_value(inv) == "paid"
+        label = "Client payment" if paid else "Invoice issued"
+        description = f"{label}: {name} (Invoice #{number})" if number else f"{label}: {name}"
+        amount = getattr(inv, "amount", 0)
+        currency = getattr(inv, "currency", "USD")
+        earned.add(amount, currency)
+        converted, changed = convert_amount(amount, currency, page, show)
+        lines.append(_line(
+            getattr(inv, "issue_date"),
+            description,
+            "Income",
+            converted,
+            Decimal("0") if converted is not None else None,
+            amount if changed else None,
+            currency_code(currency) if changed else None,
+        ))
+
+    for item in manuals:
+        client = getattr(item, "client", None)
+        name = plain_text(getattr(client, "name", None) or "Client")
+        note = plain_text(getattr(item, "description", None) or "")
+        description = f"Manual earning: {name} {note}".strip()
+        amount = getattr(item, "amount", 0)
+        currency = getattr(item, "currency", "USD")
+        earned.add(amount, currency)
+        converted, changed = convert_amount(amount, currency, page, show)
+        lines.append(_line(
+            getattr(item, "earned_date"),
+            description,
+            "Income",
+            converted,
+            Decimal("0") if converted is not None else None,
+            amount if changed else None,
+            currency_code(currency) if changed else None,
+        ))
+
+    for expense in expenses:
+        amount = getattr(expense, "amount", 0)
+        currency = getattr(expense, "currency", "USD")
+        business.add(amount, currency)
+        converted, changed = convert_amount(amount, currency, page, show)
+        lines.append(_line(
+            getattr(expense, "expense_date"),
+            f"Business expense: {plain_text(getattr(expense, 'description', None) or 'Expense')}",
+            "Business expense",
+            Decimal("0") if converted is not None else None,
+            converted,
+            amount if changed else None,
+            currency_code(currency) if changed else None,
+        ))
+
+    for run in runs:
+        amount = getattr(run, "total_pay", 0)
+        currency = getattr(run, "currency", "PHP")
+        rate = usable_rate(getattr(run, "usd_php_rate", None)) or page
+        va = getattr(run, "va", None)
+        name = plain_text(getattr(va, "name", None) or "VA")
+        start = getattr(run, "period_start", None)
+        end = getattr(run, "period_end", None)
+        span = period_phrase(start, end) if start and end else "this period"
+        rate_bit = f" at {_rate_label(rate)} PHP/USD" if rate is not None else ""
+        converted, changed = convert_amount(amount, currency, rate, show)
+        lines.append(_line(
+            _paid_on(run),
+            f"VA pay: {name} ({span}){rate_bit}",
+            "VA pay",
+            Decimal("0") if converted is not None else None,
+            converted,
+            amount if changed else None,
+            currency_code(currency) if changed else None,
+        ))
+
+    totals = build_owner_totals(earned, business, runs, page)
+    total_in = _shown(pack_money(earned, page), show)
+    va_pay = _shown(totals["va_payroll"], show)
+    business_total = _shown(totals["business_expenses"], show)
+    total_out = _shown(totals["expense_totals"], show)
+    net = _shown(totals["net"], show)
+    needs_rate = total_in is None or va_pay is None or business_total is None or total_out is None or net is None or totals["needs_rate"]
+
+    end_date = None
+    for source in list(invoices) + list(manuals) + list(expenses) + list(runs):
+        when = getattr(source, "issue_date", None) or getattr(source, "earned_date", None) or getattr(source, "expense_date", None) or _paid_on(source)
+        if when is not None and (end_date is None or when > end_date):
+            end_date = when
+
+    if not needs_rate:
+        _reconcile(lines, "Income", total_in, end_date, "in")
+        _reconcile(lines, "VA pay", va_pay, end_date, "out")
+        _reconcile(lines, "Business expense", business_total, end_date, "out")
+
+    lines.sort(key=lambda row: (
+        row["date"] or "",
+        {"Income": 0, "Business expense": 1, "VA pay": 2, "Rounding": 3}.get(row["category"], 9),
+        row["description"],
+    ))
+
+    if not needs_rate and net is not None and total_in is not None and total_out is not None:
+        gap = quantize_money(net - (total_in - total_out))
+        if gap != 0 and end_date is not None:
+            lines.append(_line(
+                end_date,
+                "Rounding to the earnings net profit",
+                "Rounding",
+                gap if gap > 0 else Decimal("0"),
+                abs(gap) if gap < 0 else Decimal("0"),
+            ))
+
+    balance = Decimal("0.00")
+    complete = True
+    for line in lines:
+        if line["money_in"] is None or line["money_out"] is None:
+            complete = False
+            line["balance"] = None
+            continue
+        balance = quantize_money(balance + Decimal(line["money_in"]) - Decimal(line["money_out"]))
+        line["balance"] = str(balance)
+
+    return {
+        "display_currency": show,
+        "usd_php_rate": str(page) if page else None,
+        "needs_rate": needs_rate or not complete,
+        "rate_hint": totals["rate_hint"] if needs_rate or not complete else None,
+        "opening_balance": "0.00",
+        "total_in": None if total_in is None else str(total_in),
+        "va_pay": None if va_pay is None else str(va_pay),
+        "business_expenses": None if business_total is None else str(business_total),
+        "total_out": None if total_out is None else str(total_out),
+        "net": None if net is None else str(net),
+        "lines": lines,
+    }
+
+
+def _rate_label(rate: Decimal | None) -> str:
+    if rate is None:
+        return ""
+    return f"{Decimal(rate).quantize(Decimal('0.01'))}"

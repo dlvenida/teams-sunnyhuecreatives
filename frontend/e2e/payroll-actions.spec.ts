@@ -6,6 +6,7 @@ interface FixtureVa {
   currency: "PHP" | "USD"
   total_hours: string
   total_pay: string
+  timesheet_id: string
   timesheet_status: string | null
   timesheet_submitted: boolean
   is_paid: boolean
@@ -13,9 +14,9 @@ interface FixtureVa {
 
 function seed(): FixtureVa[] {
   return [
-    { va_id: "gem", va_name: "Gem", currency: "USD", total_hours: "40.00", total_pay: "800.00", timesheet_status: "submitted", timesheet_submitted: true, is_paid: false },
-    { va_id: "myra", va_name: "Myra", currency: "PHP", total_hours: "38.00", total_pay: "12000.00", timesheet_status: "submitted", timesheet_submitted: true, is_paid: false },
-    { va_id: "arby", va_name: "Arby", currency: "PHP", total_hours: "20.00", total_pay: "5000.00", timesheet_status: "reviewed", timesheet_submitted: true, is_paid: false },
+    { va_id: "gem", va_name: "Gem", currency: "USD", total_hours: "40.00", total_pay: "800.00", timesheet_id: "sheet-gem", timesheet_status: "submitted", timesheet_submitted: true, is_paid: false },
+    { va_id: "myra", va_name: "Myra", currency: "PHP", total_hours: "38.00", total_pay: "12000.00", timesheet_id: "sheet-myra", timesheet_status: "submitted", timesheet_submitted: true, is_paid: false },
+    { va_id: "arby", va_name: "Arby", currency: "PHP", total_hours: "20.00", total_pay: "5000.00", timesheet_id: "sheet-arby", timesheet_status: "reviewed", timesheet_submitted: true, is_paid: false },
   ]
 }
 
@@ -48,6 +49,7 @@ function payrollBody(vas: FixtureVa[], showMoney: boolean) {
 
 async function installApi(page: Page, role: "admin" | "auditor") {
   const vas = seed()
+  const rejected = { id: "", reason: "" }
   const showMoney = role === "admin"
   await page.addInitScript((user) => {
     localStorage.setItem("access_token", "test-access")
@@ -87,7 +89,28 @@ async function installApi(page: Page, role: "admin" | "auditor") {
     }
     if (path === "/vas") return json(vas.map((item) => ({ id: item.va_id, name: item.va_name, currency: item.currency })))
     if (path === "/payroll/timesheets") return json([])
-    if (path === "/payroll/runs") return json([])
+    if (path === "/payroll/runs" && method === "GET") return json([])
+    if (path === "/payroll/runs" && method === "POST") {
+      const body = request.postDataJSON() as { va_id: string }
+      const person = vas.find((item) => item.va_id === body.va_id)
+      if (person) person.is_paid = true
+      return json({ id: "run-1" })
+    }
+    const review = path.match(/^\/payroll\/timesheets\/([^/]+)\/review$/)
+    if (review && method === "POST") {
+      const person = vas.find((item) => item.timesheet_id === review[1])
+      if (person) person.timesheet_status = "reviewed"
+      return json({ id: review[1], status: "reviewed" })
+    }
+    const reject = path.match(/^\/payroll\/timesheets\/([^/]+)\/reject$/)
+    if (reject && method === "POST") {
+      const body = request.postDataJSON() as { reason?: string | null }
+      const person = vas.find((item) => item.timesheet_id === reject[1])
+      if (person) person.timesheet_status = "rejected"
+      rejected.id = reject[1]
+      rejected.reason = body.reason ?? ""
+      return json({ id: reject[1], status: "rejected" })
+    }
     if (path === "/payroll/calculate" && method === "POST") {
       const body = request.postDataJSON() as { va_id?: string | null }
       const chosen = body.va_id ? vas.filter((item) => item.va_id === body.va_id) : vas
@@ -95,6 +118,7 @@ async function installApi(page: Page, role: "admin" | "auditor") {
     }
     return json({})
   })
+  return rejected
 }
 
 async function expectNoPageScroll(page: Page) {
@@ -106,7 +130,7 @@ async function expectNoPageScroll(page: Page) {
 }
 
 test("admin can pick a VA and see the peso rate beside the period", async ({ page }, testInfo) => {
-  await installApi(page, "admin")
+  const rejected = await installApi(page, "admin")
   await page.goto("/admin/payroll")
   await expect(page.getByRole("heading", { name: "Timesheets & pay" })).toBeVisible()
   await expect(page.getByRole("button", { name: "1st – 15th" })).toBeVisible()
@@ -114,9 +138,37 @@ test("admin can pick a VA and see the peso rate beside the period", async ({ pag
   await expect(page.getByLabel("USD to PHP Rate")).toHaveValue("58.00")
   await expect(page.getByTestId("pay-totals")).toContainText("₱17000.00")
   await expect(page.getByTestId("pay-totals")).toContainText("$800.00")
-  await expect(page.getByRole("button", { name: "View timesheet for Gem" })).toBeVisible()
+  const gem = page.locator("[data-va=Gem]")
+  const arby = page.locator("[data-va=Arby]")
+  await expect(gem.getByRole("button", { name: "Approve Gem" })).toBeVisible()
+  await expect(gem.getByRole("button", { name: "Return timesheet Gem" })).toBeVisible()
+  await expect(gem).toContainText("Approve first to mark paid")
+  await expect(arby.getByRole("button", { name: "Approve Arby" })).toHaveCount(0)
+  await expect(arby.getByRole("button", { name: "Mark Paid Arby" })).toBeEnabled()
   await expect(page.getByTestId("peso-equivalent").first()).toContainText("₱46400.00")
   await expectNoPageScroll(page)
+  if (testInfo.project.name === "mobile") {
+    await gem.screenshot({ path: "/opt/cursor/artifacts/payroll-submitted-card.png" })
+    await arby.screenshot({ path: "/opt/cursor/artifacts/payroll-approved-card.png" })
+  }
+
+  await gem.getByRole("button", { name: "Return timesheet Gem" }).click()
+  const sheet = page.getByTestId("return-sheet")
+  await expect(sheet).toBeVisible()
+  if (testInfo.project.name === "mobile") {
+    await page.screenshot({ path: "/opt/cursor/artifacts/payroll-return-sheet.png", fullPage: false })
+  }
+  await sheet.getByRole("button", { name: "Missing entries" }).click()
+  await sheet.getByRole("button", { name: "Send back" }).click()
+  await expect(gem.getByRole("button", { name: "Approve Gem" })).toHaveCount(0)
+  expect(rejected).toEqual({ id: "sheet-gem", reason: "Missing entries" })
+
+  const myra = page.locator("[data-va=Myra]")
+  await myra.getByRole("button", { name: "Approve Myra" }).click()
+  await expect(myra.getByRole("button", { name: "Mark Paid Myra" })).toBeEnabled()
+  await myra.getByRole("button", { name: "Mark Paid Myra" }).click()
+  await page.getByRole("button", { name: "Confirm & mark paid" }).click()
+  await expect(myra).toContainText("Paid")
   if (testInfo.project.name === "mobile") {
     await page.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-top.png", fullPage: false })
   }
@@ -138,8 +190,13 @@ test("project manager does not see the rate or pay", async ({ page }, testInfo) 
   await expect(page.getByLabel("USD to PHP Rate")).toHaveCount(0)
   await expect(page.getByTestId("pay-totals")).toHaveCount(0)
   await expect(page.getByTestId("peso-equivalent")).toHaveCount(0)
-  await expect(page.getByRole("button", { name: "View timesheet for Gem" })).toBeVisible()
+  const gem = page.locator("[data-va=Gem]")
+  await expect(gem.getByRole("button", { name: "Approve Gem" })).toBeVisible()
+  await expect(gem.getByRole("button", { name: "Return timesheet Gem" })).toBeVisible()
   await expect(page.getByRole("button", { name: /Mark Paid/ })).toHaveCount(0)
+  if (testInfo.project.name === "mobile") {
+    await gem.screenshot({ path: "/opt/cursor/artifacts/payroll-pm-card.png" })
+  }
   const text = await page.locator("body").innerText()
   expect(text).not.toMatch(/₱|\$\d/)
   await expectNoPageScroll(page)

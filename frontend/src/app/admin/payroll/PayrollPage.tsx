@@ -354,6 +354,8 @@ export function PayrollPage() {
   const [pdfError, setPdfError] = useState("")
   const [searchParams] = useSearchParams()
   const [reviewTimesheetId, setReviewTimesheetId] = useState<string | null>(null)
+  const [returnVa, setReturnVa] = useState<PayrollVA | null>(null)
+  const [returnNote, setReturnNote] = useState("")
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
   const [usdPhpRate, setUsdPhpRate] = useState("")
   const rateHydrated = useRef(false)
@@ -449,6 +451,19 @@ export function PayrollPage() {
   const markPaid = useMutation({
     mutationFn: (body: Record<string, unknown>) => apiFetch("/payroll/runs", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => { setMarkPaidError(""); invalidate() },
+    onError: (err: Error) => setMarkPaidError(err.message),
+  })
+  const approveSheet = useMutation({
+    mutationFn: (id: string) => apiFetch(`/payroll/timesheets/${id}/review`, { method: "POST" }),
+    onSuccess: () => { setMarkPaidError(""); invalidate() },
+    onError: (err: Error) => setMarkPaidError(err.message),
+  })
+  const returnSheet = useMutation({
+    mutationFn: (body: { id: string; reason: string }) => apiFetch(`/payroll/timesheets/${body.id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason: body.reason.trim() || null }),
+    }),
+    onSuccess: () => { setMarkPaidError(""); setReturnVa(null); setReturnNote(""); invalidate() },
     onError: (err: Error) => setMarkPaidError(err.message),
   })
   const saveOverride = async (va: PayrollVA, clientId: string, draft: PackageDraft, calculated: number) => {
@@ -725,6 +740,7 @@ export function PayrollPage() {
             }).map(va => (
               <div
                 key={va.va_id}
+                data-va={va.va_name}
                 className={cn(
                   "monday-card rounded-2xl border bg-card p-4",
                   openVa === va.va_id && "border-primary ring-2 ring-primary/25",
@@ -775,12 +791,11 @@ export function PayrollPage() {
                     )}
                   </div>
                 </button>
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   <Button
                     type="button"
-                    size="sm"
                     variant="outline"
-                    className={cn("flex-1", openVa === va.va_id && "border-primary bg-primary/10")}
+                    className={cn("h-11 min-h-11 w-full", openVa === va.va_id && "border-primary bg-primary/10")}
                     aria-expanded={openVa === va.va_id}
                     aria-controls="va-week-detail"
                     aria-label={`View timesheet for ${va.va_name}`}
@@ -788,44 +803,48 @@ export function PayrollPage() {
                   >
                     <ClipboardCheck className="h-3.5 w-3.5" /> View timesheet
                   </Button>
-                  {va.timesheet_id && va.timesheet_status !== "reviewed" && (
+                  {va.timesheet_id && va.timesheet_status === "submitted" && va.va_id !== getAuthUser()?.vaId && (
                     <Button
-                      size="sm"
                       variant="gold"
-                      className="min-h-11 flex-1"
-                      onClick={() => setReviewTimesheetId(va.timesheet_id!)}
+                      className="h-11 min-h-11 w-full"
+                      disabled={approveSheet.isPending}
+                      aria-label={`Approve ${va.va_name}`}
+                      onClick={() => approveSheet.mutate(va.timesheet_id!)}
                     >
-                      <ClipboardCheck className="h-3.5 w-3.5" /> Review
+                      <ClipboardCheck className="h-3.5 w-3.5" /> Approve
                     </Button>
                   )}
-                  {va.timesheet_id && !va.is_paid && (va.timesheet_status === "submitted" || va.timesheet_status === "reviewed") && (
+                  {va.timesheet_id && !va.is_paid && (va.timesheet_status === "submitted" || va.timesheet_status === "reviewed") && va.va_id !== getAuthUser()?.vaId && (
                     <Button
                       type="button"
-                      size="sm"
                       variant="danger"
-                      className="min-h-11 flex-1"
-                      onClick={() => setReviewTimesheetId(va.timesheet_id!)}
+                      className="h-11 min-h-11 w-full"
+                      aria-label={`Return timesheet ${va.va_name}`}
+                      onClick={() => { setReturnNote(""); setReturnVa(va) }}
                     >
-                      Return for fixes
+                      Return timesheet
                     </Button>
                   )}
                   {isAdmin && !va.is_paid && canOfferPay(va) && (
                     <Button
-                      size="sm"
                       variant="success"
-                      className="flex-1"
+                      className="h-11 min-h-11 w-full"
                       disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
                       title={markPaidTitle(va)}
+                      aria-label={`Mark Paid ${va.va_name}`}
                       onClick={() => setPayReview(va)}
                     >
                       <Wallet className="h-3.5 w-3.5" /> Mark Paid
                     </Button>
                   )}
-                  {isAdmin && va.is_paid && va.run_id && <Button size="sm" variant="outline" className="flex-1" onClick={() => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) }}>Undo Paid</Button>}
+                  {isAdmin && !va.is_paid && canOfferPay(va) && va.timesheet_status !== "reviewed" && (
+                    <p className="col-span-2 text-[11px] text-muted-foreground">Approve first to mark paid</p>
+                  )}
+                  {isAdmin && va.is_paid && va.run_id && <Button variant="outline" className="h-11 min-h-11 w-full" onClick={() => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) }}>Undo Paid</Button>}
                   {isAdmin && (
                     <Button
-                      size="sm"
                       variant="outline"
+                      className="h-11 min-h-11 w-full"
                       disabled={va.timesheet_status !== "reviewed"}
                       title={va.timesheet_status !== "reviewed" ? "Approve timesheet first" : "Payslip arranged per client"}
                       onClick={() => exportPdf(va.va_id)}
@@ -1090,6 +1109,56 @@ export function PayrollPage() {
                 <Wallet className="h-3.5 w-3.5" /> Confirm &amp; mark paid
               </Button>
               <Button variant="outline" onClick={() => setPayReview(null)}>Back</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {returnVa && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onClick={() => setReturnVa(null)}>
+          <div
+            role="dialog"
+            aria-label={`Return timesheet ${returnVa.va_name}`}
+            data-testid="return-sheet"
+            className="w-full max-w-md rounded-t-2xl bg-card p-5 shadow-xl sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary">Return for fixes</p>
+            <h2 className="font-display text-lg font-bold">{returnVa.va_name}</h2>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {["Missing entries", "Wrong hours", "Add task details", "Please fix and resubmit"].map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  aria-pressed={returnNote === item}
+                  className={cn(
+                    "min-h-11 rounded-full border px-3 text-xs font-semibold",
+                    returnNote === item ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-muted/60",
+                  )}
+                  onClick={() => setReturnNote(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+            <label className="mt-3 block text-[11px] font-medium" htmlFor="return-note">Note for the VA (optional)</label>
+            <textarea
+              id="return-note"
+              value={returnNote}
+              onChange={(e) => setReturnNote(e.target.value)}
+              rows={2}
+              className="mt-1 min-h-11 w-full rounded-xl border bg-card px-3 py-2 text-base"
+            />
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Button
+                variant="danger"
+                className="h-11 min-h-11 w-full"
+                disabled={returnSheet.isPending || !returnNote.trim() || !returnVa.timesheet_id}
+                onClick={() => returnVa.timesheet_id && returnSheet.mutate({ id: returnVa.timesheet_id, reason: returnNote.trim() })}
+              >
+                {returnSheet.isPending ? "Sending" : "Send back"}
+              </Button>
+              <Button variant="outline" className="h-11 min-h-11 w-full" onClick={() => setReturnVa(null)}>Cancel</Button>
             </div>
           </div>
         </div>

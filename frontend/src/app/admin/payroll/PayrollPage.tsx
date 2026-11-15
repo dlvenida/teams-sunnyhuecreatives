@@ -357,15 +357,11 @@ export function PayrollPage() {
   const [returnVa, setReturnVa] = useState<PayrollVA | null>(null)
   const [returnNote, setReturnNote] = useState("")
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
-  const [paydayRate, setPaydayRate] = useState("")
   const [usdPhpRate, setUsdPhpRate] = useState("")
+  const [applyNote, setApplyNote] = useState("")
   const rateHydrated = useRef(false)
   const rateTimer = useRef<number | null>(null)
   const parsedRate = parseUsdPhpRate(usdPhpRate)
-  const openPayReview = (va: PayrollVA) => {
-    setPaydayRate(usdPhpRate)
-    setPayReview(va)
-  }
 
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => apiFetch<Settings>("/settings") })
@@ -456,6 +452,23 @@ export function PayrollPage() {
   const markPaid = useMutation({
     mutationFn: (body: Record<string, unknown>) => apiFetch("/payroll/runs", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => { setMarkPaidError(""); invalidate() },
+    onError: (err: Error) => setMarkPaidError(err.message),
+  })
+  const applyRate = useMutation({
+    mutationFn: (body: { period_start: string; period_end: string; usd_php_rate: number }) =>
+      apiFetch<{ updated: number; unchanged: number }>("/payroll/runs/apply-rate", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (res) => {
+      setMarkPaidError("")
+      setApplyNote(
+        res.updated === 0
+          ? "Paid runs in this period already use this rate."
+          : `Updated ${res.updated} paid run${res.updated === 1 ? "" : "s"} to this rate.`,
+      )
+      invalidate()
+    },
     onError: (err: Error) => setMarkPaidError(err.message),
   })
   const approveSheet = useMutation({
@@ -706,16 +719,34 @@ export function PayrollPage() {
         </div>
         {isAdmin && (
           <div className="min-w-0">
-            <Label htmlFor="usd-php-rate">USD to PHP Rate</Label>
+            <Label htmlFor="usd-php-rate">Payday rate for all VAs (USD to PHP)</Label>
             <Input
               id="usd-php-rate"
+              aria-label="Payday rate for all VAs (USD to PHP)"
               type="number"
               step="0.01"
               min="0"
               placeholder="e.g. 58.50"
               value={usdPhpRate}
-              onChange={(e) => rememberRate(e.target.value)}
+              onChange={(e) => { setApplyNote(""); rememberRate(e.target.value) }}
             />
+            <p className="mt-1 text-[10px] text-muted-foreground">One rate for every VA when you mark this period paid.</p>
+            {payroll && (
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-2 h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left leading-snug"
+                disabled={parsedRate == null || applyRate.isPending}
+                onClick={() => applyRate.mutate({
+                  period_start: payroll.period_start,
+                  period_end: payroll.period_end,
+                  usd_php_rate: parsedRate as number,
+                })}
+              >
+                Apply to all paid runs in this period
+              </Button>
+            )}
+            {applyNote && <p className="mt-1 text-[10px] text-muted-foreground">{applyNote}</p>}
           </div>
         )}
         {period === "custom" && <><div><Label>From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div><div><Label>To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div></>}
@@ -837,7 +868,7 @@ export function PayrollPage() {
                       disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
                       title={markPaidTitle(va)}
                       aria-label={`Mark Paid ${va.va_name}`}
-                      onClick={() => openPayReview(va)}
+                      onClick={() => setPayReview(va)}
                     >
                       <Wallet className="h-3.5 w-3.5" /> Mark Paid
                     </Button>
@@ -931,7 +962,7 @@ export function PayrollPage() {
                     variant="success"
                     disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
                     title={markPaidTitle(va)}
-                    onClick={() => openPayReview(va)}
+                    onClick={() => setPayReview(va)}
                   >
                     <Wallet className="h-3.5 w-3.5" /> Mark Paid
                   </Button>
@@ -1086,20 +1117,11 @@ export function PayrollPage() {
             <p className="text-right text-[11px] text-muted-foreground">
               Grand total {buildPayslip(payReview, payroll.period_start, payroll.period_end, settings).totalHours.toFixed(2)} hrs
             </p>
-            <div className="mt-3">
-              <Label className="text-[10px]" htmlFor="payday-rate">Payday exchange rate (USD to PHP)</Label>
-              <Input
-                id="payday-rate"
-                aria-label="Payday exchange rate (USD to PHP)"
-                type="number"
-                step="0.01"
-                min="0"
-                value={paydayRate}
-                onChange={(e) => setPaydayRate(e.target.value)}
-                className="h-9"
-              />
-              <p className="mt-1 text-[10px] text-muted-foreground">Saved with this payday. Earnings converts this pay between USD and PHP with it.</p>
-            </div>
+            <p data-testid="payday-rate-used" className="mt-3 text-xs text-muted-foreground">
+              {parsedRate != null
+                ? `Payday rate for all VAs: ${usdPhpRate.trim()} PHP per 1 USD. Confirm saves this on the run.`
+                : "Set Payday rate for all VAs at the top. Confirm saves that rate on the run."}
+            </p>
             <div className="mt-4 flex gap-2">
               <Button
                 variant="success"
@@ -1119,7 +1141,7 @@ export function PayrollPage() {
                       total_pay: slip.totalPay,
                       currency: payReview.currency,
                       method: payReview.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer",
-                      usd_php_rate: parseUsdPhpRate(paydayRate),
+                      usd_php_rate: parsedRate,
                     })
                     setPayReview(null)
                   })()

@@ -32,6 +32,8 @@ from app.schemas import (
     PayrollBreakdown,
     PayrollDay,
     PayrollEntry,
+    PayrollRateApply,
+    PayrollRateApplyResult,
     PayrollRequest,
     PayrollResponse,
     PayrollRunCreate,
@@ -923,6 +925,42 @@ def mark_paid(
         total_pay=run.total_pay, currency=run.currency, method=run.method, notes=run.notes,
         usd_php_rate=run.usd_php_rate, paid_at=run.paid_at,
     )
+
+
+@router.post("/runs/apply-rate", response_model=PayrollRateApplyResult)
+def apply_payday_rate(
+    body: PayrollRateApply,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Set one payday rate on paid runs in this period. Only when an admin asks."""
+    if body.usd_php_rate is None or body.usd_php_rate <= 0:
+        raise HTTPException(status_code=400, detail="Enter a payday rate greater than zero.")
+    if body.period_end < body.period_start:
+        raise HTTPException(status_code=400, detail="period_end must be on or after period_start")
+    snapped_start, snapped_end = snap_payroll_period(body.period_start, body.period_end)
+    window_start = min(body.period_start, snapped_start)
+    window_end = max(body.period_end, snapped_end)
+    target = Decimal(body.usd_php_rate).quantize(Decimal("0.0001"))
+    runs = (
+        db.query(PayrollRun)
+        .filter(
+            PayrollRun.period_start <= window_end,
+            PayrollRun.period_end >= window_start,
+        )
+        .all()
+    )
+    updated = 0
+    unchanged = 0
+    for run in runs:
+        current = None if run.usd_php_rate is None else Decimal(run.usd_php_rate).quantize(Decimal("0.0001"))
+        if current == target:
+            unchanged += 1
+            continue
+        run.usd_php_rate = target
+        updated += 1
+    db.commit()
+    return PayrollRateApplyResult(updated=updated, unchanged=unchanged)
 
 
 @router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)

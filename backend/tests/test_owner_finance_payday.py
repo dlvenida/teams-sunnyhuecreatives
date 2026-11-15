@@ -251,6 +251,51 @@ class PaydayApiTests(unittest.TestCase):
         self.assertEqual(still["va_payroll"]["combined_php"], "639.20")
         self.assertEqual(still["va_runs_count"], 1)
 
+    def test_apply_rate_updates_only_this_period_when_asked(self):
+        def add_run(va, start, end, amount, currency, rate, paid):
+            row = PayrollRun(
+                va_id=va.id,
+                period_start=start,
+                period_end=end,
+                total_hours=Decimal("1"),
+                total_pay=Decimal(amount),
+                currency=currency,
+                usd_php_rate=None if rate is None else Decimal(rate),
+                paid_at=paid,
+            )
+            self.db.add(row)
+            self.db.flush()
+            self.run_ids.append(row.id)
+            return row
+
+        missing = add_run(self.php_va, date(2026, 11, 1), date(2026, 11, 15), "4200.00", "PHP", None, datetime(2026, 11, 15, tzinfo=timezone.utc))
+        other = add_run(self.va, date(2026, 11, 1), date(2026, 11, 15), "10.00", "USD", "50", datetime(2026, 11, 15, tzinfo=timezone.utc))
+        same = add_run(self.php_va, date(2026, 11, 16), date(2026, 11, 30), "4200.00", "PHP", "63.92", datetime(2026, 11, 30, tzinfo=timezone.utc))
+        outside = add_run(self.va, date(2026, 10, 1), date(2026, 10, 15), "9999.00", "USD", None, datetime(2026, 10, 16, tzinfo=timezone.utc))
+        self.db.commit()
+        # Viewing the whole month covers both November halves. October stays put.
+        applied = self.client.post(
+            "/payroll/runs/apply-rate",
+            headers=_auth(self.admin),
+            json={"period_start": "2026-11-01", "period_end": "2026-11-30", "usd_php_rate": "63.92"},
+        )
+        self.assertEqual(applied.status_code, 200, applied.text)
+        self.assertEqual(applied.json(), {"updated": 2, "unchanged": 1})
+        self.db.expire_all()
+        self.assertEqual(Decimal(missing.usd_php_rate), Decimal("63.92"))
+        self.assertEqual(missing.total_pay, Decimal("4200.00"))
+        self.assertEqual(Decimal(other.usd_php_rate), Decimal("63.92"))
+        self.assertEqual(other.total_pay, Decimal("10.00"))
+        self.assertEqual(Decimal(same.usd_php_rate), Decimal("63.92"))
+        self.assertIsNone(outside.usd_php_rate)
+
+        blocked = self.client.post(
+            "/payroll/runs/apply-rate",
+            headers=_auth(self.pm),
+            json={"period_start": "2026-11-01", "period_end": "2026-11-30", "usd_php_rate": "63.92"},
+        )
+        self.assertEqual(blocked.status_code, 403, blocked.text)
+
     def test_project_manager_cannot_mark_paid_or_open_earnings(self):
         denied = self.client.post(
             "/payroll/runs",

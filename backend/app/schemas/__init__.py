@@ -1207,6 +1207,17 @@ class PackageOverrideResponse(BaseModel):
     locked: bool = False
 
 
+class PayrollRateApply(BaseModel):
+    period_start: date
+    period_end: date
+    usd_php_rate: Decimal
+
+
+class PayrollRateApplyResult(BaseModel):
+    updated: int
+    unchanged: int
+
+
 class PayrollRunCreate(BaseModel):
     va_id: UUID
     period_start: date

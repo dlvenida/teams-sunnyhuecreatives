@@ -131,7 +131,7 @@ test("earnings shows payday conversion, expenses, and one net profit", async ({ 
   await expect(page.getByText("$-1229.18")).toBeVisible()
   await expect(page.getByText("₱-78569.17")).toBeVisible()
   await page.screenshot({
-    path: `/opt/cursor/artifacts/finance-earnings-${testInfo.project.name}.png`,
+    path: `/opt/cursor/artifacts/finance-earnings-standard-${testInfo.project.name}.png`,
     fullPage: true,
   })
 })
@@ -142,5 +142,5 @@ test("project manager cannot open earnings", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Earnings & expenses" })).toHaveCount(0)
   await expect(page.getByText("Total Paid to VAs")).toHaveCount(0)
   await expect(page.getByText("₱116303.68")).toHaveCount(0)
-  await expect(page.getByLabel("Payday exchange rate (USD to PHP)")).toHaveCount(0)
+  await expect(page.getByLabel("Payday rate for all VAs (USD to PHP)")).toHaveCount(0)
 })

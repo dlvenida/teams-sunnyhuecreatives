@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useSearchParams } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
@@ -125,6 +125,47 @@ function overlayVa(va: PayrollVA, drafts: Record<string, PackageDraft>, periodSt
   if (!changed) return va
   const total = by_client.reduce((sum, row) => sum + n(row.pay), 0)
   return { ...va, by_client, total_pay: total.toFixed(2) }
+}
+
+type PaydayRateView = {
+  period_start: string
+  period_end: string
+  usd_php_rate: string | null
+  confirmed: boolean
+  prefill_rate: string | null
+  confirmed_label: string | null
+}
+
+function rateText(value: string | number | null | undefined) {
+  const num = typeof value === "number" ? value : parseFloat(String(value ?? ""))
+  if (!Number.isFinite(num)) return ""
+  return num.toFixed(2)
+}
+
+function confirmedRateNumber(payday: PaydayRateView | undefined) {
+  if (!payday?.confirmed) return null
+  return parseUsdPhpRate(payday.usd_php_rate)
+}
+
+/** Future Mark Paid keeps the confirmed rate until she confirms a new one. */
+function rateForRun(payday: PaydayRateView | undefined, dirty: boolean, typed: number | null) {
+  const saved = confirmedRateNumber(payday)
+  if (saved != null && dirty) return saved
+  return typed
+}
+
+function paydayNote(payday: PaydayRateView | undefined, dirty: boolean, typedText: string, typed: number | null) {
+  const saved = confirmedRateNumber(payday)
+  if (saved != null && dirty) {
+    return `Confirmed rate is still ${rateText(saved)} PHP per 1 USD. Confirm the new rate above before future pay uses it. This run keeps the confirmed rate.`
+  }
+  if (saved != null) {
+    return `Payday rate for all VAs: ${rateText(saved)} PHP per 1 USD. Confirm saves this on the run.`
+  }
+  if (typed != null) {
+    return `This payday rate is not confirmed yet. Confirm it above, or continue and this run will use ${typedText.trim() || rateText(typed)}.`
+  }
+  return "Set a payday rate above. You can confirm it, or mark paid without a rate."
 }
 
 function overlayPayroll<T extends { vas: PayrollVA[]; period_start: string; period_end: string; total_php?: string | null; total_usd?: string | null }>(
@@ -358,25 +399,12 @@ export function PayrollPage() {
   const [returnNote, setReturnNote] = useState("")
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
   const [usdPhpRate, setUsdPhpRate] = useState("")
-  const rateHydrated = useRef(false)
-  const rateTimer = useRef<number | null>(null)
+  const [rateDirty, setRateDirty] = useState(false)
+  const [applyNote, setApplyNote] = useState("")
   const parsedRate = parseUsdPhpRate(usdPhpRate)
 
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => apiFetch<Settings>("/settings") })
-  useEffect(() => {
-    if (rateHydrated.current || !settings) return
-    rateHydrated.current = true
-    if (settings.usd_php_rate) setUsdPhpRate(String(settings.usd_php_rate))
-  }, [settings])
-  function rememberRate(value: string) {
-    setUsdPhpRate(value)
-    if (!isAdmin) return
-    if (rateTimer.current) window.clearTimeout(rateTimer.current)
-    rateTimer.current = window.setTimeout(() => {
-      apiFetch("/settings", { method: "PUT", body: JSON.stringify({ usd_php_rate: parseUsdPhpRate(value) }) }).catch(() => {})
-    }, 400)
-  }
 
   type PendingSheet = {
     id: string
@@ -429,6 +457,25 @@ export function PayrollPage() {
     () => overlayPayroll(payrollSource, drafts),
     [payrollSource, drafts],
   )
+  const { data: payday } = useQuery({
+    queryKey: ["payday-rate", payroll?.period_start, payroll?.period_end],
+    queryFn: () => apiFetch<PaydayRateView>(`/payroll/payday-rate?period_start=${payroll?.period_start}&period_end=${payroll?.period_end}`),
+    enabled: isAdmin && !!payroll?.period_start && !!payroll?.period_end,
+  })
+  useEffect(() => {
+    setRateDirty(false)
+    setApplyNote("")
+  }, [payroll?.period_start, payroll?.period_end])
+  useEffect(() => {
+    if (rateDirty) return
+    const saved = payday?.confirmed ? payday.usd_php_rate : payday?.prefill_rate
+    if (saved) {
+      setUsdPhpRate(rateText(saved))
+      return
+    }
+    if (settings?.usd_php_rate) setUsdPhpRate(rateText(settings.usd_php_rate))
+  }, [payday, settings, rateDirty])
+  const previewRate = confirmedRateNumber(payday) ?? parsedRate
   useEffect(() => {
     if (!openVa || !payroll) return
     if (!payroll.vas.some((va) => va.va_id === openVa)) setOpenVa("")
@@ -451,6 +498,34 @@ export function PayrollPage() {
   const markPaid = useMutation({
     mutationFn: (body: Record<string, unknown>) => apiFetch("/payroll/runs", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => { setMarkPaidError(""); invalidate() },
+    onError: (err: Error) => setMarkPaidError(err.message),
+  })
+  const confirmPayday = useMutation({
+    mutationFn: (body: { period_start: string; period_end: string; usd_php_rate: number }) =>
+      apiFetch<PaydayRateView>("/payroll/payday-rate", { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: (res) => {
+      setMarkPaidError("")
+      setRateDirty(false)
+      qc.setQueryData(["payday-rate", res.period_start, res.period_end], res)
+      if (res.usd_php_rate) setUsdPhpRate(rateText(res.usd_php_rate))
+    },
+    onError: (err: Error) => setMarkPaidError(err.message),
+  })
+  const applyRate = useMutation({
+    mutationFn: (body: { period_start: string; period_end: string; usd_php_rate: number }) =>
+      apiFetch<{ updated: number; unchanged: number }>("/payroll/runs/apply-rate", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (res) => {
+      setMarkPaidError("")
+      setApplyNote(
+        res.updated === 0
+          ? "Paid runs in this period already use this rate."
+          : `Updated ${res.updated} paid run${res.updated === 1 ? "" : "s"} to this rate.`,
+      )
+      invalidate()
+    },
     onError: (err: Error) => setMarkPaidError(err.message),
   })
   const approveSheet = useMutation({
@@ -701,16 +776,65 @@ export function PayrollPage() {
         </div>
         {isAdmin && (
           <div className="min-w-0">
-            <Label htmlFor="usd-php-rate">USD to PHP Rate</Label>
+            <Label htmlFor="usd-php-rate">Payday rate for all VAs (USD to PHP)</Label>
             <Input
               id="usd-php-rate"
+              aria-label="Payday rate for all VAs (USD to PHP)"
               type="number"
               step="0.01"
               min="0"
               placeholder="e.g. 58.50"
               value={usdPhpRate}
-              onChange={(e) => rememberRate(e.target.value)}
+              onChange={(e) => { setApplyNote(""); setRateDirty(true); setUsdPhpRate(e.target.value) }}
             />
+            {payroll && (!payday?.confirmed || rateDirty) && (
+              <Button
+                type="button"
+                variant="gold"
+                className="mt-2 h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left leading-snug"
+                disabled={parsedRate == null || confirmPayday.isPending}
+                onClick={() => confirmPayday.mutate({
+                  period_start: payroll.period_start,
+                  period_end: payroll.period_end,
+                  usd_php_rate: parsedRate as number,
+                })}
+              >
+                Confirm payday rate
+              </Button>
+            )}
+            {payday?.confirmed && !rateDirty && payday.confirmed_label && (
+              <div className="mt-2 space-y-2">
+                <p data-testid="payday-confirmed" className="text-[11px] font-semibold text-primary">{payday.confirmed_label}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left leading-snug"
+                  onClick={() => {
+                    setRateDirty(true)
+                    document.getElementById("usd-php-rate")?.focus()
+                  }}
+                >
+                  Change rate
+                </Button>
+              </div>
+            )}
+            <p className="mt-1 text-[10px] text-muted-foreground">One rate for every VA in this period. Confirm it once, then change it any time.</p>
+            {payroll && (
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-2 h-auto min-h-11 w-full whitespace-normal px-3 py-2 text-left leading-snug"
+                disabled={parsedRate == null || applyRate.isPending}
+                onClick={() => applyRate.mutate({
+                  period_start: payroll.period_start,
+                  period_end: payroll.period_end,
+                  usd_php_rate: parsedRate as number,
+                })}
+              >
+                Apply to all paid runs in this period
+              </Button>
+            )}
+            {applyNote && <p className="mt-1 text-[10px] text-muted-foreground">{applyNote}</p>}
           </div>
         )}
         {period === "custom" && <><div><Label>From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div><div><Label>To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div></>}
@@ -722,7 +846,7 @@ export function PayrollPage() {
       {showPricing && payroll && (
         <p data-testid="pay-totals" className="px-1 text-sm font-semibold">
           To pay {formatCurrency(payroll.total_php, "PHP")} and {formatCurrency(payroll.total_usd, "USD")}
-          {parsedRate != null && `. Combined ${formatCurrency(n(payroll.total_php) + n(payroll.total_usd) * parsedRate, "PHP")}`}
+          {previewRate != null && `. Combined ${formatCurrency(n(payroll.total_php) + n(payroll.total_usd) * previewRate, "PHP")}`}
         </p>
       )}
 
@@ -764,9 +888,9 @@ export function PayrollPage() {
                     <div>
                       <p className="text-2xl font-extrabold leading-none">{showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`}</p>
                       <p className="mt-1 text-[11px] font-semibold text-primary">{formatDate(payroll.period_start)} to {formatDate(payroll.period_end)}</p>
-                      {showPricing && parsedRate && va.currency === "USD" && (
+                      {showPricing && previewRate && va.currency === "USD" && (
                         <p data-testid="peso-equivalent" className="mt-0.5 text-xs font-semibold text-muted-foreground">
-                          ≈ {formatCurrency(n(va.total_pay) * parsedRate, "PHP")}
+                          To pay about {formatCurrency(n(va.total_pay) * previewRate, "PHP")} at the payday rate
                         </p>
                       )}
                       <p className="mt-1 text-[11px] text-muted-foreground">{va.total_hours} hrs · {va.entry_count} entries · {va.days_worked} days · avg {va.avg_hours_per_day}/day</p>
@@ -1081,6 +1205,9 @@ export function PayrollPage() {
             <p className="text-right text-[11px] text-muted-foreground">
               Grand total {buildPayslip(payReview, payroll.period_start, payroll.period_end, settings).totalHours.toFixed(2)} hrs
             </p>
+            <p data-testid="payday-rate-used" className="mt-3 text-xs text-muted-foreground">
+              {paydayNote(payday, rateDirty, usdPhpRate, parsedRate)}
+            </p>
             <div className="mt-4 flex gap-2">
               <Button
                 variant="success"
@@ -1100,7 +1227,7 @@ export function PayrollPage() {
                       total_pay: slip.totalPay,
                       currency: payReview.currency,
                       method: payReview.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer",
-                      usd_php_rate: parsedRate,
+                      usd_php_rate: rateForRun(payday, rateDirty, parsedRate),
                     })
                     setPayReview(null)
                   })()

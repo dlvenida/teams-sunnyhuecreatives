@@ -12,6 +12,7 @@ from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_admin_or_auditor
 from app.models import (
     Currency,
+    PaydayRate,
     PayrollRun,
     Project,
     Task,
@@ -32,6 +33,10 @@ from app.schemas import (
     PayrollBreakdown,
     PayrollDay,
     PayrollEntry,
+    PaydayRateConfirm,
+    PaydayRateView,
+    PayrollRateApply,
+    PayrollRateApplyResult,
     PayrollRequest,
     PayrollResponse,
     PayrollRunCreate,
@@ -923,6 +928,139 @@ def mark_paid(
         total_pay=run.total_pay, currency=run.currency, method=run.method, notes=run.notes,
         usd_php_rate=run.usd_php_rate, paid_at=run.paid_at,
     )
+
+
+def _period_phrase(start: date, end: date) -> str:
+    def piece(day: date) -> str:
+        label = f"{day.strftime('%b')} {day.day}"
+        return label
+
+    left = piece(start)
+    right = piece(end)
+    if start.year != end.year:
+        left = f"{left}, {start.year}"
+        right = f"{right}, {end.year}"
+    return f"{left} to {right}"
+
+
+def _rate_text(rate: Decimal) -> str:
+    return f"{Decimal(rate).quantize(Decimal('0.01'))}"
+
+
+def _latest_payday_rate(db: Session) -> PaydayRate | None:
+    return db.query(PaydayRate).order_by(PaydayRate.confirmed_at.desc(), PaydayRate.period_end.desc()).first()
+
+
+def _payday_view(row: PaydayRate | None, start: date, end: date, prefill: Decimal | None) -> PaydayRateView:
+    if row is None:
+        return PaydayRateView(
+            period_start=start,
+            period_end=end,
+            usd_php_rate=None,
+            confirmed=False,
+            prefill_rate=prefill,
+            confirmed_label=None,
+        )
+    return PaydayRateView(
+        period_start=start,
+        period_end=end,
+        usd_php_rate=row.usd_php_rate,
+        confirmed=True,
+        prefill_rate=row.usd_php_rate,
+        confirmed_label=f"Confirmed: {_rate_text(row.usd_php_rate)} PHP per 1 USD for {_period_phrase(start, end)}",
+    )
+
+
+@router.get("/payday-rate", response_model=PaydayRateView)
+def get_payday_rate(
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+    period_start: date,
+    period_end: date,
+):
+    """The confirmed rate for this period, or the last confirmed rate as a prefill."""
+    if period_end < period_start:
+        raise HTTPException(status_code=400, detail="period_end must be on or after period_start")
+    start, end = snap_payroll_period(period_start, period_end)
+    row = (
+        db.query(PaydayRate)
+        .filter(PaydayRate.period_start == start, PaydayRate.period_end == end)
+        .first()
+    )
+    latest = _latest_payday_rate(db)
+    prefill = latest.usd_php_rate if latest is not None else None
+    return _payday_view(row, start, end, prefill)
+
+
+@router.post("/payday-rate", response_model=PaydayRateView)
+def confirm_payday_rate(
+    body: PaydayRateConfirm,
+    current: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Save this period's rate. Already paid runs stay as they are."""
+    if body.usd_php_rate is None or body.usd_php_rate <= 0:
+        raise HTTPException(status_code=400, detail="Enter a payday rate greater than zero.")
+    if body.period_end < body.period_start:
+        raise HTTPException(status_code=400, detail="period_end must be on or after period_start")
+    start, end = snap_payroll_period(body.period_start, body.period_end)
+    rate = Decimal(body.usd_php_rate).quantize(Decimal("0.0001"))
+    row = (
+        db.query(PaydayRate)
+        .filter(PaydayRate.period_start == start, PaydayRate.period_end == end)
+        .first()
+    )
+    if row is None:
+        row = PaydayRate(
+            period_start=start,
+            period_end=end,
+            usd_php_rate=rate,
+            confirmed_by=current.user.id,
+        )
+        db.add(row)
+    else:
+        row.usd_php_rate = rate
+        row.confirmed_at = datetime.now(timezone.utc)
+        row.confirmed_by = current.user.id
+    db.commit()
+    db.refresh(row)
+    return _payday_view(row, start, end, rate)
+
+
+@router.post("/runs/apply-rate", response_model=PayrollRateApplyResult)
+def apply_payday_rate(
+    body: PayrollRateApply,
+    _: Annotated[CurrentUser, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Set one payday rate on paid runs in this period. Only when an admin asks."""
+    if body.usd_php_rate is None or body.usd_php_rate <= 0:
+        raise HTTPException(status_code=400, detail="Enter a payday rate greater than zero.")
+    if body.period_end < body.period_start:
+        raise HTTPException(status_code=400, detail="period_end must be on or after period_start")
+    snapped_start, snapped_end = snap_payroll_period(body.period_start, body.period_end)
+    window_start = min(body.period_start, snapped_start)
+    window_end = max(body.period_end, snapped_end)
+    target = Decimal(body.usd_php_rate).quantize(Decimal("0.0001"))
+    runs = (
+        db.query(PayrollRun)
+        .filter(
+            PayrollRun.period_start <= window_end,
+            PayrollRun.period_end >= window_start,
+        )
+        .all()
+    )
+    updated = 0
+    unchanged = 0
+    for run in runs:
+        current = None if run.usd_php_rate is None else Decimal(run.usd_php_rate).quantize(Decimal("0.0001"))
+        if current == target:
+            unchanged += 1
+            continue
+        run.usd_php_rate = target
+        updated += 1
+    db.commit()
+    return PayrollRateApplyResult(updated=updated, unchanged=unchanged)
 
 
 @router.delete("/runs/{run_id}", status_code=status.HTTP_204_NO_CONTENT)

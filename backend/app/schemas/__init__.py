@@ -1101,6 +1101,11 @@ class PayrollBreakdown(BaseModel):
     skipped: bool | None = None
     adjusted: bool | None = None
     note: str | None = None
+    # Monthly rate, its schedule, and one half of that rate for this window.
+    # Omitted for the Project Manager, same as the other pay fields.
+    monthly_amount: Decimal | None = None
+    payment_frequency: str | None = None
+    half_amount: Decimal | None = None
     # Rate currency for this client. PHP shows ₱. Omitted when pay is hidden.
     currency: str | None = None
 

@@ -1,5 +1,6 @@
 """Resolve approved VA rates for logging and payroll."""
 from calendar import monthrange
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from uuid import UUID
@@ -135,7 +136,7 @@ def currency_code(value) -> str:
 
 
 def split_biweekly(monthly: Decimal) -> tuple[Decimal, Decimal]:
-    """Split a monthly package into the 1st–15th and 16th–end amounts.
+    """Split a monthly package into the 1st-15th and 16th-end amounts.
 
     The two halves always add back to the monthly total. An odd centavo goes on the second half.
     """
@@ -143,6 +144,41 @@ def split_biweekly(monthly: Decimal) -> tuple[Decimal, Decimal]:
     first = cents // 2
     second = cents - first
     return (Decimal(first) / Decimal(100)).quantize(Decimal("0.01")), (Decimal(second) / Decimal(100)).quantize(Decimal("0.01"))
+
+
+def calendar_half_kind(period_start: date, period_end: date) -> str | None:
+    """'first' for the 1st-15th, 'second' for the 16th through the last day, otherwise None.
+
+    A full month, a week, or a custom range is not a half, even if it overlaps one.
+    """
+    if period_start.year != period_end.year or period_start.month != period_end.month:
+        return None
+    last = monthrange(period_end.year, period_end.month)[1]
+    if period_start.day == 1 and period_end.day == 15:
+        return "first"
+    if period_start.day == 16 and period_end.day == last:
+        return "second"
+    return None
+
+
+def uses_second_share(period_start: date, period_end: date) -> bool:
+    """The 16th-end remainder applies when the window sits entirely in that half."""
+    if calendar_half_kind(period_start, period_end) == "second":
+        return True
+    if period_start.year != period_end.year or period_start.month != period_end.month:
+        return False
+    return period_start.day >= 16 and period_end.day >= 16
+
+
+def half_share_for_period(monthly: Decimal, period_start: date, period_end: date) -> Decimal:
+    """One half of the monthly package for this window.
+
+    The 1st-15th, a full month, and any range that is not entirely after the 15th
+    use the lower half. The 16th-end gets the remainder, so the two halves add up
+    to the monthly total. This is half of the monthly rate, never half of a half.
+    """
+    first, second = split_biweekly(monthly)
+    return second if uses_second_share(period_start, period_end) else first
 
 
 def _overlaps(a0: date, a1: date, b0: date, b1: date) -> bool:
@@ -208,6 +244,58 @@ def approved_package_rates(db: Session, va_id: UUID) -> list[VARate]:
     for rate in rows:
         chosen.setdefault(rate.client_id, rate)
     return list(chosen.values())
+
+
+@dataclass(frozen=True)
+class PackagePayrollRow:
+    """One Fixed Package on the admin pay card.
+
+    `due` is the schedule amount for the window (a bi-weekly half, or the full
+    month when the window covers both halves). `monthly_amount` is the saved
+    rate. `half_amount` is one half of that rate for this window.
+    """
+
+    client_id: UUID
+    name: str
+    due: Decimal
+    currency: str
+    monthly_amount: Decimal
+    frequency: str
+    half_amount: Decimal
+
+
+def package_payroll_rows(
+    db: Session,
+    va_id: UUID,
+    period_start: date,
+    period_end: date,
+) -> list[PackagePayrollRow]:
+    """Packages to show on the pay card.
+
+    A calendar half still lists a monthly package whose schedule amount is 0
+    on the 16th-end, so that half can be paid without typing.
+    """
+    half = calendar_half_kind(period_start, period_end)
+    out: list[PackagePayrollRow] = []
+    for rate in approved_package_rates(db, va_id):
+        freq = resolved_frequency(rate)
+        due = package_amount_for_window(rate.amount, freq, period_start, period_end)
+        if due <= 0 and half is None:
+            continue
+        monthly = Decimal(rate.amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        name = rate.client.name if rate.client else "Client"
+        out.append(
+            PackagePayrollRow(
+                client_id=rate.client_id,
+                name=name,
+                due=due,
+                currency=currency_code(rate.currency),
+                monthly_amount=monthly,
+                frequency=freq,
+                half_amount=half_share_for_period(monthly, period_start, period_end),
+            )
+        )
+    return out
 
 
 def package_period_amounts(

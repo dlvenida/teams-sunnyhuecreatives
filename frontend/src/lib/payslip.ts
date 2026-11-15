@@ -1,4 +1,5 @@
 import type { PayrollVA, Settings } from "@/lib/types"
+import { isStandardPackageAmount } from "@/lib/packageHalf"
 
 export interface PayslipTask {
   date: string
@@ -23,6 +24,9 @@ export interface PayslipClient {
   note?: string | null
   overrideAmount?: number | null
   deduction?: number | null
+  /** Saved monthly package. Used to label a half payment. Not a second charge. */
+  monthlyAmount?: number | null
+  halfAmount?: number | null
 }
 
 export interface PayslipModel {
@@ -111,6 +115,9 @@ export function buildPayslip(
           ? round2(num(breakdown.pay))
           : taskAmount
     const originalAmount = breakdown?.calculated_pay != null ? round2(num(breakdown.calculated_pay)) : null
+    const monthlyAmount = breakdown?.monthly_amount != null && breakdown.monthly_amount !== "" ? round2(num(breakdown.monthly_amount)) : null
+    const halfAmount = breakdown?.half_amount != null && breakdown.half_amount !== "" ? round2(num(breakdown.half_amount)) : null
+    const standardChoice = monthlyAmount != null && halfAmount != null && isStandardPackageAmount(amount, monthlyAmount, halfAmount)
     return {
       name,
       hours,
@@ -120,11 +127,13 @@ export function buildPayslip(
       tasks,
       clientId: breakdown?.client_id ?? null,
       skipped,
-      adjusted: !skipped && breakdown?.adjusted === true,
+      adjusted: !skipped && breakdown?.adjusted === true && !standardChoice,
       originalAmount,
       note: breakdown?.note ?? null,
       overrideAmount: breakdown?.override_amount != null && breakdown.override_amount !== "" ? round2(num(breakdown.override_amount)) : null,
       deduction: breakdown?.deduction != null && breakdown.deduction !== "" && num(breakdown.deduction) > 0 ? round2(num(breakdown.deduction)) : null,
+      monthlyAmount,
+      halfAmount,
     }
   }).sort((a, b) => Number(a.skipped) - Number(b.skipped) || b.amount - a.amount || b.hours - a.hours)
 

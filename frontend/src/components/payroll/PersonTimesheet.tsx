@@ -108,28 +108,7 @@ export function PersonTimesheet({
                   {showMoney && client.packaged ? " · Fixed package" : ""}
                 </p>
               </div>
-              <div className="space-y-2 p-2 md:hidden">
-                {client.items.map((entry) => {
-                  const note = taskNote(entry)
-                  return (
-                    <article key={entry.id} className="min-w-0 rounded-xl border bg-white p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{formatDate(entry.work_date)}</p>
-                      <p className="mt-1 break-words font-bold">{taskLabel(entry)}</p>
-                      {note && <p className="mt-0.5 break-words text-[11px] text-muted-foreground">{note}</p>}
-                      <p className="mt-1 text-sm font-semibold">{round2(Number(entry.hours || 0)).toFixed(2)} hrs</p>
-                      {showMoney && !client.packaged && (
-                        <p className="text-xs">
-                          Rate {entry.rate == null || entry.rate === "" ? "not set" : formatCurrency(entry.rate, grouped.currency)}
-                          {" · "}
-                          Pay {entry.pay == null || entry.pay === "" ? "not set" : formatCurrency(entry.pay, grouped.currency)}
-                        </p>
-                      )}
-                      <Button variant="outline" className="mt-2 h-11 min-h-11 w-full" onClick={() => onEdit(entry)}>Edit</Button>
-                    </article>
-                  )
-                })}
-              </div>
-              <table className="hidden w-full text-xs md:table">
+              <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b text-left text-[10px] font-bold uppercase tracking-wide text-primary">
                     <th className="p-2">Date</th>

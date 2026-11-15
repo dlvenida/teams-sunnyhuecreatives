@@ -278,6 +278,8 @@ class ClientFinancialApiTests(unittest.TestCase):
         self.assertEqual(row["net"]["php"], "-452.30")
         self.assertEqual(row["net"]["combined_usd"], "9.91")
         self.assertEqual(row["net"]["combined_php"], "346.06")
+        self.assertEqual(row["profit_margin_pct"], 6.6)
+        self.assertGreater(row["profit_margin_pct"], 0)
         self.assertEqual(row["net_collected"]["usd"], "-22.29")
         self.assertEqual(row["net_collected"]["php"], "-452.30")
         self.assertEqual(row["net_collected"]["combined_usd"], "-30.09")

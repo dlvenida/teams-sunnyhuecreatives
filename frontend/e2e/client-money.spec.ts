@@ -29,7 +29,7 @@ const financials = {
   va_unpaid: money("0.00", "200.00", "3.45", "200.00"),
   net: money("17.71", "-452.30", "9.91", "346.06"),
   net_collected: money("-22.29", "-452.30", "-30.09", "-1973.94"),
-  profit_margin_pct: -27.4,
+  profit_margin_pct: 6.6,
   rate_label: "Using each paid run's saved rate: 58.00 and 60.00 PHP per 1 USD. Confirmed payday rate: 58.00 PHP per 1 USD.",
   invoices_count: 2,
   invoices_paid: 1,
@@ -153,6 +153,7 @@ test("admin sees each currency and the combined total", async ({ page }, testInf
   await expect(main.getByText("Net", { exact: true })).toBeVisible()
   const row = main.locator("tr", { hasText: "Chef Stephanie Tranchina" })
   await expect(row).toContainText("$122.29 + ₱1,032.30")
+  await expect(row).toContainText("About $9.91 / ₱346.06")
   await expect(row).toContainText("$17.71 and -₱452.30")
   await expect(row).toContainText("About $140.09 / ₱8,353.94")
   await expect(page.getByText("$1,154.59")).toHaveCount(0)
@@ -166,6 +167,10 @@ test("admin sees each currency and the combined total", async ({ page }, testInf
   await expect(page.getByText("Invoices plus earnings you added").first()).toBeVisible()
   await expect(page.getByText("Virtual Assistant Earned")).toBeVisible()
   await expect(page.getByText("$140.00 + ₱580.00").first()).toBeVisible()
+  await expect(page.getByText("About $9.91 / ₱346.06").first()).toBeVisible()
+  await expect(page.getByText("6.6% margin")).toBeVisible()
+  await expect(page.getByText("-27.4% margin")).toHaveCount(0)
+  await expect(page.getByText("About -$30.09 / -₱1,973.94").first()).toBeVisible()
   await expect(page.getByText("-$22.29 and -₱452.30").first()).toBeVisible()
   await expect(page.getByText("₱200.00 not yet paid").first()).toBeVisible()
   await expect(page.getByText("Using each paid run's saved rate: 58.00 and 60.00 PHP per 1 USD.").first()).toBeVisible()

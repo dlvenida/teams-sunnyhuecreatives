@@ -72,6 +72,15 @@ function moneyIsNegative(money: ClientMoney | null | undefined) {
   return usd < 0
 }
 
+function netHeadline(money: ClientMoney | null | undefined) {
+  return aboutLine(money) || recordedLine(money)
+}
+
+function netBreakdown(money: ClientMoney | null | undefined) {
+  if (!aboutLine(money)) return ""
+  return recordedLine(money)
+}
+
 function unpaidLine(money: ClientMoney | null | undefined) {
   if (!money || (Number(money.usd) === 0 && Number(money.php) === 0)) return ""
   return `${recordedLine(money)} not yet paid`
@@ -465,7 +474,7 @@ export function ClientsPage() {
                       <td className="p-3 font-semibold">{f ? `${Number(f.total_hours).toFixed(1)} hrs` : "—"}</td>
                       <td className="p-3"><div>{f ? recordedLine(f.total_earned) : "—"}</div>{f && aboutLine(f.total_earned) ? <div className="text-[10px] text-muted-foreground">{aboutLine(f.total_earned)}</div> : null}</td>
                       <td className="p-3"><div>{f ? recordedLine(f.va_earned) : "—"}</div>{f && aboutLine(f.va_earned) ? <div className="text-[10px] text-muted-foreground">{aboutLine(f.va_earned)}</div> : null}{f && unpaidLine(f.va_unpaid) ? <div className="text-[10px] text-muted-foreground">{unpaidLine(f.va_unpaid)}</div> : null}</td>
-                      <td className={cn("p-3 font-bold", f && moneyIsNegative(f.net) ? "text-red-600" : "text-green-700")}><div>{f ? recordedLine(f.net) : "—"}</div>{f && aboutLine(f.net) ? <div className="text-[10px] font-normal text-muted-foreground">{aboutLine(f.net)}</div> : null}</td>
+                      <td className={cn("p-3 font-bold", f && moneyIsNegative(f.net) ? "text-red-600" : "text-green-700")}><div>{f ? netHeadline(f.net) : "—"}</div>{f && netBreakdown(f.net) ? <div className="text-[10px] font-normal text-muted-foreground">{netBreakdown(f.net)}</div> : null}</td>
                     </>) })()}
                     <td className="p-3">
                       {c.approval_status === "pending" ? (
@@ -659,8 +668,8 @@ export function ClientsPage() {
                           ["Total Earned", recordedLine(detail.financials.total_earned), aboutLine(detail.financials.total_earned), "Invoices plus earnings you added"],
                           ["Collected", recordedLine(detail.financials.total_collected), aboutLine(detail.financials.total_collected), `${recordedLine(detail.financials.total_outstanding)} outstanding`],
                           ["Virtual Assistant Earned", recordedLine(detail.financials.va_earned), [aboutLine(detail.financials.va_earned), unpaidLine(detail.financials.va_unpaid)].filter(Boolean).join(" · "), "VA pay on billable logs"],
-                          ["Net (Earned − VA)", recordedLine(detail.financials.net), aboutLine(detail.financials.net), detail.financials.profit_margin_pct != null ? `${detail.financials.profit_margin_pct}% margin` : "—"],
-                          ["Net Collected", recordedLine(detail.financials.net_collected), aboutLine(detail.financials.net_collected), "Collected − VA earned"],
+                          ["Net (Earned − VA)", netHeadline(detail.financials.net), netBreakdown(detail.financials.net), detail.financials.profit_margin_pct != null ? `${detail.financials.profit_margin_pct}% margin` : "—"],
+                          ["Net Collected", netHeadline(detail.financials.net_collected), netBreakdown(detail.financials.net_collected), "Collected − VA earned"],
                         ] as const).map(([t, v, extra, s]) => (
                           <div key={t} className="rounded-xl border bg-card p-3">
                             <p className="text-[11px] font-semibold text-muted-foreground">{t}</p>

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link, useSearchParams } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
-import { NeedsActionList } from "@/components/payroll/NeedsActionList"
+import { NeedsActionList, ReturnSheet } from "@/components/payroll/NeedsActionList"
+import { TimesheetViewSheet } from "@/components/payroll/TimesheetViewSheet"
 import { payrollActionBucket } from "@/components/payroll/payrollAction"
 import type { PayrollResponse, PayrollRun, PayrollVA, Settings, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -357,6 +358,9 @@ export function PayrollPage() {
   const [searchParams] = useSearchParams()
   const [reviewTimesheetId, setReviewTimesheetId] = useState<string | null>(null)
   const [fullReviewOpen, setFullReviewOpen] = useState(false)
+  const [viewVaId, setViewVaId] = useState<string | null>(null)
+  const [returnVa, setReturnVa] = useState<PayrollVA | null>(null)
+  const [returnNote, setReturnNote] = useState("")
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
   const [usdPhpRate, setUsdPhpRate] = useState("")
   const rateHydrated = useRef(false)
@@ -558,6 +562,30 @@ export function PayrollPage() {
     }
     return true
   }
+  const changeHourlyRate = async (va: PayrollVA, clientId: string, rate: number) => {
+    const row = va.by_client?.find((item) => item.client_id === clientId)
+    if (clientId) {
+      await apiFetch("/va-rates", {
+        method: "POST",
+        body: JSON.stringify({
+          va_id: va.va_id,
+          client_id: clientId,
+          pay_type: "hourly",
+          currency: va.currency,
+          amount: rate,
+        }),
+      })
+    }
+    const name = row?.label
+    for (const entry of va.entries) {
+      if (clientId && name && entry.client_name !== name) continue
+      await apiFetch(`/work-logs/${entry.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ va_rate: rate }),
+      })
+    }
+    invalidate()
+  }
   const setAllPackages = async (va: PayrollVA, choice: "half" | "full") => {
     if (!payroll) return
     const slip = buildPayslip(va, payroll.period_start, payroll.period_end, settings)
@@ -659,6 +687,7 @@ export function PayrollPage() {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "va-payroll.csv"; a.click(); URL.revokeObjectURL(a.href)
   }
 
+  const viewVa = payroll?.vas.find((va) => va.va_id === viewVaId) ?? null
   const orderedVas = [...(payroll?.vas ?? [])].sort((a, b) => {
     const rank = { approve: 0, pay: 1, draft: 2, paid: 3 }
     return rank[payrollActionBucket(a)] - rank[payrollActionBucket(b)] || a.va_name.localeCompare(b.va_name)
@@ -666,34 +695,42 @@ export function PayrollPage() {
 
   return (
     <div className="shc-brand min-w-0 max-w-full space-y-4 overflow-x-clip animate-fade-in">
-      <div className="min-w-0 px-1 pt-1">
+      <div className="min-w-0 px-1">
         <h1 className="text-2xl text-[#B8325F]">{isAdmin ? "Timesheets & pay" : "Timesheet review"}</h1>
-        <p className="mt-1 text-sm text-[#43303a]">
-          {isAdmin
-            ? "Approve submitted timesheets, return one for fixes, then mark it paid."
-            : "Approve a timesheet or return it for fixes. You see the VA name, dates, tasks, hours, and status. Rates, pay, and payroll totals stay hidden."}
+        <p className="text-sm text-[#43303a]">
+          {isAdmin ? "Approve, set pay, and mark paid." : "Hours and status only. Rates and pay stay hidden."}
         </p>
       </div>
 
       <div id="payroll-period" className="sticky top-14 z-10 -mx-3 border-b border-[#F7C6D3] bg-[#FDF2F5]/95 px-3 py-2 backdrop-blur-md sm:mx-0 sm:rounded-2xl sm:border">
-        <p className="brand-label text-[10px] font-semibold uppercase tracking-[0.14em] text-[#B8325F]">Period</p>
-        <div className="mt-1.5 flex flex-wrap gap-1.5" role="group" aria-label="Period">
-          {PERIODS.map((item) => (
+        <div className="flex gap-1.5" role="group" aria-label="Period">
+          {PERIODS.filter((item) => item.id === "first_half" || item.id === "second_half" || item.id === "custom").map((item) => (
             <button
               key={item.id}
               type="button"
               aria-pressed={period === item.id}
               onClick={() => setPeriod(item.id)}
               className={cn(
-                "h-11 min-h-11 rounded-full border px-3 text-xs font-semibold uppercase tracking-wide",
+                "h-11 min-h-11 min-w-0 flex-1 rounded-full border px-1 text-[10px] font-semibold uppercase tracking-wide",
                 period === item.id ? "border-[#B8325F] bg-[#B8325F] text-white" : "border-[#F7C6D3] bg-white text-[#B8325F]",
               )}
             >
               {item.label}
             </button>
           ))}
+          <Select
+            aria-label="Other periods"
+            className="h-11 min-h-11 w-[8.6rem] shrink-0 px-1.5 text-[11px]"
+            value={period === "this_week" || period === "last_week" || period === "this_month" || period === "last_month" ? period : ""}
+            onChange={(e) => { if (e.target.value) setPeriod(e.target.value) }}
+          >
+            <option value="">More</option>
+            {PERIODS.filter((item) => item.id === "this_week" || item.id === "last_week" || item.id === "this_month" || item.id === "last_month").map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </Select>
         </div>
-        {payroll && <p className="mt-2 text-xs font-semibold text-[#43303a]">{formatDate(payroll.period_start)} to {formatDate(payroll.period_end)}</p>}
+        {payroll && <p className="mt-1 text-xs font-semibold text-[#43303a]">{formatDate(payroll.period_start)} to {formatDate(payroll.period_end)}</p>}
         {period === "custom" && (
           <div className="mt-2 grid grid-cols-2 gap-2">
             <div className="min-w-0"><Label>From</Label><Input type="date" className="h-11" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
@@ -712,98 +749,39 @@ export function PayrollPage() {
         loading={isLoading}
         approvingId={approveSheet.isPending ? approveSheet.variables : null}
         returningId={returnSheet.isPending ? returnSheet.variables?.id : null}
-        onView={(id) => setOpenVa(id)}
+        onView={(id) => setViewVaId(id)}
         onApprove={(id) => approveSheet.mutate(id)}
         onReturn={(id, reason) => returnSheet.mutate({ id, reason })}
         onMarkPaid={(va) => setPayReview(va)}
         onUndo={(runId) => { if (confirm("Undo paid status for this VA?")) voidRun.mutate(runId) }}
+        showSetAllHalf={!!isAdmin && (payroll?.vas ?? []).some((va) => !va.is_paid && va.by_client?.some((row) => row.pay_type === "package"))}
+        onSetAllHalf={() => {
+          if (!payroll) return
+          void (async () => {
+            for (const va of payroll.vas) {
+              if (!va.is_paid) await setAllPackages(va, "half")
+            }
+          })()
+        }}
+        onPackageChoice={(va, clientId, choice) => {
+          if (!payroll) return
+          const slip = buildPayslip(va, payroll.period_start, payroll.period_end, settings)
+          const client = slip.clients.find((item) => item.clientId === clientId)
+          if (!client) return
+          const draft = draftForChoice(choice, client, payroll.period_start, payroll.period_end, client.note || "")
+          setDrafts((prev) => ({ ...prev, [`${va.va_id}:${clientId}`]: draft }))
+          void saveOverride(va, clientId, draft, client.originalAmount ?? client.amount)
+        }}
+        onPackageAmount={(va, clientId, amount) => {
+          if (!payroll) return
+          const slip = buildPayslip(va, payroll.period_start, payroll.period_end, settings)
+          const client = slip.clients.find((item) => item.clientId === clientId)
+          const draft: PackageDraft = { skipped: false, mode: "amount", amount: amount.toFixed(2), deduction: "", note: client?.note || "", choice: "custom" }
+          setDrafts((prev) => ({ ...prev, [`${va.va_id}:${clientId}`]: draft }))
+          void saveOverride(va, clientId, draft, client?.originalAmount ?? client?.amount ?? amount)
+        }}
+        onChangeRate={(va, clientId, rate) => { void changeHourlyRate(va, clientId, rate) }}
       />
-
-      {openVa && payroll && payroll.vas.filter(v => v.va_id === openVa).map(va => {
-        const slip = showPricing ? buildPayslip(va, payroll.period_start, payroll.period_end, settings) : null
-        const packages = slip?.clients.filter((client) => client.payType === "package" && client.clientId) ?? []
-        return (
-        <Card key={va.va_id} id="va-week-detail" className="scroll-mt-24">
-          <CardHeader className="pb-2">
-            <CardTitle>{va.va_name}, by week</CardTitle>
-            <p className="text-[11px] text-muted-foreground">
-              {showPricing
-                ? "Each week is split by client so the hours, rate, and pay are easy to add up. Edit a row to change the minutes."
-                : "Each week is split by client so the hours are easy to add up. Edit a row to change the minutes."}
-            </p>
-          </CardHeader>
-          <CardContent className="space-y-4 p-4">
-            <PersonTimesheet
-              va={va}
-              showMoney={showPricing}
-              onEdit={(entry) => {
-                const split = splitStoredHours(entry.hours)
-                const duration = entry.entry_mode === "duration" || (!entry.start_time && !entry.end_time)
-                setEditing({
-                  id: entry.id,
-                  description: entry.description || "",
-                  start_time: entry.start_time?.slice(0, 5) || "09:00",
-                  end_time: entry.end_time?.slice(0, 5) || "17:00",
-                  va_rate: String(entry.rate ?? ""),
-                  va_name: va.va_name,
-                  work_date: entry.work_date,
-                  mode: duration ? "duration" : "range",
-                  durationHours: split.hours,
-                  durationMinutes: split.minutes,
-                })
-              }}
-            />
-            {showPricing && packages.length > 0 && !va.is_paid && (
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Button type="button" variant="gold" className="min-h-11 flex-1" onClick={() => void setAllPackages(va, "half")}>
-                  Set all packages to half
-                </Button>
-                <Button type="button" variant="outline" className="min-h-11 flex-1" onClick={() => void setAllPackages(va, "full")}>
-                  Set all to full
-                </Button>
-              </div>
-            )}
-            {showPricing && packages.map((client) => (
-              <div key={client.clientId} className={cn("rounded-2xl border p-3", client.skipped && "opacity-70")}>
-                <p className="font-display text-sm font-bold text-primary">{client.name}</p>
-                <p className="text-[11px] text-muted-foreground">Fixed package for this whole period. It is not split across the weeks above.</p>
-                <PackagePeriodFields
-                  client={client}
-                  currency={va.currency === "USD" ? "USD" : "PHP"}
-                  locked={!!va.is_paid}
-                  periodStart={payroll.period_start}
-                  periodEnd={payroll.period_end}
-                  draft={drafts[`${va.va_id}:${client.clientId}`]}
-                  onDraft={(next) => setDrafts((prev) => ({ ...prev, [`${va.va_id}:${client.clientId}`]: next }))}
-                  onCommit={(next) => saveOverride(va, client.clientId!, next, client.originalAmount ?? client.amount)}
-                />
-              </div>
-            ))}
-            {showPricing && !va.is_paid && canOfferPay(va) && (
-              <div className="border-t pt-3">
-                <Button
-                  variant="success"
-                  className="h-11 min-h-11 w-full"
-                  disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
-                  title={markPaidTitle(va)}
-                  onClick={() => setPayReview(va)}
-                >
-                  <Wallet className="h-3.5 w-3.5" /> Mark Paid
-                </Button>
-              </div>
-            )}
-            {showPricing && va.is_paid && va.run_id && (
-              <div className="border-t pt-3">
-                <Button variant="outline" className="h-11 min-h-11 w-full" onClick={() => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) }}>Undo Paid</Button>
-              </div>
-            )}
-            {showPricing && !va.is_paid && canOfferPay(va) && va.timesheet_status !== "reviewed" && (
-              <p className="text-right text-[11px] text-muted-foreground">{markPaidTitle(va)}</p>
-            )}
-          </CardContent>
-        </Card>
-        )
-      })}
 
       {markPaidError && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{markPaidError}</p>}
       {overrideError && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{overrideError}</p>}
@@ -1012,6 +990,93 @@ export function PayrollPage() {
         </div>
 
 
+
+      {openVa && payroll && payroll.vas.filter(v => v.va_id === openVa).map(va => {
+        const slip = showPricing ? buildPayslip(va, payroll.period_start, payroll.period_end, settings) : null
+        const packages = slip?.clients.filter((client) => client.payType === "package" && client.clientId) ?? []
+        return (
+        <Card key={va.va_id} id="va-week-detail" className="scroll-mt-24">
+          <CardHeader className="pb-2">
+            <CardTitle>{va.va_name}, by week</CardTitle>
+            <p className="text-[11px] text-muted-foreground">
+              {showPricing
+                ? "Each week is split by client so the hours, rate, and pay are easy to add up. Edit a row to change the minutes."
+                : "Each week is split by client so the hours are easy to add up. Edit a row to change the minutes."}
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4 p-4">
+            <PersonTimesheet
+              va={va}
+              showMoney={showPricing}
+              onEdit={(entry) => {
+                const split = splitStoredHours(entry.hours)
+                const duration = entry.entry_mode === "duration" || (!entry.start_time && !entry.end_time)
+                setEditing({
+                  id: entry.id,
+                  description: entry.description || "",
+                  start_time: entry.start_time?.slice(0, 5) || "09:00",
+                  end_time: entry.end_time?.slice(0, 5) || "17:00",
+                  va_rate: String(entry.rate ?? ""),
+                  va_name: va.va_name,
+                  work_date: entry.work_date,
+                  mode: duration ? "duration" : "range",
+                  durationHours: split.hours,
+                  durationMinutes: split.minutes,
+                })
+              }}
+            />
+            {showPricing && packages.length > 0 && !va.is_paid && (
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button type="button" variant="gold" className="min-h-11 flex-1" onClick={() => void setAllPackages(va, "half")}>
+                  Set all packages to half
+                </Button>
+                <Button type="button" variant="outline" className="min-h-11 flex-1" onClick={() => void setAllPackages(va, "full")}>
+                  Set all to full
+                </Button>
+              </div>
+            )}
+            {showPricing && packages.map((client) => (
+              <div key={client.clientId} className={cn("rounded-2xl border p-3", client.skipped && "opacity-70")}>
+                <p className="font-display text-sm font-bold text-primary">{client.name}</p>
+                <p className="text-[11px] text-muted-foreground">Fixed package for this whole period. It is not split across the weeks above.</p>
+                <PackagePeriodFields
+                  client={client}
+                  currency={va.currency === "USD" ? "USD" : "PHP"}
+                  locked={!!va.is_paid}
+                  periodStart={payroll.period_start}
+                  periodEnd={payroll.period_end}
+                  draft={drafts[`${va.va_id}:${client.clientId}`]}
+                  onDraft={(next) => setDrafts((prev) => ({ ...prev, [`${va.va_id}:${client.clientId}`]: next }))}
+                  onCommit={(next) => saveOverride(va, client.clientId!, next, client.originalAmount ?? client.amount)}
+                />
+              </div>
+            ))}
+            {showPricing && !va.is_paid && canOfferPay(va) && (
+              <div className="border-t pt-3">
+                <Button
+                  variant="success"
+                  className="h-11 min-h-11 w-full"
+                  disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
+                  title={markPaidTitle(va)}
+                  onClick={() => setPayReview(va)}
+                >
+                  <Wallet className="h-3.5 w-3.5" /> Mark Paid
+                </Button>
+              </div>
+            )}
+            {showPricing && va.is_paid && va.run_id && (
+              <div className="border-t pt-3">
+                <Button variant="outline" className="h-11 min-h-11 w-full" onClick={() => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) }}>Undo Paid</Button>
+              </div>
+            )}
+            {showPricing && !va.is_paid && canOfferPay(va) && va.timesheet_status !== "reviewed" && (
+              <p className="text-right text-[11px] text-muted-foreground">{markPaidTitle(va)}</p>
+            )}
+          </CardContent>
+        </Card>
+        )
+      })}
+
         {/* Payment history — admin only (amounts) */}
         {isAdmin && <Card className="min-w-0 overflow-hidden">
           <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><Banknote className="h-4 w-4 text-primary" /> Payment History</CardTitle></CardHeader>
@@ -1160,6 +1225,59 @@ export function PayrollPage() {
           timesheetId={reviewTimesheetId}
           payPeriod={payroll ? { start: payroll.period_start, end: payroll.period_end } : undefined}
           onClose={() => setReviewTimesheetId(null)}
+        />
+      )}
+      {viewVa && payroll && (
+        <TimesheetViewSheet
+          va={viewVa}
+          periodStart={payroll.period_start}
+          periodEnd={payroll.period_end}
+          showMoney={showPricing}
+          onClose={() => setViewVaId(null)}
+          onEdit={(entry) => {
+            const split = splitStoredHours(entry.hours)
+            const duration = entry.entry_mode === "duration" || (!entry.start_time && !entry.end_time)
+            setEditing({
+              id: entry.id,
+              description: entry.description || "",
+              start_time: entry.start_time?.slice(0, 5) || "09:00",
+              end_time: entry.end_time?.slice(0, 5) || "17:00",
+              va_rate: String(entry.rate ?? ""),
+              va_name: viewVa.va_name,
+              work_date: entry.work_date,
+              mode: duration ? "duration" : "range",
+              durationHours: split.hours,
+              durationMinutes: split.minutes,
+            })
+          }}
+          actions={(
+            <div className="grid grid-cols-2 gap-2">
+              {viewVa.timesheet_id && viewVa.timesheet_status === "submitted" && viewVa.va_id !== getAuthUser()?.vaId && (
+                <Button className="h-11 min-h-11 w-full bg-[#E8578A]" onClick={() => approveSheet.mutate(viewVa.timesheet_id!)}>Approve</Button>
+              )}
+              {viewVa.timesheet_id && !viewVa.is_paid && (viewVa.timesheet_status === "submitted" || viewVa.timesheet_status === "reviewed") && viewVa.va_id !== getAuthUser()?.vaId && (
+                <Button variant="outline" className="h-11 min-h-11 w-full" onClick={() => { setReturnNote(""); setReturnVa(viewVa) }}>Return for fixes</Button>
+              )}
+              {isAdmin && !viewVa.is_paid && viewVa.timesheet_status === "reviewed" && canOfferPay(viewVa) && (
+                <Button variant="success" className="col-span-2 h-11 min-h-11 w-full" onClick={() => setPayReview(viewVa)}>Mark Paid</Button>
+              )}
+            </div>
+          )}
+        />
+      )}
+      {returnVa && (
+        <ReturnSheet
+          name={returnVa.va_name}
+          noteId={`sheet-${returnVa.va_id}`}
+          note={returnNote}
+          busy={returnSheet.isPending}
+          onNote={setReturnNote}
+          onClose={() => setReturnVa(null)}
+          onSend={() => {
+            if (!returnVa.timesheet_id) return
+            returnSheet.mutate({ id: returnVa.timesheet_id, reason: returnNote.trim() })
+            setReturnVa(null)
+          }}
         />
       )}
       <PdfPreviewModal blob={pdfBlob} filename={pdfFilename} onClose={() => setPdfBlob(null)} />

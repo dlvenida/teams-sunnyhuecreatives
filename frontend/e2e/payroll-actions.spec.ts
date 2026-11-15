@@ -23,6 +23,7 @@ interface FixtureVa {
     rate: string
     pay: string
   }[]
+  package?: { clientId: string; name: string; monthly: string; pay: string } | null
 }
 
 interface FixtureRun {
@@ -63,6 +64,19 @@ function va(partial: Partial<FixtureVa> & Pick<FixtureVa, "va_id" | "va_name" | 
 function seed() {
   const vas: FixtureVa[] = [
     va({ va_id: "gem", va_name: "Gem", currency: "USD", total_hours: "40.00", total_pay: "800.00", timesheet_status: "submitted", timesheet_id: "sheet-gem", timesheet_submitted: true }),
+    va({
+      va_id: "kyla",
+      va_name: "Kyla",
+      currency: "PHP",
+      total_hours: "12.00",
+      total_pay: "4000.00",
+      timesheet_status: "submitted",
+      timesheet_id: "sheet-kyla",
+      timesheet_submitted: true,
+      entry_count: 0,
+      entries: [],
+      package: { clientId: "client-kyla", name: "Ever After", monthly: "4000.00", pay: "4000.00" },
+    }),
     va({ va_id: "myra", va_name: "Myra", currency: "PHP", total_hours: "38.00", total_pay: "12000.00", timesheet_status: "submitted", timesheet_id: "sheet-myra", timesheet_submitted: true }),
     va({ va_id: "arby", va_name: "Arby", currency: "PHP", total_hours: "20.00", total_pay: "5000.00", timesheet_status: "reviewed", timesheet_id: "sheet-arby", timesheet_submitted: true }),
     va({ va_id: "peter", va_name: "Peter", currency: "USD", total_hours: "10.00", total_pay: "200.00", timesheet_status: "reviewed", timesheet_id: "sheet-peter", timesheet_submitted: true, is_paid: true, run_id: "run-peter" }),
@@ -95,8 +109,20 @@ function payrollBody(state: ReturnType<typeof seed>, showMoney: boolean) {
     manual_hours: item.total_hours,
     tasks_done: 1,
     pending_hours: "0",
-    by_client: item.entries.length ? [{
+    by_client: item.package ? [{
+      label: item.package.name,
+      client_id: item.package.clientId,
+      hours: item.total_hours,
+      pay: showMoney ? item.package.pay : null,
+      rate: null,
+      pay_type: "package",
+      monthly_amount: showMoney ? item.package.monthly : null,
+      calculated_pay: showMoney ? item.package.monthly : null,
+      half_amount: showMoney ? (Number(item.package.monthly) / 2).toFixed(2) : null,
+      skipped: item.package.pay === "0.00",
+    }] : item.entries.length ? [{
       label: "Northwind",
+      client_id: `client-${item.va_id}`,
       hours: item.total_hours,
       pay: showMoney ? item.total_pay : null,
       rate: showMoney ? item.entries[0].rate : null,
@@ -169,6 +195,31 @@ async function installApi(page: Page, role: "admin" | "auditor") {
     if (path === "/vas") {
       return json(state.vas.map((item) => ({ id: item.va_id, name: item.va_name, currency: item.currency })))
     }
+    if (path === "/payroll/package-overrides" && method === "PUT") {
+      const body = request.postDataJSON() as { va_id: string; skipped?: boolean; amount?: number | null }
+      const person = state.vas.find((item) => item.va_id === body.va_id)
+      if (person?.package) {
+        const next = body.skipped ? "0.00" : Number(body.amount ?? person.package.pay).toFixed(2)
+        person.package.pay = next
+        person.total_pay = next
+      }
+      return json({ ok: true })
+    }
+    if (path === "/va-rates" && method === "POST") {
+      const body = request.postDataJSON() as { va_id: string; amount: number }
+      const person = state.vas.find((item) => item.va_id === body.va_id)
+      if (person) {
+        const rate = Number(body.amount).toFixed(2)
+        const pay = (Number(person.total_hours) * Number(body.amount)).toFixed(2)
+        if (person.entries[0]) {
+          person.entries[0].rate = rate
+          person.entries[0].pay = pay
+        }
+        person.total_pay = pay
+      }
+      return json({ id: "rate-1" })
+    }
+    if (/^\/work-logs\//.test(path) && method === "PATCH") return json({ id: "log" })
     if (path === "/payroll/timesheets") return json([])
     if (path === "/payroll/calculate" && method === "POST") return json(payrollBody(state, showMoney))
     if (path === "/payroll/runs" && method === "GET") return json(showMoney ? state.runs : [])
@@ -250,30 +301,56 @@ async function expectNoPageScroll(page: Page) {
 test("admin can approve, return, and mark paid from the top of the page", async ({ page }, testInfo) => {
   const state = await openPayroll(page, "admin")
   await expect(page.getByRole("button", { name: "1st – 15th" })).toBeVisible()
-  await expect(page.getByTestId("filter-approve")).toContainText("To approve (2)")
+  await expect(page.getByTestId("filter-approve")).toContainText("To approve (3)")
   await expect(page.getByTestId("filter-pay")).toContainText("To pay (1)")
   await expect(page.getByTestId("filter-paid")).toContainText("Paid (1)")
-  expect(await buckets(page)).toEqual(["approve", "approve", "pay"] satisfies Bucket[])
-  await expect(page.locator("[data-testid=action-list] [data-va=Gem]")).toContainText("40.00 hrs")
-  await expect(page.locator("[data-testid=action-list] [data-va=Gem] [data-testid=pay-amount]")).toContainText("$800.00")
+  expect(await buckets(page)).toEqual(["approve", "approve", "approve", "pay"] satisfies Bucket[])
+  const gem = page.locator("[data-testid=action-list] [data-va=Gem]")
+  const kyla = page.locator("[data-testid=action-list] [data-va=Kyla]")
+  await expect(gem).toContainText("40.00 hrs")
+  await expect(gem.getByTestId("pay-amount")).toContainText("$800.00")
+  await expect(gem.getByTestId("hourly-pay")).toContainText("$20.00 x 40.00 hrs")
+  await expect(kyla.getByRole("button", { name: "Half month" })).toBeVisible()
   await expectNoPageScroll(page)
 
-  const card = page.locator("[data-testid=action-list] [data-va=Myra]")
   if (testInfo.project.name === "mobile") {
     await page.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-top.png", fullPage: false })
-    await card.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-card.png" })
+    await kyla.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-package.png" })
+    await gem.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-hourly.png" })
   }
 
-  await card.getByRole("button", { name: "Approve Myra" }).click()
-  await expect(page.locator("[data-testid=action-list] [data-va=Myra]")).toHaveAttribute("data-bucket", "pay")
-  expect(await buckets(page)).toEqual(["approve", "pay", "pay"])
+  await kyla.getByRole("button", { name: "Half month" }).click()
+  await expect(kyla.getByRole("button", { name: "Half month" })).toHaveAttribute("aria-pressed", "true")
+  await expect(kyla.getByTestId("pay-amount")).toContainText("₱2000.00")
 
-  const gem = page.locator("[data-testid=action-list] [data-va=Gem]")
+  await gem.getByRole("button", { name: "Change rate" }).click()
+  const rate = gem.getByLabel("Change rate for Gem")
+  await rate.fill("25")
+  await rate.blur()
+  await expect(gem.getByTestId("hourly-pay")).toContainText("$25.00 x 40.00 hrs = $1000.00")
+
+  await gem.getByRole("button", { name: "View timesheet Gem" }).click()
+  await expect(page.getByTestId("timesheet-sheet")).toBeVisible()
+  if (testInfo.project.name === "mobile") {
+    await page.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-timesheet.png", fullPage: false })
+  }
+  await page.getByRole("button", { name: "Close" }).click()
+
+  const myra = page.locator("[data-testid=action-list] [data-va=Myra]")
+  await myra.getByRole("button", { name: "Approve Myra" }).click()
+  await expect(myra).toHaveAttribute("data-bucket", "pay")
+  expect(await buckets(page)).toEqual(["approve", "approve", "pay", "pay"])
+
   await gem.getByRole("button", { name: "Return for fixes Gem" }).click()
-  await gem.getByLabel("Note for the VA (optional)").fill("Add Friday")
-  await gem.getByRole("button", { name: "Return for fixes", exact: true }).click()
+  const returnSheet = page.getByTestId("return-sheet")
+  await expect(returnSheet).toBeVisible()
+  if (testInfo.project.name === "mobile") {
+    await page.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-return.png", fullPage: false })
+  }
+  await returnSheet.getByRole("button", { name: "Missing entries" }).click()
+  await returnSheet.getByRole("button", { name: "Send back" }).click()
   await expect(page.locator("[data-testid=action-list] [data-va=Gem]")).toHaveCount(0)
-  expect(state.rejected).toEqual({ id: "sheet-gem", reason: "Add Friday" })
+  expect(state.rejected).toEqual({ id: "sheet-gem", reason: "Missing entries" })
 
   await page.getByTestId("filter-pay").click()
   const arby = page.locator("[data-testid=action-list] [data-va=Arby]")
@@ -283,18 +360,25 @@ test("admin can approve, return, and mark paid from the top of the page", async 
   await expect(page.locator("[data-testid=action-list] [data-va=Arby]")).toHaveCount(0)
   await page.getByTestId("filter-paid").click()
   await expect(page.locator("[data-testid=action-list] [data-va=Arby]")).toHaveAttribute("data-bucket", "paid")
+  page.once("dialog", (dialog) => dialog.accept())
+  await page.locator("[data-testid=action-list] [data-va=Peter]").getByRole("button", { name: "Undo Paid Peter" }).click()
+  await page.getByTestId("filter-pay").click()
+  await expect(page.locator("[data-testid=action-list] [data-va=Peter]")).toHaveAttribute("data-bucket", "pay")
   await expectNoPageScroll(page)
 })
 
 test("project manager sees hours and actions without money", async ({ page }, testInfo) => {
   await openPayroll(page, "auditor")
   await expect(page.getByRole("heading", { name: "Timesheet review" })).toBeVisible()
-  await expect(page.getByTestId("filter-approve")).toContainText("To approve (2)")
+  await expect(page.getByTestId("filter-approve")).toContainText("To approve (3)")
   await expect(page.getByTestId("filter-pay")).toContainText("Approved (1)")
   await expect(page.getByTestId("filter-pay")).not.toContainText("To pay")
-  expect(await buckets(page)).toEqual(["approve", "approve", "pay"])
+  expect(await buckets(page)).toEqual(["approve", "approve", "approve", "pay"])
   await expect(page.locator("[data-testid=action-list] [data-va=Gem]")).toContainText("40.00 hrs")
   await expect(page.getByTestId("pay-amount")).toHaveCount(0)
+  await expect(page.getByTestId("hourly-pay")).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Half month" })).toHaveCount(0)
+  await expect(page.getByRole("button", { name: "Change rate" })).toHaveCount(0)
   await expect(page.getByRole("button", { name: /Mark Paid/ })).toHaveCount(0)
   await expect(page.getByText("USD to PHP")).toHaveCount(0)
   const text = await page.locator("body").innerText()
@@ -314,7 +398,7 @@ test("desktop keeps the action list at the top without horizontal scroll", async
   const period = await page.locator("#payroll-period").boundingBox()
   expect(action && period && action.y).toBeGreaterThan(0)
   expect(action!.y).toBeLessThan(420)
-  expect(await buckets(page)).toEqual(["approve", "approve", "pay"])
+  expect(await buckets(page)).toEqual(["approve", "approve", "approve", "pay"])
   await page.getByRole("button", { name: "1st – 15th" }).click()
   await expect(page.getByRole("button", { name: "1st – 15th" })).toHaveAttribute("aria-pressed", "true")
   await expectNoPageScroll(page)

@@ -354,6 +354,8 @@ export function PayrollPage() {
   const [pdfError, setPdfError] = useState("")
   const [searchParams] = useSearchParams()
   const [reviewTimesheetId, setReviewTimesheetId] = useState<string | null>(null)
+  const [returnVa, setReturnVa] = useState<PayrollVA | null>(null)
+  const [returnNote, setReturnNote] = useState("")
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
   const [usdPhpRate, setUsdPhpRate] = useState("")
   const rateHydrated = useRef(false)
@@ -449,6 +451,19 @@ export function PayrollPage() {
   const markPaid = useMutation({
     mutationFn: (body: Record<string, unknown>) => apiFetch("/payroll/runs", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => { setMarkPaidError(""); invalidate() },
+    onError: (err: Error) => setMarkPaidError(err.message),
+  })
+  const approveSheet = useMutation({
+    mutationFn: (id: string) => apiFetch(`/payroll/timesheets/${id}/review`, { method: "POST" }),
+    onSuccess: () => { setMarkPaidError(""); invalidate() },
+    onError: (err: Error) => setMarkPaidError(err.message),
+  })
+  const returnSheet = useMutation({
+    mutationFn: (body: { id: string; reason: string }) => apiFetch(`/payroll/timesheets/${body.id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reason: body.reason.trim() || null }),
+    }),
+    onSuccess: () => { setMarkPaidError(""); setReturnVa(null); setReturnNote(""); invalidate() },
     onError: (err: Error) => setMarkPaidError(err.message),
   })
   const saveOverride = async (va: PayrollVA, clientId: string, draft: PackageDraft, calculated: number) => {
@@ -656,34 +671,9 @@ export function PayrollPage() {
       {overrideError && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{overrideError}</p>}
       {pdfError && <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{pdfError}</p>}
 
-      {pendingSheets.length > 0 && (
-        <div className="rounded-2xl border-2 border-amber-300 bg-amber-50/90 p-4 shadow-sm">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-800">Pending Approval</p>
-              <h2 className="font-display text-base font-bold text-amber-950">
-                {pendingSheets.length} timesheet{pendingSheets.length === 1 ? "" : "s"} waiting for review
-              </h2>
-              <p className="text-xs text-amber-900/80">Every log is listed here, before Approve. Nothing to open or download. The payslip stays locked until approved.</p>
-            </div>
-          </div>
-          <div className="space-y-4">
-            {pendingSheets.map((s) => (
-              <TimesheetReviewPanel
-                key={s.id}
-                timesheetId={s.id}
-                variant="inline"
-                payPeriod={payroll ? { start: payroll.period_start, end: payroll.period_end } : undefined}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Filters — results update live */}
-      <div className="grid gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-5">
-        <div><Label>VA</Label><Select value={vaId} onChange={(e) => setVaId(e.target.value)}><option value="">All VAs</option>{vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</Select></div>
-        <div className="sm:col-span-2 lg:col-span-4">
+      {/* Same period buttons, with Select VA and the saved USD to PHP rate beside them. */}
+      <div id="payroll-top" className="grid min-w-0 gap-3 rounded-2xl border bg-card p-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="min-w-0 sm:col-span-2 lg:col-span-4">
           <Label>Period</Label>
           <div className="mt-1 flex flex-wrap gap-1.5" role="group" aria-label="Period">
             {PERIODS.map((item) => (
@@ -701,15 +691,19 @@ export function PayrollPage() {
               </button>
             ))}
           </div>
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            On 1st-15th and 16th-end, each package starts on Half month. Full month and Skip are one tap. This Month still shows the whole package until you choose Half.
-          </p>
         </div>
-        {period === "custom" && <><div><Label>From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div><div><Label>To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div></>}
+        <div className="min-w-0">
+          <Label htmlFor="select-va">Select VA</Label>
+          <Select id="select-va" aria-label="Select VA" value={vaId} onChange={(e) => setVaId(e.target.value)}>
+            <option value="">All VAs</option>
+            {vas.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </Select>
+        </div>
         {isAdmin && (
-          <div>
-            <Label>USD to PHP Rate</Label>
+          <div className="min-w-0">
+            <Label htmlFor="usd-php-rate">USD to PHP Rate</Label>
             <Input
+              id="usd-php-rate"
               type="number"
               step="0.01"
               min="0"
@@ -717,57 +711,36 @@ export function PayrollPage() {
               value={usdPhpRate}
               onChange={(e) => rememberRate(e.target.value)}
             />
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              {parsedRate
-                ? `1 USD = ${parsedRate.toFixed(2)} PHP · saved on Mark Paid & shown on PDF`
-                : "Enter today’s rate — PHP equivalent calculates automatically"}
-            </p>
           </div>
         )}
+        {period === "custom" && <><div><Label>From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div><div><Label>To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div></>}
         <div className="flex items-end gap-2">
           <Button variant="outline" onClick={exportCsv} disabled={!payroll}><FileSpreadsheet className="h-4 w-4" /> CSV</Button>
           <Button variant="gold" onClick={() => exportPdf()} disabled={!payroll}><FileDown className="h-4 w-4" /> {isAdmin ? "Payroll PDF" : "Hours PDF"}</Button>
         </div>
       </div>
+      {showPricing && payroll && (
+        <p data-testid="pay-totals" className="px-1 text-sm font-semibold">
+          To pay {formatCurrency(payroll.total_php, "PHP")} and {formatCurrency(payroll.total_usd, "USD")}
+          {parsedRate != null && `. Combined ${formatCurrency(n(payroll.total_php) + n(payroll.total_usd) * parsedRate, "PHP")}`}
+        </p>
+      )}
 
       {isLoading && <p className="text-sm text-muted-foreground">Computing payroll…</p>}
       {period === "custom" && (!dateFrom || !dateTo) && <p className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">Pick a From and To date to compute the custom period.</p>}
 
       {payroll && (<>
-        {/* KPIs */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard title="Payable Hours" value={`${payroll.total_hours ?? 0} hrs`} subtitle={`${payroll.vas.reduce((s, v) => s + v.entry_count, 0)} approved entries · ${payroll.vas.length} VA(s)`} />
-          {showPricing
-            ? <StatCard title="Total Pay Due" value={`${formatCurrency(payroll.total_php, "PHP")} + ${formatCurrency(payroll.total_usd, "USD")}`} subtitle="Across both currencies" className="border-primary/30" />
-            : <StatCard title="Tasks Completed" value={tasksDone} subtitle="Marked done in this period" />}
-          <StatCard title="Pending Approval" value={`${payroll.total_pending_hours ?? 0} hrs`} subtitle="Not payable until approved" className="border-amber-200/70" />
-          <StatCard title="Paid This Period" value={`${paidCount}/${payroll.vas.length}`} subtitle="VAs marked paid below" className="border-green-200/70" />
-        </div>
-
-        {n(payroll.total_pending_hours) > 0 && (
-          <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800"><AlertTriangle className="h-4 w-4 shrink-0" /> {payroll.total_pending_hours} hrs are still <b>submitted</b> and not counted in pay yet. <Link to="/admin/logs" className="font-bold underline">Approve them in Review logs</Link></p>
-        )}
-
-        {/* Charts row */}
-        <div className="grid gap-4 lg:grid-cols-3">
-          <Card className="min-w-0 lg:col-span-2"><CardHeader className="pb-2"><CardTitle>Team Hours by Day</CardTitle></CardHeader><CardContent>
-            <ResponsiveContainer width="100%" height={200}><BarChart data={teamDaily}><XAxis dataKey="label" tick={{ fontSize: 10 }} interval={0} /><YAxis tick={{ fontSize: 10 }} width={30} /><Tooltip formatter={(v) => [`${v} hrs`, "Hours"]} /><Bar dataKey="hours" fill={chartColor} radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer>
-          </CardContent></Card>
-          <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Hours by Client</CardTitle></CardHeader><CardContent className="space-y-2.5">
-            {teamClients.map(c => { const pct = n(payroll.total_hours) ? (c.hours / n(payroll.total_hours)) * 100 : 0; return (
-              <div key={`${c.label}-${c.currency}`} className="text-xs"><div className="flex justify-between gap-2"><span className="truncate font-semibold">{c.label}</span><span className="whitespace-nowrap text-muted-foreground">{c.hours.toFixed(2)} hrs{showPricing ? ` · ${formatCurrency(c.pay, c.currency)}` : ""}</span></div>
-              <div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} /></div></div>) })}
-            {teamClients.length === 0 && <p className="text-xs text-muted-foreground">No approved hours in this period.</p>}
-          </CardContent></Card>
-        </div>
-
         {/* VA cards */}
         <div>
           <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Per person. Click a card for entries</p>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {payroll.vas.map(va => (
+            {[...payroll.vas].sort((a, b) => {
+              const rank = (va: PayrollVA) => va.is_paid ? 3 : va.timesheet_status === "submitted" ? 0 : va.timesheet_status === "reviewed" ? 1 : 2
+              return rank(a) - rank(b) || a.va_name.localeCompare(b.va_name)
+            }).map(va => (
               <div
                 key={va.va_id}
+                data-va={va.va_name}
                 className={cn(
                   "monday-card rounded-2xl border bg-card p-4",
                   openVa === va.va_id && "border-primary ring-2 ring-primary/25",
@@ -792,7 +765,7 @@ export function PayrollPage() {
                       <p className="text-2xl font-extrabold leading-none">{showPricing ? formatCurrency(va.total_pay, va.currency) : `${va.total_hours} hrs`}</p>
                       <p className="mt-1 text-[11px] font-semibold text-primary">{formatDate(payroll.period_start)} to {formatDate(payroll.period_end)}</p>
                       {showPricing && parsedRate && va.currency === "USD" && (
-                        <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
+                        <p data-testid="peso-equivalent" className="mt-0.5 text-xs font-semibold text-muted-foreground">
                           ≈ {formatCurrency(n(va.total_pay) * parsedRate, "PHP")}
                         </p>
                       )}
@@ -818,12 +791,11 @@ export function PayrollPage() {
                     )}
                   </div>
                 </button>
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div className="mt-3 grid grid-cols-2 gap-2">
                   <Button
                     type="button"
-                    size="sm"
                     variant="outline"
-                    className={cn("flex-1", openVa === va.va_id && "border-primary bg-primary/10")}
+                    className={cn("h-11 min-h-11 w-full", openVa === va.va_id && "border-primary bg-primary/10")}
                     aria-expanded={openVa === va.va_id}
                     aria-controls="va-week-detail"
                     aria-label={`View timesheet for ${va.va_name}`}
@@ -831,44 +803,48 @@ export function PayrollPage() {
                   >
                     <ClipboardCheck className="h-3.5 w-3.5" /> View timesheet
                   </Button>
-                  {va.timesheet_id && va.timesheet_status !== "reviewed" && (
+                  {va.timesheet_id && va.timesheet_status === "submitted" && va.va_id !== getAuthUser()?.vaId && (
                     <Button
-                      size="sm"
                       variant="gold"
-                      className="min-h-11 flex-1"
-                      onClick={() => setReviewTimesheetId(va.timesheet_id!)}
+                      className="h-11 min-h-11 w-full"
+                      disabled={approveSheet.isPending}
+                      aria-label={`Approve ${va.va_name}`}
+                      onClick={() => approveSheet.mutate(va.timesheet_id!)}
                     >
-                      <ClipboardCheck className="h-3.5 w-3.5" /> Review
+                      <ClipboardCheck className="h-3.5 w-3.5" /> Approve
                     </Button>
                   )}
-                  {va.timesheet_id && !va.is_paid && (va.timesheet_status === "submitted" || va.timesheet_status === "reviewed") && (
+                  {va.timesheet_id && !va.is_paid && (va.timesheet_status === "submitted" || va.timesheet_status === "reviewed") && va.va_id !== getAuthUser()?.vaId && (
                     <Button
                       type="button"
-                      size="sm"
                       variant="danger"
-                      className="min-h-11 flex-1"
-                      onClick={() => setReviewTimesheetId(va.timesheet_id!)}
+                      className="h-11 min-h-11 w-full"
+                      aria-label={`Return timesheet ${va.va_name}`}
+                      onClick={() => { setReturnNote(""); setReturnVa(va) }}
                     >
-                      Return for fixes
+                      Return timesheet
                     </Button>
                   )}
                   {isAdmin && !va.is_paid && canOfferPay(va) && (
                     <Button
-                      size="sm"
                       variant="success"
-                      className="flex-1"
+                      className="h-11 min-h-11 w-full"
                       disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
                       title={markPaidTitle(va)}
+                      aria-label={`Mark Paid ${va.va_name}`}
                       onClick={() => setPayReview(va)}
                     >
                       <Wallet className="h-3.5 w-3.5" /> Mark Paid
                     </Button>
                   )}
-                  {isAdmin && va.is_paid && va.run_id && <Button size="sm" variant="outline" className="flex-1" onClick={() => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) }}>Undo Paid</Button>}
+                  {isAdmin && !va.is_paid && canOfferPay(va) && va.timesheet_status !== "reviewed" && (
+                    <p className="col-span-2 text-[11px] text-muted-foreground">Approve first to mark paid</p>
+                  )}
+                  {isAdmin && va.is_paid && va.run_id && <Button variant="outline" className="h-11 min-h-11 w-full" onClick={() => { if (confirm(`Undo paid status for ${va.va_name}?`)) voidRun.mutate(va.run_id!) }}>Undo Paid</Button>}
                   {isAdmin && (
                     <Button
-                      size="sm"
                       variant="outline"
+                      className="h-11 min-h-11 w-full"
                       disabled={va.timesheet_status !== "reviewed"}
                       title={va.timesheet_status !== "reviewed" ? "Approve timesheet first" : "Payslip arranged per client"}
                       onClick={() => exportPdf(va.va_id)}
@@ -968,6 +944,58 @@ export function PayrollPage() {
           </Card>
           )
         })}
+
+        {pendingSheets.length > 0 && (
+          <div className="rounded-2xl border-2 border-amber-300 bg-amber-50/90 p-4 shadow-sm">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-800">Pending Approval</p>
+                <h2 className="font-display text-base font-bold text-amber-950">
+                  {pendingSheets.length} timesheet{pendingSheets.length === 1 ? "" : "s"} waiting for review
+                </h2>
+                <p className="text-xs text-amber-900/80">Every log is listed here, before Approve. Nothing to open or download. The payslip stays locked until approved.</p>
+              </div>
+            </div>
+            <div className="space-y-4">
+              {pendingSheets.map((s) => (
+                <TimesheetReviewPanel
+                  key={s.id}
+                  timesheetId={s.id}
+                  variant="inline"
+                  payPeriod={payroll ? { start: payroll.period_start, end: payroll.period_end } : undefined}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* KPIs */}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard title="Payable Hours" value={`${payroll.total_hours ?? 0} hrs`} subtitle={`${payroll.vas.reduce((s, v) => s + v.entry_count, 0)} approved entries · ${payroll.vas.length} VA(s)`} />
+          {showPricing
+            ? <StatCard title="Total Pay Due" value={`${formatCurrency(payroll.total_php, "PHP")} + ${formatCurrency(payroll.total_usd, "USD")}`} subtitle="Across both currencies" className="border-primary/30" />
+            : <StatCard title="Tasks Completed" value={tasksDone} subtitle="Marked done in this period" />}
+          <StatCard title="Pending Approval" value={`${payroll.total_pending_hours ?? 0} hrs`} subtitle="Not payable until approved" className="border-amber-200/70" />
+          <StatCard title="Paid This Period" value={`${paidCount}/${payroll.vas.length}`} subtitle="VAs marked paid below" className="border-green-200/70" />
+        </div>
+
+        {n(payroll.total_pending_hours) > 0 && (
+          <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-800"><AlertTriangle className="h-4 w-4 shrink-0" /> {payroll.total_pending_hours} hrs are still <b>submitted</b> and not counted in pay yet. <Link to="/admin/logs" className="font-bold underline">Approve them in Review logs</Link></p>
+        )}
+
+        {/* Charts row */}
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Card className="min-w-0 lg:col-span-2"><CardHeader className="pb-2"><CardTitle>Team Hours by Day</CardTitle></CardHeader><CardContent>
+            <ResponsiveContainer width="100%" height={200}><BarChart data={teamDaily}><XAxis dataKey="label" tick={{ fontSize: 10 }} interval={0} /><YAxis tick={{ fontSize: 10 }} width={30} /><Tooltip formatter={(v) => [`${v} hrs`, "Hours"]} /><Bar dataKey="hours" fill={chartColor} radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer>
+          </CardContent></Card>
+          <Card className="min-w-0"><CardHeader className="pb-2"><CardTitle>Hours by Client</CardTitle></CardHeader><CardContent className="space-y-2.5">
+            {teamClients.map(c => { const pct = n(payroll.total_hours) ? (c.hours / n(payroll.total_hours)) * 100 : 0; return (
+              <div key={`${c.label}-${c.currency}`} className="text-xs"><div className="flex justify-between gap-2"><span className="truncate font-semibold">{c.label}</span><span className="whitespace-nowrap text-muted-foreground">{c.hours.toFixed(2)} hrs{showPricing ? ` · ${formatCurrency(c.pay, c.currency)}` : ""}</span></div>
+              <div className="mt-1 h-2 rounded-full bg-slate-100"><div className="h-2 rounded-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} /></div></div>) })}
+            {teamClients.length === 0 && <p className="text-xs text-muted-foreground">No approved hours in this period.</p>}
+          </CardContent></Card>
+        </div>
+
 
         {/* Payment history — admin only (amounts) */}
         {isAdmin && <Card>
@@ -1081,6 +1109,56 @@ export function PayrollPage() {
                 <Wallet className="h-3.5 w-3.5" /> Confirm &amp; mark paid
               </Button>
               <Button variant="outline" onClick={() => setPayReview(null)}>Back</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {returnVa && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" onClick={() => setReturnVa(null)}>
+          <div
+            role="dialog"
+            aria-label={`Return timesheet ${returnVa.va_name}`}
+            data-testid="return-sheet"
+            className="w-full max-w-md rounded-t-2xl bg-card p-5 shadow-xl sm:rounded-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-primary">Return for fixes</p>
+            <h2 className="font-display text-lg font-bold">{returnVa.va_name}</h2>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {["Missing entries", "Wrong hours", "Add task details", "Please fix and resubmit"].map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  aria-pressed={returnNote === item}
+                  className={cn(
+                    "min-h-11 rounded-full border px-3 text-xs font-semibold",
+                    returnNote === item ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-muted/60",
+                  )}
+                  onClick={() => setReturnNote(item)}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+            <label className="mt-3 block text-[11px] font-medium" htmlFor="return-note">Note for the VA (optional)</label>
+            <textarea
+              id="return-note"
+              value={returnNote}
+              onChange={(e) => setReturnNote(e.target.value)}
+              rows={2}
+              className="mt-1 min-h-11 w-full rounded-xl border bg-card px-3 py-2 text-base"
+            />
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Button
+                variant="danger"
+                className="h-11 min-h-11 w-full"
+                disabled={returnSheet.isPending || !returnNote.trim() || !returnVa.timesheet_id}
+                onClick={() => returnVa.timesheet_id && returnSheet.mutate({ id: returnVa.timesheet_id, reason: returnNote.trim() })}
+              >
+                {returnSheet.isPending ? "Sending" : "Send back"}
+              </Button>
+              <Button variant="outline" className="h-11 min-h-11 w-full" onClick={() => setReturnVa(null)}>Cancel</Button>
             </div>
           </div>
         </div>

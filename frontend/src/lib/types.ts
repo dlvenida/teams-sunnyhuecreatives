@@ -535,25 +535,53 @@ export interface UserReport {
   updated_at?: string | null
 }
 
+export interface ClientMoney {
+  usd: string
+  php: string
+  combined_usd?: string | null
+  combined_php?: string | null
+}
+export interface ClientVaMoney {
+  va_id: string
+  va_name: string
+  currency: string
+  hours: string
+  va_pay?: string | null
+  va_pay_usd?: string | null
+  va_pay_php?: string | null
+  unpaid_usd?: string | null
+  unpaid_php?: string | null
+  logs: number
+}
 export interface ClientFinancials {
   since?: string | null
   total_hours: string
-  total_earned: string
-  total_collected: string
-  total_outstanding: string
-  va_earned: string
-  net: string
-  net_collected: string
+  total_earned: ClientMoney | null
+  total_collected: ClientMoney | null
+  total_outstanding: ClientMoney | null
+  va_earned: ClientMoney | null
+  va_unpaid?: ClientMoney | null
+  net: ClientMoney | null
+  net_collected: ClientMoney | null
   profit_margin_pct?: number | null
+  rate_label?: string | null
   invoices_count: number
   invoices_paid: number
   invoices_unpaid_count: number
-  by_va: { va_id: string; va_name: string; currency: string; hours: string; va_pay: string; logs: number }[]
+  by_va: ClientVaMoney[]
 }
 export interface ClientFinancialRow {
   client_id: string; client_name: string; is_active: boolean; created_at?: string | null
-  total_hours: string; total_earned: string; total_collected: string; total_outstanding: string
-  va_earned: string; net: string; net_collected: string; invoices_count: number
+  total_hours: string
+  total_earned: ClientMoney
+  total_collected: ClientMoney
+  total_outstanding: ClientMoney
+  va_earned: ClientMoney
+  va_unpaid?: ClientMoney
+  net: ClientMoney
+  net_collected: ClientMoney
+  rate_label?: string | null
+  invoices_count: number
 }
 
 export interface UserDetail {

@@ -2,11 +2,11 @@ import { useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
-import type { Client, ClientDetail, ClientFinancialRow, ClientTeamMember, SubClient, VA } from "@/lib/types"
+import type { Client, ClientDetail, ClientFinancialRow, ClientMoney, ClientTeamMember, ClientVaMoney, SubClient, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { cn, formatCurrency, formatDate } from "@/lib/utils"
+import { cn, formatCurrency, formatDate, formatStatementMoney } from "@/lib/utils"
 import { TASK_STATUSES, PRIORITY_META } from "@/components/tasks/task-utils"
 import {
   Archive,
@@ -42,6 +42,47 @@ interface SubClientForm {
 
 const emptyClient: ClientForm = { name: "", billing_type: "hourly", default_rate: "" }
 const emptySub: SubClientForm = { client_id: "", name: "" }
+
+function recordedLine(money: ClientMoney | null | undefined) {
+  if (!money) return "—"
+  const usd = Number(money.usd)
+  const php = Number(money.php)
+  const parts: string[] = []
+  if (usd !== 0 || php === 0) parts.push(formatStatementMoney(money.usd, "USD"))
+  if (php !== 0) parts.push(formatStatementMoney(money.php, "PHP"))
+  return parts.join(" + ")
+}
+
+function aboutLine(money: ClientMoney | null | undefined) {
+  if (!money?.combined_usd || !money?.combined_php) return ""
+  if (Number(money.usd) === 0 && Number(money.php) === 0) return ""
+  return `About ${formatStatementMoney(money.combined_usd, "USD")} / ${formatStatementMoney(money.combined_php, "PHP")}`
+}
+
+function moneyIsNegative(money: ClientMoney | null | undefined) {
+  if (!money) return false
+  if (money.combined_usd != null && money.combined_usd !== "") return Number(money.combined_usd) < 0
+  const usd = Number(money.usd)
+  const php = Number(money.php)
+  if (usd === 0) return php < 0
+  if (php === 0) return usd < 0
+  if ((usd > 0) !== (php > 0)) return false
+  return usd < 0
+}
+
+function unpaidLine(money: ClientMoney | null | undefined) {
+  if (!money || (Number(money.usd) === 0 && Number(money.php) === 0)) return ""
+  return `${recordedLine(money)} not yet paid`
+}
+
+function vaRecorded(person: ClientVaMoney) {
+  return recordedLine({
+    usd: person.va_pay_usd ?? (person.currency === "PHP" ? "0.00" : person.va_pay || "0.00"),
+    php: person.va_pay_php ?? (person.currency === "PHP" ? person.va_pay || "0.00" : "0.00"),
+    combined_usd: null,
+    combined_php: null,
+  })
+}
 
 export function ClientsPage() {
   const authUser = getAuthUser()
@@ -385,6 +426,11 @@ export function ClientsPage() {
 
       {tab === "clients" ? (
         <div className="overflow-x-auto rounded-xl border bg-card">
+          {isAdmin && financials.some((row) => row.rate_label) && (
+            <p className="px-3 pt-2 text-[10px] text-muted-foreground">
+              {[...new Set(financials.map((row) => row.rate_label).filter(Boolean))].join(" ")}
+            </p>
+          )}
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b bg-muted/40 text-left text-muted-foreground">
@@ -411,9 +457,9 @@ export function ClientsPage() {
                     {showPricing && <td className="p-3">{c.default_rate || "—"}</td>}
                     {isAdmin && (() => { const f = financialMap[c.id]; return (<>
                       <td className="p-3 font-semibold">{f ? `${Number(f.total_hours).toFixed(1)} hrs` : "—"}</td>
-                      <td className="p-3">{f ? formatCurrency(f.total_earned) : "—"}</td>
-                      <td className="p-3">{f ? formatCurrency(f.va_earned) : "—"}</td>
-                      <td className={cn("p-3 font-bold", f && parseFloat(f.net) < 0 ? "text-red-600" : "text-green-700")}>{f ? formatCurrency(f.net) : "—"}</td>
+                      <td className="p-3"><div>{f ? recordedLine(f.total_earned) : "—"}</div>{f && aboutLine(f.total_earned) ? <div className="text-[10px] text-muted-foreground">{aboutLine(f.total_earned)}</div> : null}</td>
+                      <td className="p-3"><div>{f ? recordedLine(f.va_earned) : "—"}</div>{f && aboutLine(f.va_earned) ? <div className="text-[10px] text-muted-foreground">{aboutLine(f.va_earned)}</div> : null}{f && unpaidLine(f.va_unpaid) ? <div className="text-[10px] text-muted-foreground">{unpaidLine(f.va_unpaid)}</div> : null}</td>
+                      <td className={cn("p-3 font-bold", f && moneyIsNegative(f.net) ? "text-red-600" : "text-green-700")}><div>{f ? recordedLine(f.net) : "—"}</div>{f && aboutLine(f.net) ? <div className="text-[10px] font-normal text-muted-foreground">{aboutLine(f.net)}</div> : null}</td>
                     </>) })()}
                     <td className="p-3">
                       {c.approval_status === "pending" ? (
@@ -602,8 +648,20 @@ export function ClientsPage() {
                         <p className="text-[11px] text-muted-foreground">Since client created{detail.financials.since ? ` · ${formatDate(detail.financials.since.slice(0, 10))}` : ""}</p>
                       </div>
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                        {[["Total Hours Spent", `${Number(detail.financials.total_hours).toFixed(1)} hrs`, "Approved + invoiced work"], ["Total Earned", formatCurrency(detail.financials.total_earned), `${detail.financials.invoices_count} invoice(s) billed`], ["Collected", formatCurrency(detail.financials.total_collected), `${formatCurrency(detail.financials.total_outstanding)} outstanding`], ["Virtual Assistant Earned", formatCurrency(detail.financials.va_earned), "VA pay on billable logs"], ["Net (Earned − VA)", formatCurrency(detail.financials.net), detail.financials.profit_margin_pct != null ? `${detail.financials.profit_margin_pct}% margin` : "—"], ["Net Collected", formatCurrency(detail.financials.net_collected), "Collected − VA earned"]].map(([t, v, s]) => (
-                          <div key={t} className="rounded-xl border bg-card p-3"><p className="text-[11px] font-semibold text-muted-foreground">{t}</p><p className={cn("mt-1 text-base font-extrabold leading-none", t.startsWith("Net") && parseFloat(t.startsWith("Net (") ? detail.financials!.net : detail.financials!.net_collected) < 0 ? "text-red-600" : "")}>{v}</p><p className="mt-1 text-[11px] text-muted-foreground">{s}</p></div>
+                        {([
+                          ["Total Hours Spent", `${Number(detail.financials.total_hours).toFixed(1)} hrs`, "", "Approved + invoiced work"],
+                          ["Total Earned", recordedLine(detail.financials.total_earned), aboutLine(detail.financials.total_earned), "Invoices plus earnings you added"],
+                          ["Collected", recordedLine(detail.financials.total_collected), aboutLine(detail.financials.total_collected), `${recordedLine(detail.financials.total_outstanding)} outstanding`],
+                          ["Virtual Assistant Earned", recordedLine(detail.financials.va_earned), [aboutLine(detail.financials.va_earned), unpaidLine(detail.financials.va_unpaid)].filter(Boolean).join(" · "), "VA pay on billable logs"],
+                          ["Net (Earned − VA)", recordedLine(detail.financials.net), aboutLine(detail.financials.net), detail.financials.profit_margin_pct != null ? `${detail.financials.profit_margin_pct}% margin` : "—"],
+                          ["Net Collected", recordedLine(detail.financials.net_collected), aboutLine(detail.financials.net_collected), "Collected − VA earned"],
+                        ] as const).map(([t, v, extra, s]) => (
+                          <div key={t} className="rounded-xl border bg-card p-3">
+                            <p className="text-[11px] font-semibold text-muted-foreground">{t}</p>
+                            <p className={cn("mt-1 text-base font-extrabold leading-tight", t.startsWith("Net") && moneyIsNegative(t.startsWith("Net (") ? detail.financials!.net : detail.financials!.net_collected) ? "text-red-600" : "")}>{v}</p>
+                            {extra ? <p className="mt-1 text-[10px] text-muted-foreground">{extra}</p> : null}
+                            <p className="mt-1 text-[11px] text-muted-foreground">{s}</p>
+                          </div>
                         ))}
                       </div>
                       {detail.financials.by_va.length > 0 && (
@@ -611,12 +669,13 @@ export function ClientsPage() {
                           <table className="w-full text-xs">
                             <thead><tr className="border-b bg-muted/40 text-left text-muted-foreground"><th className="p-2.5">Virtual Assistant</th><th className="p-2.5">Hours</th><th className="p-2.5">VA Earned</th><th className="p-2.5">Logs</th></tr></thead>
                             <tbody>{detail.financials.by_va.map((v) => (
-                              <tr key={v.va_id} className="border-b last:border-0"><td className="p-2.5 font-semibold">{v.va_name}</td><td className="p-2.5">{Number(v.hours).toFixed(1)} hrs</td><td className="p-2.5">{formatCurrency(v.va_pay, v.currency === "PHP" ? "PHP" : "USD")}{v.currency ? ` (${v.currency})` : ""}</td><td className="p-2.5">{v.logs}</td></tr>
+                              <tr key={v.va_id} className="border-b last:border-0"><td className="p-2.5 font-semibold">{v.va_name}</td><td className="p-2.5">{Number(v.hours).toFixed(1)} hrs</td><td className="p-2.5">{v.va_pay == null ? "—" : vaRecorded(v)}{v.currency ? ` (${v.currency})` : ""}{Number(v.unpaid_usd || 0) !== 0 || Number(v.unpaid_php || 0) !== 0 ? <span className="block text-[10px] text-muted-foreground">not yet paid</span> : null}</td><td className="p-2.5">{v.logs}</td></tr>
                             ))}</tbody>
                           </table>
                         </div>
                       )}
-                      <p className="mt-2 text-[10px] text-muted-foreground">Total Earned = all invoices billed for this client · VA Earned = pay stored on approved/invoiced time logs (in each VA's currency above) · Net = Total Earned − VA Earned.</p>
+                      <p className="mt-2 text-[10px] text-muted-foreground">Invoices plus earnings you added. VA Earned is what you actually paid, shared onto this client from each paid run. Approved logs that are not in a paid run are marked not yet paid. Net is Total Earned minus VA Earned.</p>
+                      {detail.financials.rate_label ? <p className="mt-1 text-[10px] text-muted-foreground">{detail.financials.rate_label}</p> : null}
                     </div>
                   </>)}
                   {/* Assigned VAs + per-client roles */}

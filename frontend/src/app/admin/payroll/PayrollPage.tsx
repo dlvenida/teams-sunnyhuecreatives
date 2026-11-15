@@ -357,10 +357,15 @@ export function PayrollPage() {
   const [returnVa, setReturnVa] = useState<PayrollVA | null>(null)
   const [returnNote, setReturnNote] = useState("")
   const [payReview, setPayReview] = useState<PayrollVA | null>(null)
+  const [paydayRate, setPaydayRate] = useState("")
   const [usdPhpRate, setUsdPhpRate] = useState("")
   const rateHydrated = useRef(false)
   const rateTimer = useRef<number | null>(null)
   const parsedRate = parseUsdPhpRate(usdPhpRate)
+  const openPayReview = (va: PayrollVA) => {
+    setPaydayRate(usdPhpRate)
+    setPayReview(va)
+  }
 
   const { data: vas = [] } = useQuery({ queryKey: ["vas"], queryFn: () => apiFetch<VA[]>("/vas") })
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: () => apiFetch<Settings>("/settings") })
@@ -832,7 +837,7 @@ export function PayrollPage() {
                       disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
                       title={markPaidTitle(va)}
                       aria-label={`Mark Paid ${va.va_name}`}
-                      onClick={() => setPayReview(va)}
+                      onClick={() => openPayReview(va)}
                     >
                       <Wallet className="h-3.5 w-3.5" /> Mark Paid
                     </Button>
@@ -926,7 +931,7 @@ export function PayrollPage() {
                     variant="success"
                     disabled={markPaid.isPending || va.timesheet_status !== "reviewed"}
                     title={markPaidTitle(va)}
-                    onClick={() => setPayReview(va)}
+                    onClick={() => openPayReview(va)}
                   >
                     <Wallet className="h-3.5 w-3.5" /> Mark Paid
                   </Button>
@@ -1081,6 +1086,20 @@ export function PayrollPage() {
             <p className="text-right text-[11px] text-muted-foreground">
               Grand total {buildPayslip(payReview, payroll.period_start, payroll.period_end, settings).totalHours.toFixed(2)} hrs
             </p>
+            <div className="mt-3">
+              <Label className="text-[10px]" htmlFor="payday-rate">Payday exchange rate (USD to PHP)</Label>
+              <Input
+                id="payday-rate"
+                aria-label="Payday exchange rate (USD to PHP)"
+                type="number"
+                step="0.01"
+                min="0"
+                value={paydayRate}
+                onChange={(e) => setPaydayRate(e.target.value)}
+                className="h-9"
+              />
+              <p className="mt-1 text-[10px] text-muted-foreground">Saved with this payday. Earnings converts this pay between USD and PHP with it.</p>
+            </div>
             <div className="mt-4 flex gap-2">
               <Button
                 variant="success"
@@ -1100,7 +1119,7 @@ export function PayrollPage() {
                       total_pay: slip.totalPay,
                       currency: payReview.currency,
                       method: payReview.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer",
-                      usd_php_rate: parsedRate,
+                      usd_php_rate: parseUsdPhpRate(paydayRate),
                     })
                     setPayReview(null)
                   })()

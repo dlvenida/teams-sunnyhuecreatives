@@ -29,7 +29,7 @@ from app.models import (
     WorkLog,
     WorkLogStatus,
 )
-from app.services.owner_finance import MoneySplit, combine, currency_code, pack_money, quantize_money
+from app.services.owner_finance import MoneySplit, build_owner_totals, combine, currency_code, pack_money, quantize_money
 from app.routers.work_logs import _serialize_log
 from app.schemas import DashboardSummary
 from app.services.billing import get_week_period
@@ -567,9 +567,7 @@ def owner_finance(
         .all()
     )
     # paid_at is what left the business in this date range.
-    va_pay = MoneySplit()
-    for run in runs:
-        va_pay.add(run.total_pay, run.currency)
+    # Each run keeps its recorded currency. A saved payday rate converts that run.
 
     expenses = (
         db.query(BusinessExpense)
@@ -581,9 +579,7 @@ def owner_finance(
     for expense in expenses:
         expense_money.add(expense.amount, expense.currency)
 
-    net = MoneySplit()
-    net.usd = earned.usd - va_pay.usd - expense_money.usd
-    net.php = earned.php - va_pay.php - expense_money.php
+    totals = build_owner_totals(earned, expense_money, runs, rate)
 
     client_rows = []
     for row in by_client.values():
@@ -613,9 +609,12 @@ def owner_finance(
         "period_end": str(date_to),
         "usd_php_rate": str(rate) if rate else None,
         "earned": pack_money(earned, rate),
-        "va_payroll": pack_money(va_pay, rate),
-        "expense_totals": pack_money(expense_money, rate),
-        "net": pack_money(net, rate),
+        "va_payroll": totals["va_payroll"],
+        "business_expenses": totals["business_expenses"],
+        "expense_totals": totals["expense_totals"],
+        "net": totals["net"],
+        "needs_rate": totals["needs_rate"],
+        "rate_hint": totals["rate_hint"],
         "by_client": client_rows,
         "manual_earnings": [
             {

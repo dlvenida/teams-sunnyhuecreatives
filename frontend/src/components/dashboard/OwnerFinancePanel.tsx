@@ -43,8 +43,11 @@ type OwnerFinance = {
   usd_php_rate: string | null
   earned: MoneySide
   va_payroll: MoneySide
+  business_expenses?: MoneySide
   expense_totals: MoneySide
   net: MoneySide
+  needs_rate?: boolean
+  rate_hint?: string | null
   by_client: ByClient[]
   manual_earnings: ManualEarningRow[]
   expenses: { id: string; expense_date: string; description: string; amount: string; currency: string }[]
@@ -105,6 +108,10 @@ function MoneyFigures({
   const usdOn = hasAmount(money.usd)
   const phpOn = hasAmount(money.php)
   const mixed = usdOn && phpOn
+  const recordedConflicts = mixed && (Number(money.usd) >= 0) !== (Number(money.php) >= 0)
+  const recordedMatchesCombined = rateOn
+    && Math.abs(Number(money.usd) - Number(money.combined_usd)) < 0.02
+    && Math.abs(Number(money.php) - Number(money.combined_php)) < 0.02
   const primary = compact ? "text-sm font-extrabold" : "text-2xl font-extrabold leading-none tracking-tight"
   const secondary = compact ? "text-xs font-extrabold" : "mt-1 text-lg font-extrabold leading-none tracking-tight"
   if (rateOn) {
@@ -112,7 +119,7 @@ function MoneyFigures({
       <div className={tone}>
         <p className={primary}>{formatCurrency(money.combined_usd, "USD")}</p>
         <p className={secondary}>{formatCurrency(money.combined_php, "PHP")}</p>
-        {mixed && (
+        {mixed && !recordedConflicts && !recordedMatchesCombined && (
           <p className="mt-1 text-[10px] font-medium text-muted-foreground">
             Recorded {formatCurrency(money.usd, "USD")} · {formatCurrency(money.php, "PHP")}
           </p>
@@ -305,7 +312,12 @@ export function OwnerFinancePanel() {
   const earned = financeSide(data, "earned")
   const vaPayroll = financeSide(data, "va_payroll")
   const expenseTotals = financeSide(data, "expense_totals")
+  const businessExpenses = data?.business_expenses
+    ? asMoneySide(data.business_expenses)
+    : asMoneySide({ usd: expenseTotals.usd, php: expenseTotals.php })
   const net = financeSide(data, "net")
+  const netReady = net.combined_usd != null && net.combined_php != null
+  const netConflicts = !netReady && hasAmount(net.usd) && hasAmount(net.php) && (Number(net.usd) >= 0) !== (Number(net.php) >= 0)
   const manualRows = data?.manual_earnings ?? []
   const expenseRows = data?.expenses ?? []
   const clientRows = data?.by_client ?? []
@@ -316,10 +328,9 @@ export function OwnerFinancePanel() {
       ? Number(net.combined_usd) >= 0
       : Number(net.usd) >= 0 && Number(net.php) >= 0
 
+  const stillSeparate = (side: MoneySide) => side.combined_usd == null && sideHasBoth(side)
   const mixedWithoutRate = !!data && !data.usd_php_rate && (
-    sideHasBoth(earned) || sideHasBoth(vaPayroll) || sideHasBoth(expenseTotals) || sideHasBoth(net)
-    || ((hasAmount(earned.usd) || hasAmount(vaPayroll.usd) || hasAmount(expenseTotals.usd))
-      && (hasAmount(earned.php) || hasAmount(vaPayroll.php) || hasAmount(expenseTotals.php)))
+    stillSeparate(earned) || stillSeparate(businessExpenses) || stillSeparate(expenseTotals)
   )
 
   const bounds = rangeBounds(dateFrom, dateTo)
@@ -395,6 +406,9 @@ export function OwnerFinancePanel() {
           This range has both USD and PHP. Enter a rate above to turn them into one total in dollars and one total in pesos.
         </p>
       )}
+      {data?.needs_rate && data.rate_hint && (
+        <p className="text-xs text-muted-foreground">{data.rate_hint}</p>
+      )}
       {data?.usd_php_rate && (
         <p className="text-xs text-muted-foreground">
           Each total below is the same money in USD and in PHP, using 1 USD = {data.usd_php_rate} PHP. Recorded lines are the original amounts.
@@ -412,8 +426,8 @@ export function OwnerFinancePanel() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[
               { label: "Total Earned", hint: data.usd_php_rate ? "Combined for these dates" : "Invoices and manual entries", side: earned, tone: "" },
-              { label: "Total Paid to VAs", hint: `${data.va_runs_count ?? 0} payroll run(s)`, side: vaPayroll, tone: "" },
-              { label: "Total Expenses", hint: "Tools and misc", side: expenseTotals, tone: "" },
+              { label: "Total Paid to VAs", hint: `${data.va_runs_count ?? 0} payroll run(s)${vaPayroll.combined_usd != null ? " · payday rates applied" : ""}`, side: vaPayroll, tone: "" },
+              { label: "Total Expenses", hint: "VA pay, tools, and misc", side: expenseTotals, tone: "" },
               {
                 label: "Net Profit",
                 hint: "After VA pay and expenses",
@@ -425,7 +439,11 @@ export function OwnerFinancePanel() {
                 <CardContent className="p-4">
                   <p className="text-[11px] font-medium text-muted-foreground">{s.label}</p>
                   <div className="mt-1">
-                    <MoneyFigures side={s.side} tone={s.tone} />
+                    {s.label === "Net Profit" && !netReady && (data.needs_rate || netConflicts) ? (
+                      <p className="text-xs text-muted-foreground">{data.rate_hint || "Enter a USD to PHP rate to see one net profit in dollars and pesos."}</p>
+                    ) : (
+                      <MoneyFigures side={s.side} tone={s.tone} />
+                    )}
                   </div>
                   <p className="mt-1 text-[10px] text-muted-foreground">{s.hint}</p>
                 </CardContent>
@@ -629,12 +647,16 @@ export function OwnerFinancePanel() {
                     </div>
                   ))}
                 </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Period total expenses: <b>{moneySummary(expenseTotals)}</b>
-                  {data.usd_php_rate && sideHasBoth(expenseTotals) && (
-                    <> · recorded {formatCurrency(expenseTotals.usd, "USD")} · {formatCurrency(expenseTotals.php, "PHP")}</>
-                  )}
-                </p>
+                <div data-testid="expense-breakdown" className="space-y-1 text-[11px] text-muted-foreground">
+                  <p>
+                    Period total expenses: <b>{moneySummary(expenseTotals)}</b>
+                    {data.usd_php_rate && sideHasBoth(expenseTotals) && (
+                      <> · recorded {formatCurrency(expenseTotals.usd, "USD")} · {formatCurrency(expenseTotals.php, "PHP")}</>
+                    )}
+                  </p>
+                  <p>VA pay: <b>{moneySummary(vaPayroll)}</b></p>
+                  <p>Business expenses: <b>{moneySummary(businessExpenses)}</b></p>
+                </div>
               </CardContent>
             </Card>
           </div>

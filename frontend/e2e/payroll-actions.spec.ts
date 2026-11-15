@@ -50,6 +50,7 @@ function payrollBody(vas: FixtureVa[], showMoney: boolean) {
 async function installApi(page: Page, role: "admin" | "auditor") {
   const vas = seed()
   const rejected = { id: "", reason: "" }
+  const posted: Record<string, unknown>[] = []
   const showMoney = role === "admin"
   await page.addInitScript((user) => {
     localStorage.setItem("access_token", "test-access")
@@ -92,6 +93,7 @@ async function installApi(page: Page, role: "admin" | "auditor") {
     if (path === "/payroll/runs" && method === "GET") return json([])
     if (path === "/payroll/runs" && method === "POST") {
       const body = request.postDataJSON() as { va_id: string }
+      posted.push(body)
       const person = vas.find((item) => item.va_id === body.va_id)
       if (person) person.is_paid = true
       return json({ id: "run-1" })
@@ -118,7 +120,7 @@ async function installApi(page: Page, role: "admin" | "auditor") {
     }
     return json({})
   })
-  return rejected
+  return { rejected, posted }
 }
 
 async function expectNoPageScroll(page: Page) {
@@ -130,7 +132,7 @@ async function expectNoPageScroll(page: Page) {
 }
 
 test("admin can pick a VA and see the peso rate beside the period", async ({ page }, testInfo) => {
-  const rejected = await installApi(page, "admin")
+  const { rejected, posted } = await installApi(page, "admin")
   await page.goto("/admin/payroll")
   await expect(page.getByRole("heading", { name: "Timesheets & pay" })).toBeVisible()
   await expect(page.getByRole("button", { name: "1st – 15th" })).toBeVisible()
@@ -167,8 +169,18 @@ test("admin can pick a VA and see the peso rate beside the period", async ({ pag
   await myra.getByRole("button", { name: "Approve Myra" }).click()
   await expect(myra.getByRole("button", { name: "Mark Paid Myra" })).toBeEnabled()
   await myra.getByRole("button", { name: "Mark Paid Myra" }).click()
+  const payday = page.getByLabel("Payday exchange rate (USD to PHP)")
+  await expect(payday).toHaveValue("58.00")
+  await page.screenshot({ path: `/opt/cursor/artifacts/payroll-mark-paid-${testInfo.project.name}.png`, fullPage: false })
   await page.getByRole("button", { name: "Confirm & mark paid" }).click()
   await expect(myra).toContainText("Paid")
+  expect(posted.at(-1)).toMatchObject({ va_id: "myra", currency: "PHP", total_pay: 12000, usd_php_rate: 58 })
+
+  await arby.getByRole("button", { name: "Mark Paid Arby" }).click()
+  await expect(payday).toHaveValue("58.00")
+  await payday.fill("63.92")
+  await page.getByRole("button", { name: "Confirm & mark paid" }).click()
+  expect(posted.at(-1)).toMatchObject({ va_id: "arby", currency: "PHP", usd_php_rate: 63.92 })
   if (testInfo.project.name === "mobile") {
     await page.screenshot({ path: "/opt/cursor/artifacts/payroll-admin-mobile-top.png", fullPage: false })
   }
@@ -188,6 +200,7 @@ test("project manager does not see the rate or pay", async ({ page }, testInfo) 
   await expect(page.getByRole("heading", { name: "Timesheet review" })).toBeVisible()
   await expect(page.getByLabel("Select VA")).toBeVisible()
   await expect(page.getByLabel("USD to PHP Rate")).toHaveCount(0)
+  await expect(page.getByLabel("Payday exchange rate (USD to PHP)")).toHaveCount(0)
   await expect(page.getByTestId("pay-totals")).toHaveCount(0)
   await expect(page.getByTestId("peso-equivalent")).toHaveCount(0)
   const gem = page.locator("[data-va=Gem]")

@@ -225,3 +225,205 @@ def build_owner_totals(earned: MoneySplit, business: MoneySplit, runs, page_rate
         "needs_rate": needs_rate,
         "rate_hint": hint,
     }
+
+
+def plain_text(value) -> str:
+    text = str(value or "")
+    for dash in ("\u2014", "\u2013", "\u2012"):
+        text = text.replace(dash, " ")
+    return " ".join(text.split())
+
+
+def period_phrase(start, end) -> str:
+    def piece(day) -> str:
+        label = f"{day.strftime('%b')} {day.day}"
+        if start.year != end.year:
+            label = f"{label}, {day.year}"
+        return label
+
+    return f"{piece(start)} to {piece(end)}"
+
+
+def _status_value(row) -> str:
+    status = getattr(row, "status", "")
+    return status.value if hasattr(status, "value") else str(status or "")
+
+
+def _paid_on(run):
+    paid = getattr(run, "paid_at", None)
+    if paid is None:
+        return getattr(run, "period_end", None)
+    if getattr(paid, "tzinfo", None) is not None:
+        from datetime import timezone
+        return paid.astimezone(timezone.utc).date()
+    return paid.date()
+
+
+def convert_amount(amount, currency, rate, display: str) -> tuple[Decimal | None, bool]:
+    """Amount in the statement currency. The second value is true when a rate was required."""
+    code = currency_code(currency)
+    value = quantize_money(Decimal(str(amount or 0)))
+    show = "PHP" if str(display or "PHP").upper() == "PHP" else "USD"
+    if code == show:
+        return value, False
+    chosen = usable_rate(rate)
+    if chosen is None:
+        return None, True
+    if show == "PHP":
+        return quantize_money(value * chosen), True
+    return quantize_money(value / chosen), True
+
+
+def _line(when, description, category, money_in, money_out, original_amount=None, original_currency=None) -> dict:
+    return {
+        "date": str(when),
+        "description": plain_text(description),
+        "category": category,
+        "money_in": None if money_in is None else str(quantize_money(money_in)),
+        "money_out": None if money_out is None else str(quantize_money(money_out)),
+        "balance": None,
+        "original_amount": None if original_amount is None else str(quantize_money(original_amount)),
+        "original_currency": original_currency,
+    }
+
+
+def _sum_field(lines, field: str, category: str | None = None) -> Decimal:
+    total = Decimal("0")
+    for line in lines:
+        if category is not None and line["category"] != category:
+            continue
+        raw = line[field]
+        if raw is None:
+            continue
+        total += Decimal(raw)
+    return quantize_money(total)
+
+
+def build_statement(invoices, manuals, runs, expenses, page_rate, display: str = "PHP") -> dict:
+    """Ledger lines are rounded once. Net profit is money in minus money out."""
+    show = "PHP" if str(display or "PHP").upper() == "PHP" else "USD"
+    page = usable_rate(page_rate)
+    earned = MoneySplit()
+    business = MoneySplit()
+    lines: list[dict] = []
+
+    for inv in invoices:
+        client = getattr(inv, "client", None)
+        name = plain_text(getattr(client, "name", None) or getattr(inv, "one_off_name", None) or "Client")
+        number = plain_text(getattr(inv, "invoice_number", "") or "")
+        paid = _status_value(inv) == "paid"
+        label = "Client payment" if paid else "Invoice issued"
+        description = f"{label}: {name} (Invoice #{number})" if number else f"{label}: {name}"
+        amount = getattr(inv, "amount", 0)
+        currency = getattr(inv, "currency", "USD")
+        earned.add(amount, currency)
+        converted, changed = convert_amount(amount, currency, page, show)
+        lines.append(_line(
+            getattr(inv, "issue_date"),
+            description,
+            "Income",
+            converted,
+            Decimal("0") if converted is not None else None,
+            amount if changed else None,
+            currency_code(currency) if changed else None,
+        ))
+
+    for item in manuals:
+        client = getattr(item, "client", None)
+        name = plain_text(getattr(client, "name", None) or "Client")
+        note = plain_text(getattr(item, "description", None) or "")
+        description = f"Manual earning: {name} {note}".strip()
+        amount = getattr(item, "amount", 0)
+        currency = getattr(item, "currency", "USD")
+        earned.add(amount, currency)
+        converted, changed = convert_amount(amount, currency, page, show)
+        lines.append(_line(
+            getattr(item, "earned_date"),
+            description,
+            "Income",
+            converted,
+            Decimal("0") if converted is not None else None,
+            amount if changed else None,
+            currency_code(currency) if changed else None,
+        ))
+
+    for expense in expenses:
+        amount = getattr(expense, "amount", 0)
+        currency = getattr(expense, "currency", "USD")
+        business.add(amount, currency)
+        converted, changed = convert_amount(amount, currency, page, show)
+        lines.append(_line(
+            getattr(expense, "expense_date"),
+            f"Business expense: {plain_text(getattr(expense, 'description', None) or 'Expense')}",
+            "Business expense",
+            Decimal("0") if converted is not None else None,
+            converted,
+            amount if changed else None,
+            currency_code(currency) if changed else None,
+        ))
+
+    for run in runs:
+        amount = getattr(run, "total_pay", 0)
+        currency = getattr(run, "currency", "PHP")
+        rate = usable_rate(getattr(run, "usd_php_rate", None)) or page
+        va = getattr(run, "va", None)
+        name = plain_text(getattr(va, "name", None) or "VA")
+        start = getattr(run, "period_start", None)
+        end = getattr(run, "period_end", None)
+        span = period_phrase(start, end) if start and end else "this period"
+        rate_bit = f" at {_rate_label(rate)} PHP/USD" if rate is not None else ""
+        converted, changed = convert_amount(amount, currency, rate, show)
+        lines.append(_line(
+            _paid_on(run),
+            f"VA pay: {name} ({span}){rate_bit}",
+            "VA pay",
+            Decimal("0") if converted is not None else None,
+            converted,
+            amount if changed else None,
+            currency_code(currency) if changed else None,
+        ))
+
+    lines.sort(key=lambda row: (
+        row["date"] or "",
+        {"Income": 0, "Business expense": 1, "VA pay": 2}.get(row["category"], 9),
+        row["description"],
+    ))
+
+    incomplete = any(line["money_in"] is None or line["money_out"] is None for line in lines)
+    totals = build_owner_totals(earned, business, runs, page)
+    if incomplete:
+        total_in = va_pay = business_total = total_out = net = None
+    else:
+        total_in = _sum_field(lines, "money_in")
+        total_out = _sum_field(lines, "money_out")
+        va_pay = _sum_field(lines, "money_out", "VA pay")
+        business_total = _sum_field(lines, "money_out", "Business expense")
+        net = quantize_money(total_in - total_out)
+
+    balance = Decimal("0.00")
+    for line in lines:
+        if incomplete:
+            line["balance"] = None
+            continue
+        balance = quantize_money(balance + Decimal(line["money_in"]) - Decimal(line["money_out"]))
+        line["balance"] = str(balance)
+
+    return {
+        "display_currency": show,
+        "usd_php_rate": str(page) if page else None,
+        "needs_rate": incomplete,
+        "rate_hint": totals["rate_hint"] if incomplete else None,
+        "opening_balance": "0.00",
+        "total_in": None if total_in is None else str(total_in),
+        "va_pay": None if va_pay is None else str(va_pay),
+        "business_expenses": None if business_total is None else str(business_total),
+        "total_out": None if total_out is None else str(total_out),
+        "net": None if net is None else str(net),
+        "lines": lines,
+    }
+
+
+def _rate_label(rate: Decimal | None) -> str:
+    if rate is None:
+        return ""
+    return f"{Decimal(rate).quantize(Decimal('0.01'))}"

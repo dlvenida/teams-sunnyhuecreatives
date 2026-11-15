@@ -35,7 +35,7 @@ def _policy(method: str, path: str) -> str | None:
         return "admin"
     if path in {"/va/earnings", "/va/payroll-history"} or path.startswith("/va/work-logs"):
         return "self"
-    if path.startswith("/invoices") or path.startswith("/expenses") or path.startswith("/manual-earnings") or path == "/dashboard/owner-finance":
+    if path.startswith("/invoices") or path.startswith("/expenses") or path.startswith("/manual-earnings") or path in {"/dashboard/owner-finance", "/dashboard/owner-statement"}:
         return "admin"
     if path == "/dashboard/summary":
         return "redacted"

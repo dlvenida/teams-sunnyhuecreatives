@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, get_current_user, require_admin, require_admin_or_auditor
-from app.services.client_money import client_financials_map, empty_financials
+from app.services.client_money import client_financials_map, client_money_report, empty_financials
 from app.services.pay_access import hide_team_money
 from app.models import (
     Client,
@@ -242,7 +242,8 @@ def clients_financials(
     db: Annotated[Session, Depends(get_db)],
 ):
     """ADMIN ONLY. Actual money per client, recalculated from saved records."""
-    money = client_financials_map(db)
+    report = client_money_report(db)
+    money = report["clients"]
     rows = []
     for client in db.query(Client).order_by(Client.name).all():
         block = money.get(client.id) or empty_financials()
@@ -253,7 +254,7 @@ def clients_financials(
             "created_at": client.created_at.isoformat() if client.created_at else None,
             **block,
         })
-    return rows
+    return {"clients": rows, "unassigned": report["unassigned"]}
 
 
 @router.get("/{client_id}/detail")

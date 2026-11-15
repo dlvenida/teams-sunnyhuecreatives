@@ -22,12 +22,12 @@ const financials = {
   is_active: true,
   created_at: "2024-03-01T00:00:00Z",
   total_hours: "6.00",
-  total_earned: money("100.00", "580.00", "110.00", "6380.00"),
+  total_earned: money("140.00", "580.00", "150.00", "8700.00"),
   total_collected: money("100.00", "580.00", "110.00", "6380.00"),
   total_outstanding: money("40.00", "0.00", "40.00", "2320.00"),
   va_earned: money("122.29", "1032.30", "140.09", "8353.94"),
   va_unpaid: money("0.00", "200.00", "3.45", "200.00"),
-  net: money("-22.29", "-452.30", "-30.09", "-1973.94"),
+  net: money("17.71", "-452.30", "9.91", "346.06"),
   net_collected: money("-22.29", "-452.30", "-30.09", "-1973.94"),
   profit_margin_pct: -27.4,
   rate_label: "Using each paid run's saved rate: 58.00 and 60.00 PHP per 1 USD. Confirmed payday rate: 58.00 PHP per 1 USD.",
@@ -101,7 +101,14 @@ async function installApi(page: Page, role: "admin" | "auditor") {
     }
     if (path === "/clients/financials") {
       if (role !== "admin") return json({ detail: "Admin access required" }, 403)
-      return json([financials])
+      return json({
+        clients: [financials],
+        unassigned: {
+          label: "not assigned to a client",
+          earned: money("0.00", "0.00", "0.00", "0.00"),
+          va_paid: money("0.00", "0.00", "0.00", "0.00"),
+        },
+      })
     }
     if (path === "/clients/sub-clients") return json([])
     if (path === "/clients/chef-1/detail") {
@@ -132,6 +139,11 @@ async function installApi(page: Page, role: "admin" | "auditor") {
 }
 
 test("admin sees each currency and the combined total", async ({ page }, testInfo) => {
+  const errors: string[] = []
+  page.on("console", (msg) => {
+    if (msg.type() === "error") errors.push(msg.text())
+  })
+  page.on("pageerror", (err) => errors.push(String(err)))
   await installApi(page, "admin")
   await page.goto("/admin/clients")
   await expect(page.getByRole("heading", { name: "Clients" })).toBeVisible()
@@ -141,6 +153,7 @@ test("admin sees each currency and the combined total", async ({ page }, testInf
   await expect(main.getByText("Net", { exact: true })).toBeVisible()
   const row = main.locator("tr", { hasText: "Chef Stephanie Tranchina" })
   await expect(row).toContainText("$122.29 + ₱1,032.30")
+  await expect(row).toContainText("$17.71 and -₱452.30")
   await expect(row).toContainText("About $140.09 / ₱8,353.94")
   await expect(page.getByText("$1,154.59")).toHaveCount(0)
   await expect(page.getByText("$1154.59")).toHaveCount(0)
@@ -152,7 +165,8 @@ test("admin sees each currency and the combined total", async ({ page }, testInf
   await expect(page.getByText("Lifetime financials · Admin only")).toBeVisible()
   await expect(page.getByText("Invoices plus earnings you added").first()).toBeVisible()
   await expect(page.getByText("Virtual Assistant Earned")).toBeVisible()
-  await expect(page.getByText("$100.00 + ₱580.00").first()).toBeVisible()
+  await expect(page.getByText("$140.00 + ₱580.00").first()).toBeVisible()
+  await expect(page.getByText("-$22.29 and -₱452.30").first()).toBeVisible()
   await expect(page.getByText("₱200.00 not yet paid").first()).toBeVisible()
   await expect(page.getByText("Using each paid run's saved rate: 58.00 and 60.00 PHP per 1 USD.").first()).toBeVisible()
   if (testInfo.project.name === "mobile") {
@@ -160,6 +174,7 @@ test("admin sees each currency and the combined total", async ({ page }, testInf
     await panel.getByText("Lifetime financials").scrollIntoViewIfNeeded()
     await panel.screenshot({ path: "/opt/cursor/artifacts/client-detail-mobile.png" })
   }
+  expect(errors.filter((line) => !line.includes("favicon"))).toEqual([])
 })
 
 test("project manager does not see client money", async ({ page }) => {

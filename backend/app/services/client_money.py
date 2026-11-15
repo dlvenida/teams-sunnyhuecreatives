@@ -16,6 +16,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
+    Client,
     Invoice,
     ManualEarning,
     PaydayRate,
@@ -27,7 +28,7 @@ from app.models import (
     WorkLog,
     WorkLogStatus,
 )
-from app.services.owner_finance import currency_code, quantize_money, usable_rate
+from app.services.owner_finance import _paid_on, currency_code, quantize_money, usable_rate
 
 PAYABLE = (WorkLogStatus.approved, WorkLogStatus.invoiced)
 
@@ -233,6 +234,7 @@ def empty_financials() -> dict:
         "total_collected": dict(zero),
         "total_outstanding": dict(zero),
         "va_earned": dict(zero),
+        "va_paid": dict(zero),
         "va_unpaid": dict(zero),
         "net": dict(zero),
         "net_collected": dict(zero),
@@ -246,21 +248,43 @@ def empty_financials() -> dict:
     }
 
 
-def client_financials_map(db: Session) -> dict[UUID, dict]:
-    """Lifetime actual money for every client. Safe to call on each page load."""
+def _covers(day, start, end) -> bool:
+    if start is None and end is None:
+        return True
+    if day is None:
+        return False
+    if start is not None and day < start:
+        return False
+    if end is not None and day > end:
+        return False
+    return True
+
+
+def client_financials_map(db: Session, date_from=None, date_to=None) -> dict[UUID, dict]:
+    return client_money_report(db, date_from, date_to)["clients"]
+
+
+def client_money_report(db: Session, date_from=None, date_to=None) -> dict:
+    """Client money, plus anything that could not be tied to a client.
+
+    With dates, invoices use issue date, manual earnings use their date, and
+    payroll uses the day it was marked paid. That is the same window as Earnings.
+    """
     confirmed = _latest_confirmed_rate(db)
-    runs = db.query(PayrollRun).all()
+    all_runs = db.query(PayrollRun).all()
+    runs = [run for run in all_runs if _covers(_paid_on(run), date_from, date_to)]
     va_names = {row.id: row for row in db.query(VA).all()}
+    known_clients = {row.id for row in db.query(Client.id).all()}
     logs = (
         db.query(WorkLog)
         .options(joinedload(WorkLog.va))
         .filter(WorkLog.status.in_(PAYABLE))
         .all()
     )
-    invoices = db.query(Invoice).filter(Invoice.client_id.isnot(None)).all()
+    invoices = db.query(Invoice).all()
     manuals = db.query(ManualEarning).all()
     package_clients = _package_clients(db)
-    assigned = _assign_logs(runs, logs)
+    assigned = _assign_logs(all_runs, logs)
 
     earned: dict[UUID, Side] = defaultdict(Side)
     collected: dict[UUID, Side] = defaultdict(Side)
@@ -273,6 +297,9 @@ def client_financials_map(db: Session) -> dict[UUID, dict]:
     run_rates: dict[UUID, set[Decimal]] = defaultdict(set)
     confirmed_used: dict[UUID, bool] = defaultdict(bool)
     by_va: dict[UUID, dict[UUID, dict]] = defaultdict(dict)
+    unassigned_earned = Side()
+    unassigned_va = Side()
+    unassigned_runs: list[dict] = []
 
     def va_row(client_id: UUID, log: WorkLog) -> dict:
         va = log.va
@@ -293,28 +320,41 @@ def client_financials_map(db: Session) -> dict[UUID, dict]:
         return row
 
     for invoice in invoices:
-        client_id = invoice.client_id
-        invoice_counts[client_id]["all"] += 1
+        if not _covers(invoice.issue_date, date_from, date_to):
+            continue
+        client_id = invoice.client_id if invoice.client_id in known_clients else None
         amount = invoice.amount
         currency = getattr(invoice, "currency", None) or "USD"
+        rate = confirmed
+        if client_id is None:
+            unassigned_earned.add(amount, currency, rate)
+            continue
+        invoice_counts[client_id]["all"] += 1
+        if rate is not None and quantize_money(Decimal(str(amount or 0))) != 0:
+            confirmed_used[client_id] = True
+        # Issued invoices count as earned, paid or not. That matches You earned.
+        earned[client_id].add(amount, currency, rate)
         if _paid(invoice.status):
             invoice_counts[client_id]["paid"] += 1
-            rate = confirmed
-            if rate is not None and quantize_money(Decimal(str(amount or 0))) != 0:
-                confirmed_used[client_id] = True
-            earned[client_id].add(amount, currency, rate)
             collected[client_id].add(amount, currency, rate)
         else:
             invoice_counts[client_id]["unpaid"] += 1
-            outstanding[client_id].add(amount, currency, confirmed)
+            outstanding[client_id].add(amount, currency, rate)
 
     for manual in manuals:
-        manual_counts[manual.client_id] += 1
+        if not _covers(manual.earned_date, date_from, date_to):
+            continue
+        client_id = manual.client_id if manual.client_id in known_clients else None
         rate = confirmed
-        if rate is not None and quantize_money(Decimal(str(manual.amount or 0))) != 0:
-            confirmed_used[manual.client_id] = True
-        earned[manual.client_id].add(manual.amount, manual.currency, rate)
-        collected[manual.client_id].add(manual.amount, manual.currency, rate)
+        amount = manual.amount
+        if client_id is None:
+            unassigned_earned.add(amount, manual.currency, rate)
+            continue
+        manual_counts[client_id] += 1
+        if rate is not None and quantize_money(Decimal(str(amount or 0))) != 0:
+            confirmed_used[client_id] = True
+        earned[client_id].add(amount, manual.currency, rate)
+        collected[client_id].add(amount, manual.currency, rate)
 
     logs_by_run: dict[UUID, list[WorkLog]] = defaultdict(list)
     for log in logs:
@@ -341,8 +381,14 @@ def client_financials_map(db: Session) -> dict[UUID, dict]:
         allocated = allocate_paid_amount(run.total_pay, shares, package_clients.get(run.va_id, set()))
         currency = run.currency
         va = va_names.get(run.va_id)
+        placed = Decimal("0")
         for client_id, amount in allocated.items():
-            if quantize_money(amount) == 0:
+            amount = quantize_money(amount)
+            if amount == 0:
+                continue
+            placed += amount
+            if client_id not in known_clients:
+                unassigned_va.add(amount, currency, rate)
                 continue
             if used_saved and rate is not None:
                 run_rates[client_id].add(quantize_money(rate))
@@ -367,9 +413,22 @@ def client_financials_map(db: Session) -> dict[UUID, dict]:
                 row["paid_php"] += amount
             else:
                 row["paid_usd"] += amount
+        gap = quantize_money(quantize_money(Decimal(str(run.total_pay or 0))) - placed)
+        if gap != 0:
+            unassigned_va.add(gap, currency, rate)
+            unassigned_runs.append({
+                "va_name": va.name if va else "VA",
+                "amount": str(gap),
+                "currency": currency_code(currency),
+                "label": "not assigned to a client",
+            })
 
     for log in logs:
         if log.id in assigned:
+            continue
+        if not _covers(_effective_day(log), date_from, date_to):
+            continue
+        if log.client_id not in known_clients:
             continue
         rate = confirmed
         if rate is not None and quantize_money(Decimal(str(log.va_pay or 0))) != 0:
@@ -416,6 +475,7 @@ def client_financials_map(db: Session) -> dict[UUID, dict]:
             "total_collected": _view(collected_side),
             "total_outstanding": _view(outstanding[client_id]),
             "va_earned": _view(va_side),
+            "va_paid": _view(va_paid[client_id]),
             "va_unpaid": _view(va_unpaid[client_id]),
             "net": _view(net_side),
             "net_collected": _view(net_collected),
@@ -427,4 +487,12 @@ def client_financials_map(db: Session) -> dict[UUID, dict]:
             "manual_count": manual_counts[client_id],
             "by_va": people,
         }
-    return out
+    return {
+        "clients": out,
+        "unassigned": {
+            "label": "not assigned to a client",
+            "earned": _view(unassigned_earned),
+            "va_paid": _view(unassigned_va),
+            "runs": unassigned_runs,
+        },
+    }

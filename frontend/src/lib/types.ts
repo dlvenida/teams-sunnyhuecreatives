@@ -570,6 +570,15 @@ export interface ClientFinancials {
   invoices_unpaid_count: number
   by_va: ClientVaMoney[]
 }
+export interface UnassignedClientMoney {
+  label: string
+  earned: ClientMoney
+  va_paid: ClientMoney
+}
+export interface ClientFinancialsPayload {
+  clients: ClientFinancialRow[]
+  unassigned?: UnassignedClientMoney | null
+}
 export interface ClientFinancialRow {
   client_id: string; client_name: string; is_active: boolean; created_at?: string | null
   total_hours: string

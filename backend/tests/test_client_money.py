@@ -29,7 +29,7 @@ from app.models import (
     WorkLog,
     WorkLogStatus,
 )
-from app.services.client_money import allocate_paid_amount
+from app.services.client_money import allocate_paid_amount, client_money_report
 
 
 def _auth(user):
@@ -58,6 +58,10 @@ class AllocatePaidAmountTests(unittest.TestCase):
         client_id = uuid4()
         allocated = allocate_paid_amount(Decimal("4200.00"), [], {client_id})
         self.assertEqual(allocated, {client_id: Decimal("4200.00")})
+
+    def test_zero_hours_and_no_package_does_not_divide(self):
+        allocated = allocate_paid_amount(Decimal("80.00"), [(uuid4(), Decimal("0"), Decimal("0"))], set())
+        self.assertEqual(allocated, {})
 
 
 class ClientFinancialApiTests(unittest.TestCase):
@@ -148,7 +152,7 @@ class ClientFinancialApiTests(unittest.TestCase):
         self.log_ids.append(row.id)
         return row
 
-    def _run(self, va, total, currency, rate, start=date(2026, 11, 1), end=date(2026, 11, 15)):
+    def _run(self, va, total, currency, rate, start=date(2026, 11, 1), end=date(2026, 11, 15), paid_at=None):
         row = PayrollRun(
             va_id=va.id,
             period_start=start,
@@ -157,7 +161,7 @@ class ClientFinancialApiTests(unittest.TestCase):
             total_pay=Decimal(total),
             currency=currency,
             usd_php_rate=None if rate is None else Decimal(rate),
-            paid_at=datetime(2026, 11, 16, 8, tzinfo=timezone.utc),
+            paid_at=paid_at or datetime(2026, 11, 16, 8, tzinfo=timezone.utc),
         )
         self.db.add(row)
         self.db.flush()
@@ -232,7 +236,9 @@ class ClientFinancialApiTests(unittest.TestCase):
     def _row(self, client_id):
         listed = self.client.get("/clients/financials", headers=_auth(self.admin))
         self.assertEqual(listed.status_code, 200, listed.text)
-        found = next(row for row in listed.json() if row["client_id"] == str(client_id))
+        body = listed.json()
+        rows = body["clients"] if isinstance(body, dict) else body
+        found = next(row for row in rows if row["client_id"] == str(client_id))
         detail = self.client.get(f"/clients/{client_id}/detail", headers=_auth(self.admin))
         self.assertEqual(detail.status_code, 200, detail.text)
         self.assertEqual(detail.json()["financials"]["va_earned"], found["va_earned"])
@@ -262,17 +268,24 @@ class ClientFinancialApiTests(unittest.TestCase):
         self.assertNotEqual(row["va_earned"]["usd"], "1154.59")
         self.assertEqual(row["va_earned"]["combined_usd"], "140.09")
         self.assertEqual(row["va_earned"]["combined_php"], "8353.94")
-        self.assertEqual(row["total_earned"]["usd"], "100.00")
+        self.assertEqual(row["total_earned"]["usd"], "140.00")
         self.assertEqual(row["total_earned"]["php"], "580.00")
-        self.assertEqual(row["total_collected"], row["total_earned"])
+        self.assertEqual(row["total_collected"]["usd"], "100.00")
+        self.assertEqual(row["total_collected"]["php"], "580.00")
         self.assertEqual(row["total_outstanding"]["usd"], "40.00")
         self.assertEqual(row["total_outstanding"]["php"], "0.00")
-        self.assertEqual(row["net"]["usd"], "-22.29")
+        self.assertEqual(row["net"]["usd"], "17.71")
         self.assertEqual(row["net"]["php"], "-452.30")
-        self.assertEqual(row["net"]["combined_usd"], "-30.09")
-        self.assertEqual(row["net"]["combined_php"], "-1973.94")
-        self.assertLess(Decimal(row["net"]["combined_usd"]), 0)
-        self.assertLess(Decimal(row["net"]["combined_php"]), 0)
+        self.assertEqual(row["net"]["combined_usd"], "9.91")
+        self.assertEqual(row["net"]["combined_php"], "346.06")
+        self.assertEqual(row["net_collected"]["usd"], "-22.29")
+        self.assertEqual(row["net_collected"]["php"], "-452.30")
+        self.assertEqual(row["net_collected"]["combined_usd"], "-30.09")
+        self.assertEqual(row["net_collected"]["combined_php"], "-1973.94")
+        self.assertGreater(Decimal(row["net"]["combined_usd"]), 0)
+        self.assertGreater(Decimal(row["net"]["combined_php"]), 0)
+        self.assertLess(Decimal(row["net_collected"]["combined_usd"]), 0)
+        self.assertLess(Decimal(row["net_collected"]["combined_php"]), 0)
         self.assertIn("58.00", row["rate_label"])
         self.assertIn("60.00", row["rate_label"])
         self.assertIn("each paid run", row["rate_label"])
@@ -326,3 +339,92 @@ class ClientFinancialApiTests(unittest.TestCase):
         self.assertIsNone(financials["net"])
         self.assertIsNone(financials["rate_label"])
         self.assertIsNone(financials["by_va"][0]["va_pay"])
+
+    def test_client_totals_match_earnings_for_the_same_dates(self):
+        """Paid VA amounts and client earnings add up to the Earnings page.
+
+        A paid invoice and a manual earning are separate records. Both pages
+        count both. A run with no logs and no package is not assigned to a client.
+        """
+        start, end = date(2098, 1, 1), date(2098, 1, 31)
+        paid_on = datetime(2098, 1, 16, 8, tzinfo=timezone.utc)
+        active = self._customer(f"Reconcile Active {uuid4().hex[:4]}")
+        archived = self._customer(f"Reconcile Archived {uuid4().hex[:4]}")
+        archived.is_active = False
+        hourly = self._va("Reconcile Hourly", Currency.USD)
+        package_va = self._va("Reconcile Package", Currency.PHP)
+        loose = self._va("Reconcile Loose", Currency.PHP)
+        self._package(package_va, active)
+        self._invoice(active, "100.00", "USD", InvoiceStatus.paid)
+        self._invoice(active, "40.00", "USD", InvoiceStatus.unpaid)
+        self._earning(active, "580.00", "PHP")
+        for invoice in self.db.query(Invoice).filter(Invoice.client_id == active.id):
+            invoice.issue_date = date(2098, 1, 4)
+        for earning in self.db.query(ManualEarning).filter(ManualEarning.client_id == active.id):
+            earning.earned_date = date(2098, 1, 5)
+        archived_earning = self._earning(archived, "15.00", "USD")
+        archived_earning.earned_date = date(2098, 1, 8)
+        one_off = Invoice(
+            invoice_number=f"T{uuid4().hex[:8]}",
+            client_id=None,
+            one_off_name="Walk in",
+            currency="USD",
+            period_label="January",
+            period_start=start,
+            period_end=end,
+            total_hours=Decimal("1"),
+            billing_type=BillingType.hourly,
+            rate=Decimal("7.00"),
+            amount=Decimal("7.00"),
+            status=InvoiceStatus.paid,
+            payment_method=PaymentMethod.wise,
+            issue_date=date(2098, 1, 9),
+            due_date=date(2098, 1, 16),
+        )
+        self.db.add(one_off)
+        self.db.flush()
+        self.invoice_ids.append(one_off.id)
+        self._log(hourly, active, date(2098, 1, 4), "2", "50")
+        self._run(hourly, "50.00", "USD", "58", start, date(2098, 1, 15), paid_on)
+        self._run(package_va, "200.00", "PHP", "58", start, date(2098, 1, 15), paid_on)
+        self._run(loose, "1000.00", "PHP", "58", start, date(2098, 1, 15), paid_on)
+        self._run(loose, "80.00", "USD", None, start, date(2098, 1, 15), paid_on)
+        self._run(
+            hourly, "999.00", "USD", "58",
+            date(2097, 1, 1), date(2097, 1, 15),
+            datetime(2097, 1, 16, 8, tzinfo=timezone.utc),
+        )
+        self.db.commit()
+
+        finance = self.client.get(
+            "/dashboard/owner-finance",
+            headers=_auth(self.admin),
+            params={"date_from": "2098-01-01", "date_to": "2098-01-31", "usd_php_rate": "58"},
+        )
+        self.assertEqual(finance.status_code, 200, finance.text)
+        earned = finance.json()["earned"]
+        paid = finance.json()["va_payroll"]
+        report = client_money_report(self.db, start, end)
+        clients = report["clients"]
+        unassigned = report["unassigned"]
+
+        def total(field, side):
+            return sum((Decimal(clients[key][field][side]) for key in clients), Decimal("0"))
+
+        self.assertEqual(total("total_earned", "usd") + Decimal(unassigned["earned"]["usd"]), Decimal(earned["usd"]))
+        self.assertEqual(total("total_earned", "php") + Decimal(unassigned["earned"]["php"]), Decimal(earned["php"]))
+        self.assertEqual(total("va_paid", "usd") + Decimal(unassigned["va_paid"]["usd"]), Decimal(paid["usd"]))
+        self.assertEqual(total("va_paid", "php") + Decimal(unassigned["va_paid"]["php"]), Decimal(paid["php"]))
+        self.assertEqual(unassigned["label"], "not assigned to a client")
+        self.assertEqual(unassigned["va_paid"]["php"], "1000.00")
+        self.assertEqual(unassigned["va_paid"]["usd"], "80.00")
+        self.assertEqual(unassigned["earned"]["usd"], "7.00")
+        self.assertEqual(clients[active.id]["va_paid"]["usd"], "50.00")
+        self.assertEqual(clients[active.id]["va_paid"]["php"], "200.00")
+        self.assertEqual(clients[archived.id]["total_earned"]["usd"], "15.00")
+        self.assertIn("not assigned to a client", " ".join(item["label"] for item in unassigned["runs"]))
+        self.client.get("/dashboard/owner-statement", headers=_auth(self.pm), params={"date_from": "2098-01-01", "date_to": "2098-01-31"})
+        denied = self.client.get("/dashboard/owner-finance", headers=_auth(self.pm), params={"date_from": "2098-01-01", "date_to": "2098-01-31"})
+        self.assertEqual(denied.status_code, 403, denied.text)
+        statement = self.client.get("/dashboard/owner-statement", headers=_auth(self.pm), params={"date_from": "2098-01-01", "date_to": "2098-01-31"})
+        self.assertEqual(statement.status_code, 403, statement.text)

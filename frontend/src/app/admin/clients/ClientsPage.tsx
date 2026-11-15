@@ -2,7 +2,7 @@ import { useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 import { apiFetch, getAuthUser } from "@/lib/api"
-import type { Client, ClientDetail, ClientFinancialRow, ClientMoney, ClientTeamMember, ClientVaMoney, SubClient, VA } from "@/lib/types"
+import type { Client, ClientDetail, ClientFinancialRow, ClientFinancialsPayload, ClientMoney, ClientTeamMember, ClientVaMoney, SubClient, VA } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Input, Label, Select } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -50,7 +50,9 @@ function recordedLine(money: ClientMoney | null | undefined) {
   const parts: string[] = []
   if (usd !== 0 || php === 0) parts.push(formatStatementMoney(money.usd, "USD"))
   if (php !== 0) parts.push(formatStatementMoney(money.php, "PHP"))
-  return parts.join(" + ")
+  if (parts.length < 2) return parts[0] ?? "—"
+  const negative = usd < 0 || php < 0
+  return parts.join(negative ? " and " : " + ")
 }
 
 function aboutLine(money: ClientMoney | null | undefined) {
@@ -127,11 +129,13 @@ export function ClientsPage() {
     enabled: !!viewingId,
   })
   // Admin-only lifetime financials per client (since each client was created)
-  const { data: financials = [] } = useQuery({
+  const { data: financialPayload } = useQuery({
     queryKey: ["client-financials"],
-    queryFn: () => apiFetch<ClientFinancialRow[]>("/clients/financials"),
+    queryFn: () => apiFetch<ClientFinancialsPayload | ClientFinancialRow[]>("/clients/financials"),
     enabled: isAdmin,
   })
+  const financials: ClientFinancialRow[] = Array.isArray(financialPayload) ? financialPayload : (financialPayload?.clients ?? [])
+  const unassigned = Array.isArray(financialPayload) ? null : financialPayload?.unassigned
   const financialMap = useMemo(() => Object.fromEntries(financials.map((f) => [f.client_id, f])), [financials])
 
   const invalidate = () => {
@@ -426,10 +430,12 @@ export function ClientsPage() {
 
       {tab === "clients" ? (
         <div className="overflow-x-auto rounded-xl border bg-card">
-          {isAdmin && financials.some((row) => row.rate_label) && (
-            <p className="px-3 pt-2 text-[10px] text-muted-foreground">
-              {[...new Set(financials.map((row) => row.rate_label).filter(Boolean))].join(" ")}
-            </p>
+          {isAdmin && (financials.some((row) => row.rate_label) || (unassigned && (Number(unassigned.va_paid?.usd) !== 0 || Number(unassigned.va_paid?.php) !== 0 || Number(unassigned.earned?.usd) !== 0 || Number(unassigned.earned?.php) !== 0))) && (
+            <div className="space-y-1 px-3 pt-2 text-[10px] text-muted-foreground">
+              {financials.some((row) => row.rate_label) ? <p>{[...new Set(financials.map((row) => row.rate_label).filter(Boolean))].join(" ")}</p> : null}
+              {unassigned && (Number(unassigned.va_paid?.usd) !== 0 || Number(unassigned.va_paid?.php) !== 0) ? <p>{recordedLine(unassigned.va_paid)} {unassigned.label}</p> : null}
+              {unassigned && (Number(unassigned.earned?.usd) !== 0 || Number(unassigned.earned?.php) !== 0) ? <p>{recordedLine(unassigned.earned)} {unassigned.label}</p> : null}
+            </div>
           )}
           <table className="w-full text-xs">
             <thead>

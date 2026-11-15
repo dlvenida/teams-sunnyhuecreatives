@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input, Label, Select } from "@/components/ui/input"
 import { StatCard } from "@/components/magicui/stat-card"
 import { halfMonthRange, type HalfMonth } from "@/lib/payrollPeriod"
+import { calendarHalf, halfMonthLabel, moneyEq, resolvePackagePay, type PackageChoice } from "@/lib/packageHalf"
 import { cn, formatCurrency, formatDate, payrollPdfFilename } from "@/lib/utils"
 import { parseUsdPhpRate } from "@/lib/pesoEstimate"
 import { PayrollDocument } from "@/components/pdf/PayrollDocument"
@@ -56,39 +57,69 @@ function markPaidTitle(va: PayrollVA) {
   return undefined
 }
 
-type PackageDraft = { skipped: boolean; mode: "amount" | "deduction"; amount: string; deduction: string; note: string }
+type PackageDraft = { skipped: boolean; mode: "amount" | "deduction"; amount: string; deduction: string; note: string; choice?: PackageChoice }
 
-function overlayVa(va: PayrollVA, drafts: Record<string, PackageDraft>): PayrollVA {
+function packageResolution(row: NonNullable<PayrollVA["by_client"]>[number], draft: PackageDraft | undefined, periodStart: string, periodEnd: string) {
+  const calculated = n(row.calculated_pay ?? row.pay)
+  const monthly = n(row.monthly_amount)
+  return resolvePackagePay({
+    monthly,
+    calculated,
+    periodStart,
+    periodEnd,
+    skipped: draft ? draft.skipped : !!row.skipped,
+    overrideAmount: draft || row.override_amount == null || row.override_amount === "" ? null : n(row.override_amount),
+    choice: draft?.choice ?? (draft ? "custom" : null),
+    customAmount: draft && draft.mode === "amount" && draft.amount.trim() !== "" ? n(draft.amount) : null,
+  })
+}
+
+function overlayVa(va: PayrollVA, drafts: Record<string, PackageDraft>, periodStart = "", periodEnd = ""): PayrollVA {
   if (!va.by_client?.length) return va
   let changed = false
   const by_client = va.by_client.map((row) => {
     if (row.pay_type !== "package" || !row.client_id) return row
     const draft = drafts[`${va.va_id}:${row.client_id}`]
-    if (!draft) return row
-    changed = true
     const calculated = n(row.calculated_pay ?? row.pay)
-    const skipped = draft.skipped
-    let effective = calculated
-    let deduction: number | null = null
-    if (!skipped && draft.mode === "deduction") {
-      const parsed = Number(draft.deduction)
-      if (Number.isFinite(parsed) && parsed >= 0 && parsed <= calculated + 0.001) {
-        deduction = Math.round(parsed * 100) / 100
-        effective = Math.round((calculated - deduction) * 100) / 100
+    const deductionMode = draft ? draft.mode === "deduction" : n(row.deduction) > 0
+    if (deductionMode) {
+      if (!draft && !(n(row.deduction) > 0)) return row
+      changed = true
+      const skipped = draft ? draft.skipped : !!row.skipped
+      let effective = calculated
+      let deduction: number | null = null
+      const deductionRaw = draft ? draft.deduction : String(row.deduction ?? "")
+      if (!skipped) {
+        const parsed = Number(deductionRaw)
+        if (Number.isFinite(parsed) && parsed >= 0 && parsed <= calculated + 0.001) {
+          deduction = Math.round(parsed * 100) / 100
+          effective = Math.round((calculated - deduction) * 100) / 100
+        }
       }
-    } else if (!skipped && draft.amount.trim() !== "") {
-      const parsed = Number(draft.amount)
-      if (Number.isFinite(parsed) && parsed >= 0) effective = Math.round(parsed * 100) / 100
+      if (skipped) effective = 0
+      return {
+        ...row,
+        pay: effective.toFixed(2),
+        skipped,
+        adjusted: false,
+        deduction: deduction != null && deduction > 0 ? deduction.toFixed(2) : null,
+        note: (draft ? draft.note : row.note || "").trim() || null,
+      }
     }
-    if (skipped) effective = 0
-    const adjusted = !skipped && draft.mode !== "deduction" && Math.round(effective * 100) !== Math.round(calculated * 100)
+    const resolved = packageResolution(row, draft, periodStart, periodEnd)
+    const effective = resolved.skipped ? 0 : resolved.amount
+    const serverPay = n(row.pay)
+    const same = !draft && resolved.skipped === !!row.skipped && moneyEq(effective, serverPay)
+    if (same) return row
+    changed = true
+    const standard = resolved.choice === "half" || resolved.choice === "full" || resolved.choice === "skip"
     return {
       ...row,
       pay: effective.toFixed(2),
-      skipped,
-      adjusted,
-      deduction: deduction != null && deduction > 0 ? deduction.toFixed(2) : null,
-      note: draft.note.trim() || null,
+      skipped: resolved.skipped,
+      adjusted: !resolved.skipped && !standard && !moneyEq(effective, calculated),
+      deduction: null,
+      note: (draft?.note ?? row.note ?? "").trim() || null,
     }
   })
   if (!changed) return va
@@ -96,12 +127,12 @@ function overlayVa(va: PayrollVA, drafts: Record<string, PackageDraft>): Payroll
   return { ...va, by_client, total_pay: total.toFixed(2) }
 }
 
-function overlayPayroll<T extends { vas: PayrollVA[]; total_php?: string | null; total_usd?: string | null }>(
+function overlayPayroll<T extends { vas: PayrollVA[]; period_start: string; period_end: string; total_php?: string | null; total_usd?: string | null }>(
   payroll: T | undefined,
   drafts: Record<string, PackageDraft>,
 ): T | undefined {
   if (!payroll) return payroll
-  const vas = payroll.vas.map((va) => overlayVa(va, drafts))
+  const vas = payroll.vas.map((va) => overlayVa(va, drafts, payroll.period_start, payroll.period_end))
   let php = 0
   let usd = 0
   for (const va of vas) {
@@ -112,10 +143,31 @@ function overlayPayroll<T extends { vas: PayrollVA[]; total_php?: string | null;
   return { ...payroll, vas, total_php: php.toFixed(2), total_usd: usd.toFixed(2) }
 }
 
+function draftForChoice(choice: "half" | "full" | "skip", client: PayslipClient, periodStart: string, periodEnd: string, note: string): PackageDraft {
+  const resolved = resolvePackagePay({
+    monthly: client.monthlyAmount ?? 0,
+    calculated: client.originalAmount ?? client.amount,
+    periodStart,
+    periodEnd,
+    choice,
+  })
+  const shown = choice === "skip" ? (resolved.half || resolved.monthly || client.originalAmount || client.amount) : resolved.amount
+  return {
+    skipped: choice === "skip",
+    mode: "amount",
+    amount: shown.toFixed(2),
+    deduction: "",
+    note,
+    choice,
+  }
+}
+
 function PackagePeriodFields({
   client,
   currency,
   locked,
+  periodStart,
+  periodEnd,
   draft,
   onDraft,
   onCommit,
@@ -123,46 +175,102 @@ function PackagePeriodFields({
   client: PayslipClient
   currency: "PHP" | "USD"
   locked: boolean
+  periodStart: string
+  periodEnd: string
   draft?: PackageDraft
   onDraft: (next: PackageDraft) => void
   onCommit: (next: PackageDraft) => void
 }) {
-  const skipped = draft ? draft.skipped : !!client.skipped
   const mode = draft?.mode ?? (client.deduction ? "deduction" : "amount")
-  const fallback = client.overrideAmount ?? client.originalAmount ?? client.amount
-  const amountValue = draft ? draft.amount : fallback.toFixed(2)
-  const deductionValue = draft ? draft.deduction : (client.deduction ? client.deduction.toFixed(2) : "")
   const noteValue = draft ? draft.note : (client.note || "")
-  const current = (): PackageDraft => ({ skipped, mode, amount: amountValue, deduction: deductionValue, note: noteValue })
-  const packageAmount = client.originalAmount ?? client.amount
+  const deductionValue = draft ? draft.deduction : (client.deduction ? client.deduction.toFixed(2) : "")
+  const monthly = client.monthlyAmount ?? 0
+  const calculated = client.originalAmount ?? client.amount
+  const resolved = resolvePackagePay({
+    monthly,
+    calculated,
+    periodStart,
+    periodEnd,
+    skipped: draft ? draft.skipped : !!client.skipped,
+    overrideAmount: draft || client.overrideAmount == null ? null : client.overrideAmount,
+    choice: mode === "deduction" ? "custom" : (draft?.choice ?? null),
+    customAmount: draft && mode === "amount" && draft.amount.trim() !== "" ? n(draft.amount) : null,
+  })
+  const skipped = mode === "deduction" ? (draft ? draft.skipped : !!client.skipped) : resolved.skipped
+  const amountValue = draft && mode === "amount"
+    ? draft.amount
+    : (skipped ? (resolved.half || monthly || calculated) : resolved.amount).toFixed(2)
+  const choice: PackageChoice | null = mode === "deduction" ? null : (draft?.choice === "custom" ? resolved.choice : (draft?.choice ?? resolved.choice))
+  const current = (): PackageDraft => ({
+    skipped,
+    mode,
+    amount: amountValue,
+    deduction: deductionValue,
+    note: noteValue,
+    choice: choice ?? "custom",
+  })
+  const packageAmount = monthly > 0 ? monthly : calculated
   const deductionNumber = Number(deductionValue)
   const deductionOk = Number.isFinite(deductionNumber) && deductionNumber >= 0 && deductionNumber <= packageAmount + 0.001
   const payPreview = deductionOk ? Math.round((packageAmount - deductionNumber) * 100) / 100 : null
+  const apply = (next: PackageDraft, commit = false) => {
+    onDraft(next)
+    if (commit) onCommit(next)
+  }
+  const pick = (nextChoice: "half" | "full" | "skip") => {
+    const next = draftForChoice(nextChoice, client, periodStart, periodEnd, noteValue)
+    apply(next, true)
+  }
   return (
-    <div className="mt-2 space-y-1.5">
-      <p className="text-[11px] font-semibold text-muted-foreground">Fixed Package {formatCurrency(packageAmount, currency)}</p>
-      <label className="flex items-center gap-2 text-[11px] font-semibold">
+    <div className="mt-2 space-y-2">
+      <p className="text-[11px] font-semibold text-muted-foreground">
+        Fixed Package {formatCurrency(packageAmount, currency)}{monthly > 0 ? " monthly" : ""}
+      </p>
+      <div className="grid grid-cols-3 gap-1.5" role="group" aria-label={`${client.name} package pay`}>
+        {([
+          ["half", "Half month"],
+          ["full", "Full month"],
+          ["skip", "Skip"],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={choice === id}
+            disabled={locked || (monthly <= 0 && id !== "skip")}
+            className={cn(
+              "min-h-11 rounded-full px-1.5 text-[13px] font-semibold leading-tight",
+              choice === id ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground",
+            )}
+            onClick={() => pick(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <label className="flex min-h-11 items-center gap-2 text-[13px] font-semibold">
         <input
           type="checkbox"
-          className="h-3.5 w-3.5 accent-primary"
+          className="h-5 w-5 accent-primary"
           checked={!skipped}
           disabled={locked}
           onChange={(e) => {
-            const next = { ...current(), skipped: !e.target.checked }
-            onDraft(next)
-            onCommit(next)
+            if (!e.target.checked) {
+              pick("skip")
+              return
+            }
+            pick(calendarHalf(periodStart, periodEnd) ? "half" : "full")
           }}
         />
         Pay this period
       </label>
       {!skipped && (
-        <div className="flex gap-2 text-[11px] font-semibold">
-          <label className="flex items-center gap-1">
-            <input type="radio" name={`${client.clientId}-mode`} checked={mode === "amount"} disabled={locked} onChange={() => onDraft({ ...current(), mode: "amount" })} />
+        <div className="flex gap-3 text-[11px] font-semibold">
+          <label className="flex min-h-11 items-center gap-1">
+            <input type="radio" name={`${client.clientId}-mode`} checked={mode === "amount"} disabled={locked} onChange={() => apply({ ...current(), mode: "amount", choice: choice ?? "custom" })} />
             New amount
           </label>
-          <label className="flex items-center gap-1">
-            <input type="radio" name={`${client.clientId}-mode`} checked={mode === "deduction"} disabled={locked} onChange={() => onDraft({ ...current(), mode: "deduction" })} />
+          <label className="flex min-h-11 items-center gap-1">
+            <input type="radio" name={`${client.clientId}-mode`} checked={mode === "deduction"} disabled={locked} onChange={() => apply({ ...current(), mode: "deduction", choice: "custom", skipped: false })} />
             Deduction
           </label>
         </div>
@@ -173,15 +281,19 @@ function PackagePeriodFields({
             type="number"
             min="0"
             step="0.01"
-            className="h-8 w-28"
+            inputMode="decimal"
+            className="h-11 w-full max-w-[9rem] text-base"
             aria-label={`${client.name} amount this period`}
             disabled={locked || skipped}
             value={amountValue}
-            onChange={(e) => onDraft({ ...current(), amount: e.target.value })}
+            onChange={(e) => apply({ ...current(), mode: "amount", skipped: false, choice: "custom", amount: e.target.value })}
             onBlur={() => onCommit(draft ?? current())}
           />
-          {skipped && <span className="text-[11px] font-semibold text-amber-800">Skipped · {formatCurrency(0, currency)}</span>}
-          {!skipped && client.adjusted && client.originalAmount != null && (
+          {choice === "half" && monthly > 0 && (
+            <span className="text-[13px] font-semibold text-primary">{halfMonthLabel(monthly, currency)}</span>
+          )}
+          {skipped && <span className="text-[13px] font-semibold text-amber-800">Skipped · {formatCurrency(0, currency)}</span>}
+          {!skipped && choice === "custom" && client.adjusted && client.originalAmount != null && (
             <span className="text-[11px] font-semibold text-primary">Adjusted · was {formatCurrency(client.originalAmount, currency)}</span>
           )}
         </div>
@@ -191,11 +303,12 @@ function PackagePeriodFields({
             type="number"
             min="0"
             step="0.01"
-            className="h-8 w-28"
+            inputMode="decimal"
+            className="h-11 w-full max-w-[9rem] text-base"
             aria-label={`${client.name} deduction this period`}
             disabled={locked}
             value={deductionValue}
-            onChange={(e) => onDraft({ ...current(), deduction: e.target.value })}
+            onChange={(e) => apply({ ...current(), mode: "deduction", choice: "custom", deduction: e.target.value })}
             onBlur={() => onCommit(draft ?? current())}
           />
           {payPreview != null && deductionNumber > 0 && (
@@ -208,12 +321,12 @@ function PackagePeriodFields({
         </div>
       )}
       <Input
-        className="h-8"
+        className="h-11 text-base"
         placeholder={mode === "deduction" ? "Reason, such as days off" : "Reason (optional)"}
         aria-label={`${client.name} reason`}
         disabled={locked}
         value={noteValue}
-        onChange={(e) => onDraft({ ...current(), note: e.target.value })}
+        onChange={(e) => apply({ ...current(), note: e.target.value })}
         onBlur={() => onCommit(draft ?? current())}
       />
       {locked && <p className="text-[11px] text-muted-foreground">This period is paid. Undo Paid to change it.</p>}
@@ -339,22 +452,22 @@ export function PayrollPage() {
     onError: (err: Error) => setMarkPaidError(err.message),
   })
   const saveOverride = async (va: PayrollVA, clientId: string, draft: PackageDraft, calculated: number) => {
-    if (va.is_paid || !payroll?.period_start || !payroll.period_end) return
+    if (va.is_paid || !payroll?.period_start || !payroll.period_end) return false
     let amount: number | null = null
     let deduction: number | null = null
     if (!draft.skipped && draft.mode === "deduction") {
       const parsed = Number(draft.deduction)
       if (!Number.isFinite(parsed) || parsed < 0) {
         setOverrideError("Deduction cannot be negative.")
-        return
+        return false
       }
       if (parsed > calculated + 0.001) {
         setOverrideError("Deduction cannot be more than the package amount.")
-        return
+        return false
       }
       if (parsed > 0 && !draft.note.trim()) {
         setOverrideError("Add a reason for the deduction.")
-        return
+        return false
       }
       deduction = Math.round(parsed * 100) / 100
       if (deduction === 0) deduction = null
@@ -364,7 +477,7 @@ export function PayrollPage() {
         const parsed = Number(raw)
         if (!Number.isFinite(parsed) || parsed < 0) {
           setOverrideError("Amount cannot be negative.")
-          return
+          return false
         }
         amount = Math.round(parsed * 100) / 100
         if (amount === Math.round(calculated * 100) / 100) amount = null
@@ -388,14 +501,57 @@ export function PayrollPage() {
       setOverrideError("")
       setDrafts((prev) => {
         const cur = prev[key]
-        if (!cur || cur.amount !== draft.amount || cur.deduction !== draft.deduction || cur.mode !== draft.mode || cur.skipped !== draft.skipped || cur.note !== draft.note) return prev
+        if (!cur || cur.amount !== draft.amount || cur.deduction !== draft.deduction || cur.mode !== draft.mode || cur.skipped !== draft.skipped || cur.note !== draft.note || cur.choice !== draft.choice) return prev
         const next = { ...prev }
         delete next[key]
         return next
       })
       invalidate()
+      return true
     } catch (err) {
       setOverrideError(err instanceof Error ? err.message : "Could not save this period")
+      return false
+    }
+  }
+  const persistDisplayedPackages = async (va: PayrollVA) => {
+    const source = payrollSource?.vas.find((item) => item.va_id === va.va_id)
+    for (const row of va.by_client ?? []) {
+      if (row.pay_type !== "package" || !row.client_id) continue
+      const src = source?.by_client?.find((item) => item.client_id === row.client_id)
+      const serverSkipped = !!src?.skipped
+      const serverPay = serverSkipped ? 0 : n(src?.pay)
+      if (serverSkipped === !!row.skipped && moneyEq(serverPay, n(row.pay))) continue
+      const key = `${va.va_id}:${row.client_id}`
+      const existing = drafts[key]
+      const draft: PackageDraft = existing?.mode === "deduction"
+        ? { ...existing, skipped: !!row.skipped }
+        : {
+            skipped: !!row.skipped,
+            mode: "amount",
+            amount: row.skipped ? "" : n(row.pay).toFixed(2),
+            deduction: "",
+            note: existing?.note ?? row.note ?? "",
+            choice: row.skipped ? "skip" : existing?.choice,
+          }
+      const saved = await saveOverride(va, row.client_id, draft, n(src?.calculated_pay ?? src?.pay))
+      if (!saved) return false
+    }
+    return true
+  }
+  const setAllPackages = async (va: PayrollVA, choice: "half" | "full") => {
+    if (!payroll) return
+    const slip = buildPayslip(va, payroll.period_start, payroll.period_end, settings)
+    const rows = slip.clients.filter((client) => client.payType === "package" && client.clientId && (client.monthlyAmount ?? 0) > 0)
+    const next: Record<string, PackageDraft> = {}
+    for (const client of rows) {
+      next[`${va.va_id}:${client.clientId}`] = draftForChoice(choice, client, payroll.period_start, payroll.period_end, client.note || "")
+    }
+    setDrafts((prev) => ({ ...prev, ...next }))
+    for (const client of rows) {
+      const draft = next[`${va.va_id}:${client.clientId}`]
+      if (!draft || !client.clientId) continue
+      const saved = await saveOverride(va, client.clientId, draft, client.originalAmount ?? client.amount)
+      if (!saved) return
     }
   }
   const voidRun = useMutation({ mutationFn: (id: string) => apiFetch(`/payroll/runs/${id}`, { method: "DELETE" }), onSuccess: invalidate })
@@ -490,8 +646,8 @@ export function PayrollPage() {
           <h1 className="font-display text-xl font-bold">{isAdmin ? "Timesheets & pay" : "Timesheet review"}</h1>
           <p className="text-xs text-muted-foreground">
             {isAdmin
-              ? "VA submits timesheet → review entries → approve or reject → payslip (per client) → Mark Paid."
-              : "Project Manager review. Approve or reject timesheets. You see the VA name, dates, tasks, hours, and status. Rates, pay, and payroll totals stay hidden."}
+              ? "VA submits timesheet, then you review entries, approve or return for fixes, then payslip and Mark Paid."
+              : "Project Manager review. Approve a timesheet or return it for fixes. You see the VA name, dates, tasks, hours, and status. Rates, pay, and payroll totals stay hidden."}
           </p>
         </div>
         {payroll && <p className="rounded-full border bg-card px-3 py-1.5 text-xs font-semibold">{formatDate(payroll.period_start)} – {formatDate(payroll.period_end)}</p>}
@@ -546,7 +702,7 @@ export function PayrollPage() {
             ))}
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            Bi-weekly packages show one half on 1st – 15th and the other half on 16th – end. Monthly packages pay the full amount on 1st – 15th only.
+            On 1st-15th and 16th-end, each package starts on Half month. Full month and Skip are one tap. This Month still shows the whole package until you choose Half.
           </p>
         </div>
         {period === "custom" && <><div><Label>From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div><div><Label>To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div></>}
@@ -654,7 +810,7 @@ export function PayrollPage() {
                     {va.timesheet_status === "reviewed" ? (
                       <span className="rounded-full bg-green-100 px-2 py-0.5 text-green-700">Timesheet approved</span>
                     ) : va.timesheet_status === "rejected" ? (
-                      <span className="rounded-full bg-rose-100 px-2 py-0.5 font-extrabold text-rose-800">Timesheet rejected</span>
+                      <span className="rounded-full bg-rose-100 px-2 py-0.5 font-extrabold text-rose-800">Returned for fixes</span>
                     ) : va.timesheet_submitted ? (
                       <span className="rounded-full bg-amber-200 px-2 py-0.5 font-extrabold uppercase tracking-wide text-amber-900">Pending Approval</span>
                     ) : (
@@ -679,10 +835,21 @@ export function PayrollPage() {
                     <Button
                       size="sm"
                       variant="gold"
-                      className="flex-1"
+                      className="min-h-11 flex-1"
                       onClick={() => setReviewTimesheetId(va.timesheet_id!)}
                     >
                       <ClipboardCheck className="h-3.5 w-3.5" /> Review
+                    </Button>
+                  )}
+                  {va.timesheet_id && !va.is_paid && (va.timesheet_status === "submitted" || va.timesheet_status === "reviewed") && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="danger"
+                      className="min-h-11 flex-1"
+                      onClick={() => setReviewTimesheetId(va.timesheet_id!)}
+                    >
+                      Return for fixes
                     </Button>
                   )}
                   {isAdmin && !va.is_paid && canOfferPay(va) && (
@@ -750,14 +917,26 @@ export function PayrollPage() {
                   })
                 }}
               />
+              {showPricing && packages.length > 0 && !va.is_paid && (
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button type="button" variant="gold" className="min-h-11 flex-1" onClick={() => void setAllPackages(va, "half")}>
+                    Set all packages to half
+                  </Button>
+                  <Button type="button" variant="outline" className="min-h-11 flex-1" onClick={() => void setAllPackages(va, "full")}>
+                    Set all to full
+                  </Button>
+                </div>
+              )}
               {showPricing && packages.map((client) => (
                 <div key={client.clientId} className={cn("rounded-2xl border p-3", client.skipped && "opacity-70")}>
                   <p className="font-display text-sm font-bold text-primary">{client.name}</p>
                   <p className="text-[11px] text-muted-foreground">Fixed package for this whole period. It is not split across the weeks above.</p>
                   <PackagePeriodFields
                     client={client}
-                    currency={va.currency}
+                    currency={va.currency === "USD" ? "USD" : "PHP"}
                     locked={!!va.is_paid}
+                    periodStart={payroll.period_start}
+                    periodEnd={payroll.period_end}
                     draft={drafts[`${va.va_id}:${client.clientId}`]}
                     onDraft={(next) => setDrafts((prev) => ({ ...prev, [`${va.va_id}:${client.clientId}`]: next }))}
                     onCommit={(next) => saveOverride(va, client.clientId!, next, client.originalAmount ?? client.amount)}
@@ -880,18 +1059,23 @@ export function PayrollPage() {
                 className="flex-1"
                 disabled={markPaid.isPending}
                 onClick={() => {
-                  const slip = buildPayslip(payReview, payroll.period_start, payroll.period_end, settings)
-                  markPaid.mutate({
-                    va_id: payReview.va_id,
-                    period_start: payReview.timesheet_period_start || payroll.period_start,
-                    period_end: payReview.timesheet_period_end || payroll.period_end,
-                    total_hours: slip.totalHours,
-                    total_pay: slip.totalPay,
-                    currency: payReview.currency,
-                    method: payReview.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer",
-                    usd_php_rate: parsedRate,
-                  })
-                  setPayReview(null)
+                  void (async () => {
+                    const saved = await persistDisplayedPackages(payReview)
+                    if (!saved) return
+                    const slip = buildPayslip(payReview, payroll.period_start, payroll.period_end, settings)
+                    const viewingHalf = calendarHalf(payroll.period_start, payroll.period_end)
+                    markPaid.mutate({
+                      va_id: payReview.va_id,
+                      period_start: viewingHalf ? payroll.period_start : (payReview.timesheet_period_start || payroll.period_start),
+                      period_end: viewingHalf ? payroll.period_end : (payReview.timesheet_period_end || payroll.period_end),
+                      total_hours: slip.totalHours,
+                      total_pay: slip.totalPay,
+                      currency: payReview.currency,
+                      method: payReview.payment_label?.startsWith("Wise") ? "wise" : "bank_transfer",
+                      usd_php_rate: parsedRate,
+                    })
+                    setPayReview(null)
+                  })()
                 }}
               >
                 <Wallet className="h-3.5 w-3.5" /> Confirm &amp; mark paid

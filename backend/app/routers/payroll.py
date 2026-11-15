@@ -60,6 +60,7 @@ from app.services.va_rates import (
     currency_code,
     get_approved_rate,
     package_amount_for_window,
+    package_payroll_rows,
     package_period_amounts,
     pay_from_approved_rate,
     resolved_frequency,
@@ -182,7 +183,7 @@ def calculate_payroll(
         package_va_ids = {vid for vid in package_va_ids if vid == body.va_id}
     package_rows_by_va: dict = {}
     for vid in package_va_ids:
-        rows = package_period_amounts(db, vid, period_start, period_end)
+        rows = package_payroll_rows(db, vid, period_start, period_end)
         if not rows:
             continue
         package_rows_by_va[vid] = rows
@@ -204,29 +205,32 @@ def calculate_payroll(
         # A saved override can skip a client or replace the amount for this period only.
         package_rows = package_rows_by_va.get(va_id)
         if package_rows is None:
-            package_rows = package_period_amounts(db, va_id, period_start, period_end)
+            package_rows = package_payroll_rows(db, va_id, period_start, period_end)
         package_lines: list[dict] = []
         package_dues: dict = {}
-        for cid, name, calculated, rate_currency in package_rows:
-            saved = period_overrides.get((va_id, cid))
+        for line in package_rows:
+            saved = period_overrides.get((va_id, line.client_id))
             effective, skipped, adjusted = effective_package_amount(
-                calculated,
+                line.due,
                 skipped=bool(saved.skipped) if saved else False,
                 amount=saved.amount if saved else None,
                 deduction=saved.deduction if saved else None,
             )
-            package_dues[cid] = effective
+            package_dues[line.client_id] = effective
             package_lines.append({
-                "client_id": cid,
-                "name": name,
-                "calculated": calculated,
+                "client_id": line.client_id,
+                "name": line.name,
+                "calculated": line.due,
                 "effective": effective,
                 "override_amount": saved.amount if saved else None,
                 "deduction": saved.deduction if saved else None,
                 "skipped": skipped,
                 "adjusted": adjusted,
                 "note": (saved.note or "").strip() or None if saved else None,
-                "currency": rate_currency,
+                "currency": line.currency,
+                "monthly_amount": line.monthly_amount,
+                "payment_frequency": line.frequency,
+                "half_amount": line.half_amount,
             })
         resolved = {entry.id: pay_from_approved_rate(entry, rate_amounts) for entry in data["entries"]}
         log_pay_by_client: dict = {}
@@ -272,6 +276,7 @@ def calculate_payroll(
                 "hours": Decimal("0"), "pay": Decimal("0"), "client_id": line["client_id"],
                 "rate": line["calculated"], "pay_type": "package", "currency": line["currency"],
                 "calculated_pay": line["calculated"], "override_amount": None, "deduction": None, "skipped": False, "adjusted": False, "note": None,
+                "monthly_amount": line.get("monthly_amount"), "payment_frequency": line.get("payment_frequency"), "half_amount": line.get("half_amount"),
             })
             b["pay"] = line["effective"]
             b["rate"] = line["effective"] if not line["skipped"] else line["calculated"]
@@ -284,6 +289,9 @@ def calculate_payroll(
             b["adjusted"] = line["adjusted"]
             b["note"] = line["note"]
             b["currency"] = line["currency"]
+            b["monthly_amount"] = line.get("monthly_amount")
+            b["payment_frequency"] = line.get("payment_frequency")
+            b["half_amount"] = line.get("half_amount")
         daily = []
         d = period_start
         while d <= period_end:
@@ -333,6 +341,9 @@ def calculate_payroll(
                     skipped=None if redact else (v.get("skipped") if v.get("pay_type") == "package" else None),
                     adjusted=None if redact else (v.get("adjusted") if v.get("pay_type") == "package" else None),
                     note=None if redact else v.get("note"),
+                    monthly_amount=None if redact else v.get("monthly_amount"),
+                    payment_frequency=None if redact else v.get("payment_frequency"),
+                    half_amount=None if redact else v.get("half_amount"),
                     currency=None if redact else v.get("currency"),
                 )
                 for k, v in by_client.items()
@@ -586,8 +597,27 @@ def timesheet_entries(
             _review_entry(l, include_money=not redact, amounts=amounts)
             for l in logs
         ],
+        "is_paid": _timesheet_is_paid(db, row),
         **({"package_pay": package_pay} if package_pay else {}),
     }
+
+
+def _timesheet_is_paid(db: Session, row: TimesheetSubmission) -> bool:
+    """True when this timesheet's period, including the one-day Manila shift, is already paid."""
+    shown_start, shown_end = snap_payroll_period(row.period_start, row.period_end)
+    keys = period_lookup_keys(row.period_start, row.period_end) | period_lookup_keys(shown_start, shown_end)
+    return (
+        db.query(PayrollRun.id)
+        .filter(
+            PayrollRun.va_id == row.va_id,
+            or_(*[
+                and_(PayrollRun.period_start == start, PayrollRun.period_end == end)
+                for start, end in keys
+            ]),
+        )
+        .first()
+        is not None
+    )
 
 
 @router.post("/timesheets/{timesheet_id}/review", response_model=TimesheetSubmissionResponse)
@@ -666,14 +696,9 @@ def reject_timesheet(
         raise HTTPException(404, "Timesheet not found")
     owner_id = row.va.user_id if row.va else None
     if not may_review_timesheet(current.role, current.user.id, owner_id):
-        raise HTTPException(403, "A Project Manager cannot reject her own timesheet. An Admin has to do that.")
-    paid = db.query(PayrollRun).filter(
-        PayrollRun.va_id == row.va_id,
-        PayrollRun.period_start == row.period_start,
-        PayrollRun.period_end == row.period_end,
-    ).first()
-    if paid:
-        raise HTTPException(400, "This period is already marked paid — the timesheet can no longer be rejected")
+        raise HTTPException(403, "A Project Manager cannot return her own timesheet. An Admin has to do that.")
+    if _timesheet_is_paid(db, row):
+        raise HTTPException(400, "This period is already marked paid. Undo Paid before returning the timesheet.")
     reason = (body.reason or "").strip() or None
     row.status = TimesheetStatus.rejected
     row.review_note = reason
@@ -692,7 +717,7 @@ def _notify_timesheet_va(db: Session, row: TimesheetSubmission, current: Current
     from app.services.notifications import first_name_of
 
     reviewer = first_name_of(current.user)
-    title = f"{reviewer} approved your timesheet" if approved else f"{reviewer} rejected your timesheet"
+    title = f"{reviewer} approved your timesheet" if approved else f"{reviewer} returned your timesheet for fixes"
     shown_start, shown_end = snap_payroll_period(row.period_start, row.period_end)
     lines = [f"{shown_start} to {shown_end}."]
     if note:

@@ -9,10 +9,12 @@ from fastapi import HTTPException
 
 from app.models import PayType
 from app.services.va_rates import (
+    calendar_half_kind,
     combine_period_pay,
     currency_code,
     frequency_for_save,
     frequency_for_update,
+    half_share_for_period,
     package_amount_for_dates,
     package_amount_for_window,
     resolved_frequency,
@@ -43,6 +45,32 @@ class SplitTests(unittest.TestCase):
         self.assertEqual(first, Decimal("83.33"))
         self.assertEqual(second, Decimal("83.34"))
         self.assertEqual(first + second, Decimal("166.67"))
+
+
+class HalfShareTests(unittest.TestCase):
+    def test_half_is_taken_from_the_monthly_rate(self):
+        self.assertEqual(calendar_half_kind(date(2026, 11, 1), date(2026, 11, 15)), "first")
+        self.assertEqual(calendar_half_kind(date(2026, 11, 16), date(2026, 11, 30)), "second")
+        self.assertIsNone(calendar_half_kind(date(2026, 11, 1), date(2026, 11, 30)))
+        self.assertEqual(
+            half_share_for_period(Decimal("2000.00"), date(2026, 11, 1), date(2026, 11, 15)),
+            Decimal("1000.00"),
+        )
+        self.assertEqual(
+            half_share_for_period(Decimal("1166.67"), date(2026, 11, 16), date(2026, 11, 30)),
+            Decimal("583.34"),
+        )
+        self.assertEqual(
+            half_share_for_period(Decimal("11333.36"), date(2026, 11, 1), date(2026, 11, 15)),
+            Decimal("5666.68"),
+        )
+        self.assertEqual(
+            half_share_for_period(Decimal("11333.36"), date(2026, 11, 16), date(2026, 11, 30)),
+            Decimal("5666.68"),
+        )
+        first = half_share_for_period(Decimal("1166.67"), date(2026, 11, 1), date(2026, 11, 15))
+        second = half_share_for_period(Decimal("1166.67"), date(2026, 11, 16), date(2026, 11, 30))
+        self.assertEqual(first + second, Decimal("1166.67"))
 
 
 class WindowTests(unittest.TestCase):

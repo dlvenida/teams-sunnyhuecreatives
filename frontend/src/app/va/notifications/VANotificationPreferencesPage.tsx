@@ -17,7 +17,7 @@ export const VA_NOTICE_ROWS = [
   { id: "task_approved", label: "Task approved", example: "Jane approved Calendar" },
   { id: "task_rejected", label: "Task rejected", example: "Audrey rejected Calendar" },
   { id: "timesheet_approved", label: "Timesheet approved", example: "Jane approved your timesheet" },
-  { id: "timesheet_rejected", label: "Timesheet rejected", example: "Jane rejected your timesheet" },
+  { id: "timesheet_rejected", label: "Timesheet returned for fixes", example: "Jane returned your timesheet for fixes" },
 ] as const
 
 type EventPrefs = Record<string, { popup: boolean; email: boolean }>

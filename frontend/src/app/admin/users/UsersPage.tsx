@@ -288,7 +288,7 @@ export function UsersPage() {
             ))}
           </tbody>
         </table>
-        <p className="border-t bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">{roleTab === "auditor" ? "Project Managers use the same timesheet review as Admin. They can approve or reject. Rates, peso and dollar amounts, total pay, and payroll math stay hidden." : "Administrators have full access to every page, including payroll money, invoices, rates, and settings."}</p>
+        <p className="border-t bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">{roleTab === "auditor" ? "Project Managers use the same timesheet review as Admin. They can approve a timesheet or return it for fixes. Rates, peso and dollar amounts, total pay, and payroll math stay hidden." : "Administrators have full access to every page, including payroll money, invoices, rates, and settings."}</p>
       </div>
       ) : (
       <div className="overflow-x-auto rounded-xl border bg-card">

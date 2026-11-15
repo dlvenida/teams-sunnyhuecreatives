@@ -253,7 +253,7 @@ export function VAPayrollPage() {
       setSubmitErr("")
       setSubmitMsg(isManager
         ? "Timesheet submitted. An Admin reviews it. You cannot approve your own timesheet."
-        : "Timesheet submitted. Admin and your Project Manager can approve or reject it.")
+        : "Timesheet submitted. Admin and your Project Manager can approve it or return it for fixes.")
       qc.invalidateQueries({ queryKey: ["va-timesheets"] })
       qc.invalidateQueries({ queryKey: ["va-payroll-history"] })
     },
@@ -371,7 +371,7 @@ export function VAPayrollPage() {
                       <p className="mt-0.5 text-[11px] text-muted-foreground">
                         {e.total_hours != null ? `${e.total_hours} hrs` : "—"}
                         {e.paid_at ? ` · paid ${formatDate(e.paid_at.slice(0, 10))}` : ""}
-                        {e.timesheet_status && !paid ? ` · timesheet ${e.timesheet_status}` : ""}
+                        {e.timesheet_status && !paid ? ` · timesheet ${e.timesheet_status === "rejected" ? "returned for fixes" : e.timesheet_status === "reviewed" ? "approved" : e.timesheet_status}` : ""}
                         {e.method ? ` · ${e.method.replace("_", " ")}` : ""}
                       </p>
                     </div>
@@ -456,8 +456,8 @@ export function VAPayrollPage() {
           )}>
             <CheckCircle2 className="h-4 w-4 shrink-0" />
             <span>
-              Timesheet for {formatInvoiceDate(submitted.period_start)} – {formatInvoiceDate(submitted.period_end)}
-              {" · "}status: <strong className="capitalize">{submitted.status === "reviewed" ? "approved (locked)" : submitted.status}</strong>
+              Timesheet for {formatInvoiceDate(submitted.period_start)} to {formatInvoiceDate(submitted.period_end)}
+              {" · "}status: <strong>{submitted.status === "reviewed" ? "approved (locked)" : submitted.status === "rejected" ? "returned for fixes" : submitted.status}</strong>
               {submitted.status === "reviewed" && (
                 <span className="mt-1 block text-[11px]">
                   You cannot resubmit this period. Late entries for these dates still work — they roll over to the next payroll (paid after the next cutoff: 15th or end of month).
@@ -465,7 +465,7 @@ export function VAPayrollPage() {
               )}
               {submitted.status === "rejected" && (
                 <span className="mt-1 block text-[11px]">
-                  Rejected{submitted.review_note ? `: ${submitted.review_note}` : ""}. Update your time logs and resubmit this period.
+                  Returned for fixes{submitted.review_note ? `: ${submitted.review_note}` : ""}. Update your time logs and resubmit this period.
                 </span>
               )}
             </span>

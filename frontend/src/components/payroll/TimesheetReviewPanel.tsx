@@ -67,6 +67,7 @@ interface ReviewPayload {
   }
   entries: ReviewEntry[]
   package_pay?: PackagePay | null
+  is_paid?: boolean
 }
 
 function EditPackagePay({
@@ -413,6 +414,8 @@ export function TimesheetReviewPanel({
   const ownTimesheet = me?.role === "auditor" && !!sheet?.va_id && me.vaId === sheet.va_id
   const reviewed = sheet?.status === "reviewed"
   const rejected = sheet?.status === "rejected"
+  const paid = !!data?.is_paid
+  const canReturn = !!sheet && !paid && !rejected && !ownTimesheet && (sheet.status === "submitted" || sheet.status === "reviewed")
   const busy = approve.isPending || reject.isPending
 
   const inline = variant === "inline"
@@ -508,56 +511,56 @@ export function TimesheetReviewPanel({
         <div className="space-y-3 border-t bg-muted/30 px-5 py-4">
           {sheet?.review_note && (
             <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-              <span className="font-bold">Rejection note: </span>{sheet.review_note}
+              <span className="font-bold">Note for the VA: </span>{sheet.review_note}
             </p>
           )}
           {actionError && <p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{actionError}</p>}
-          {!reviewed && (
+          {paid && !ownTimesheet && (
+            <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              This period is paid. Undo Paid before returning the timesheet.
+            </p>
+          )}
+          {canReturn && (
             <div>
-              <label className="text-[11px] font-semibold text-muted-foreground" htmlFor="reject-reason">Rejection note (optional)</label>
+              <label className="text-[11px] font-semibold text-muted-foreground" htmlFor="return-note">Note for the VA (optional)</label>
               <textarea
-                id="reject-reason"
+                id="return-note"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder="What should the VA fix before resubmitting?"
-                className="mt-1 w-full rounded-xl border bg-card px-3 py-2 text-xs"
+                className="mt-1 min-h-11 w-full rounded-xl border bg-card px-3 py-2 text-base sm:text-xs"
                 rows={2}
               />
             </div>
           )}
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <p className="text-xs text-muted-foreground">
               {ownTimesheet
-                ? "This is your timesheet. An Admin approves it and edits the pay. You cannot approve your own."
-                : "Approve to unlock the payslip, or reject so the VA can fix and resubmit. Project Managers do not see rates or pay on this screen."}
+                ? "This is your timesheet. An Admin approves it. You cannot approve or return your own."
+                : "Approve to unlock the payslip, or return it so the VA can fix and resubmit. Project Managers do not see rates or pay on this screen."}
             </p>
-            <div className="flex flex-wrap gap-2">
-              {!inline && onClose && <Button variant="outline" onClick={onClose}>Close</Button>}
-              {!reviewed && !ownTimesheet && (
-                <Button variant="danger" disabled={busy || isLoading} onClick={() => reject.mutate()}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              {!inline && onClose && <Button variant="outline" className="min-h-11" onClick={onClose}>Close</Button>}
+              {canReturn && (
+                <Button variant="danger" className="min-h-11" disabled={busy || isLoading} onClick={() => reject.mutate()}>
                   <XCircle className="h-4 w-4" />
-                  {reject.isPending ? "Rejecting…" : "Reject"}
+                  {reject.isPending ? "Returning…" : "Return for fixes"}
                 </Button>
               )}
-              {!reviewed && !ownTimesheet && (
-                <Button variant="success" disabled={busy || isLoading} onClick={() => approve.mutate()}>
+              {!reviewed && !rejected && !ownTimesheet && (
+                <Button variant="success" className="min-h-11" disabled={busy || isLoading} onClick={() => approve.mutate()}>
                   <CheckCircle2 className="h-4 w-4" />
                   {approve.isPending ? "Approving…" : "Approve timesheet"}
                 </Button>
               )}
               {reviewed && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-3 py-1.5 text-xs font-bold text-green-800">
+                <span className="inline-flex min-h-11 items-center gap-1 rounded-full bg-green-100 px-3 py-1.5 text-xs font-bold text-green-800">
                   <CheckCircle2 className="h-3.5 w-3.5" /> Approved
                 </span>
               )}
-              {reviewed && !ownTimesheet && (
-                <Button variant="danger" disabled={busy} onClick={() => reject.mutate()}>
-                  <XCircle className="h-4 w-4" /> Reject
-                </Button>
-              )}
               {rejected && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-800">
-                  Rejected. Waiting on the VA.
+                <span className="inline-flex min-h-11 items-center gap-1 rounded-full bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-800">
+                  Returned for fixes. Waiting on the VA.
                 </span>
               )}
             </div>

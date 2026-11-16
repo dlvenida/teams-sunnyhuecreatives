@@ -509,6 +509,7 @@ class WorkLog(Base):
     project: Mapped["Project | None"] = relationship()
     task: Mapped["Task | None"] = relationship()
     attachments: Mapped[list["WorkLogAttachment"]] = relationship(back_populates="work_log", cascade="all, delete-orphan")
+    rejections: Mapped[list["WorkLogRejection"]] = relationship(back_populates="work_log", cascade="all, delete-orphan")
 
 
 class Invoice(Base):
@@ -925,6 +926,22 @@ class VARate(Base):
 
     va: Mapped["VA"] = relationship()
     client: Mapped["Client"] = relationship()
+
+
+class WorkLogRejection(Base):
+    """One time a reviewer sent this log back. Older rows stay after the VA resubmits."""
+
+    __tablename__ = "work_log_rejections"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    work_log_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("work_logs.id", ondelete="CASCADE"), index=True)
+    reasons: Mapped[list] = mapped_column(JSONB, default=list)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rejected_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    rejected_by_name: Mapped[str] = mapped_column(String(255), default="")
+    rejected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    work_log: Mapped["WorkLog"] = relationship(back_populates="rejections")
 
 
 class WorkLogAttachment(Base):

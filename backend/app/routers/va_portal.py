@@ -40,6 +40,7 @@ from app.services.va_rates import (
 )
 from app.services.work_log_entry import apply_work_log_timing, resolve_timing
 from app.services.va_scope import ensure_va_scope, is_va, load_va_scope
+from app.services.log_rejection import rejection_response
 from app.services.work_log_overlap import assert_no_time_overlap
 
 router = APIRouter(prefix="/va", tags=["va"])
@@ -69,6 +70,7 @@ def _serialize_log(log: WorkLog, amounts=None) -> WorkLogResponse:
         notes=log.notes,
         review_reason=getattr(log, "review_reason", None),
         status=log.status,
+        **rejection_response(log),
         invoice_id=log.invoice_id,
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
@@ -221,7 +223,7 @@ def list_my_work_logs(
 ):
     logs = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments))
+        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments), joinedload(WorkLog.rejections))
         .filter(WorkLog.va_id == current.va_id)
         .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
         .all()
@@ -233,7 +235,7 @@ def list_my_work_logs(
 def _my_log_or_404(db: Session, log_id: UUID, va_id):
     log = (
         db.query(WorkLog)
-        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task))
+        .options(joinedload(WorkLog.client), joinedload(WorkLog.sub_client), joinedload(WorkLog.va), joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.rejections))
         .filter(WorkLog.id == log_id, WorkLog.va_id == va_id)
         .first()
     )
@@ -267,13 +269,14 @@ def update_my_work_log(log_id: UUID, body: VAWorkLogUpdate, current: Annotated[C
         )
     for k, v in data.items():
         setattr(log, k, v)
+    was_rejected = log.status == WorkLogStatus.rejected
     if apply_work_log_timing(db, log, body):
         rate, pay, _ = resolve_log_pay(db, current.va_id, log.client_id, log.hours)
         log.va_rate = rate
         log.va_pay = pay
         log.payable_on = resolve_payable_on(db, current.va_id, log.work_date)
-        if log.status == WorkLogStatus.rejected:
-            log.status = WorkLogStatus.submitted  # editing a rejected log resubmits it
+    if was_rejected:
+        log.status = WorkLogStatus.submitted
     db.commit()
     db.refresh(log)
     amounts = approved_rate_amounts(db, [current.va_id])

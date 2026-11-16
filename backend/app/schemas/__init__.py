@@ -866,6 +866,20 @@ class WorkLogUpdate(BaseModel):
     status: WorkLogStatus | None = None
 
 
+class WorkLogRejectRequest(BaseModel):
+    reasons: list[str]
+    note: str | None = None
+
+
+class WorkLogRejectionView(BaseModel):
+    reasons: list[str] = []
+    note: str | None = None
+    rejected_by_name: str | None = None
+    rejected_at: datetime | None = None
+    needs_fixing: str
+    last_sent_back: str
+
+
 class WorkLogResponse(BaseModel):
     id: UUID
     work_date: date
@@ -885,6 +899,8 @@ class WorkLogResponse(BaseModel):
     va_pay: Decimal | None = None
     notes: str | None
     review_reason: str | None = None
+    needs_fixing: str | None = None
+    rejection_history: list[WorkLogRejectionView] = []
     status: WorkLogStatus
     invoice_id: UUID | None
     project_id: UUID | None = None

@@ -153,13 +153,14 @@ test("admin sees each currency and the combined total", async ({ page }, testInf
   await expect(main.getByText("Net", { exact: true })).toBeVisible()
   const row = main.locator("tr", { hasText: "Chef Stephanie Tranchina" })
   await expect(row).toContainText("$122.29 + ₱1,032.30")
-  await expect(row).toContainText("About $9.91 / ₱346.06")
-  await expect(row).toContainText("$17.71 and -₱452.30")
+  await expect(row).toContainText("₱346.06")
+  await expect(row).not.toContainText("About $9.91")
+  await expect(row).not.toContainText("$17.71 and -₱452.30")
   await expect(row).toContainText("About $140.09 / ₱8,353.94")
   await expect(page.getByText("$1,154.59")).toHaveCount(0)
   await expect(page.getByText("$1154.59")).toHaveCount(0)
   if (testInfo.project.name === "desktop") {
-    await page.screenshot({ path: "/opt/cursor/artifacts/clients-list-desktop.png", fullPage: true })
+    await page.screenshot({ path: "/opt/cursor/artifacts/clients-list-net-pesos-desktop.png", fullPage: true })
   }
 
   await row.click()

@@ -72,6 +72,15 @@ function moneyIsNegative(money: ClientMoney | null | undefined) {
   return usd < 0
 }
 
+function hasCombinedPhp(money: ClientMoney | null | undefined) {
+  return !!money && money.combined_php != null && money.combined_php !== ""
+}
+
+function listNetText(money: ClientMoney) {
+  if (hasCombinedPhp(money)) return formatStatementMoney(money.combined_php, "PHP")
+  return netHeadline(money)
+}
+
 function netHeadline(money: ClientMoney | null | undefined) {
   return aboutLine(money) || recordedLine(money)
 }
@@ -474,7 +483,7 @@ export function ClientsPage() {
                       <td className="p-3 font-semibold">{f ? `${Number(f.total_hours).toFixed(1)} hrs` : "—"}</td>
                       <td className="p-3"><div>{f ? recordedLine(f.total_earned) : "—"}</div>{f && aboutLine(f.total_earned) ? <div className="text-[10px] text-muted-foreground">{aboutLine(f.total_earned)}</div> : null}</td>
                       <td className="p-3"><div>{f ? recordedLine(f.va_earned) : "—"}</div>{f && aboutLine(f.va_earned) ? <div className="text-[10px] text-muted-foreground">{aboutLine(f.va_earned)}</div> : null}{f && unpaidLine(f.va_unpaid) ? <div className="text-[10px] text-muted-foreground">{unpaidLine(f.va_unpaid)}</div> : null}</td>
-                      <td className={cn("p-3 font-bold", f && moneyIsNegative(f.net) ? "text-red-600" : "text-green-700")}><div>{f ? netHeadline(f.net) : "—"}</div>{f && netBreakdown(f.net) ? <div className="text-[10px] font-normal text-muted-foreground">{netBreakdown(f.net)}</div> : null}</td>
+                      <td className={cn("p-3 font-bold", f && (hasCombinedPhp(f.net) ? Number(f.net.combined_php) < 0 : moneyIsNegative(f.net)) ? "text-red-600" : "text-green-700")}><div>{f ? listNetText(f.net) : "—"}</div>{f && !hasCombinedPhp(f.net) && netBreakdown(f.net) ? <div className="text-[10px] font-normal text-muted-foreground">{netBreakdown(f.net)}</div> : null}</td>
                     </>) })()}
                     <td className="p-3">
                       {c.approval_status === "pending" ? (

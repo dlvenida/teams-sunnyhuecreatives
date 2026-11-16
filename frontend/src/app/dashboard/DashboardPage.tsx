@@ -7,6 +7,7 @@ import type { UserProfile } from "@/lib/profile"
 import { formatCurrency, formatDate, cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { LogApprovalCard } from "@/components/payroll/LogApprovalCard"
+import { RejectReasonDialog } from "@/components/logs/RejectReasonDialog"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { TASK_STATUSES, PRIORITY_META, formatDuration } from "@/components/tasks/task-utils"
 import { MyProductivity, TeamProductivity } from "@/components/dashboard/ProductivityPanel"
@@ -307,6 +308,7 @@ function DashboardReader({ overview, isAdmin, firstName, autoPlay = false, onClo
 export function DashboardPage() {
   const qc = useQueryClient()
   const [readerOpen, setReaderOpen] = useState(false)
+  const [rejectId, setRejectId] = useState("")
   const user = getAuthUser()
   const isAdmin = user?.role === "admin"
   const isStaff = user?.role === "admin" || user?.role === "auditor"
@@ -320,7 +322,13 @@ export function DashboardPage() {
   const { data: overview, isLoading: ovLoading } = useQuery({ queryKey: ["dashboard-overview"], queryFn: () => apiFetch<DashboardOverview>("/dashboard/overview"), refetchInterval: 30_000 })
   const { data } = useQuery({ queryKey: ["dashboard"], queryFn: () => apiFetch<DashboardSummary>("/dashboard/summary"), enabled: isStaff })
   const approve = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}/approve`, { method: "POST" }), onSuccess: () => { qc.invalidateQueries({ queryKey: ["dashboard"] }); qc.invalidateQueries({ queryKey: ["dashboard-overview"] }) } })
-  const reject = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}/reject`, { method: "POST" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["dashboard"] }) })
+  const reject = useMutation({
+    mutationFn: (body: { id: string; reasons: string[]; note: string }) => apiFetch(`/work-logs/${body.id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reasons: body.reasons, note: body.note || null }),
+    }),
+    onSuccess: () => { setRejectId(""); qc.invalidateQueries({ queryKey: ["dashboard"] }) },
+  })
 
   if (ovLoading || !overview) return <p className="text-sm text-muted-foreground">Loading your day…</p>
   const c = overview.counts
@@ -438,7 +446,7 @@ export function DashboardPage() {
                 <LogApprovalCard entry={{ ...log, description: log.description_plain }} />
                 <div className="flex gap-2">
                   <Button size="sm" variant="success" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /> Approve</Button>
-                  <Button size="sm" variant="danger" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /> Reject</Button>
+                  <Button size="sm" variant="danger" onClick={() => setRejectId(log.id)}><X className="h-3 w-3" /> Reject</Button>
                 </div>
               </div>
             ))}
@@ -535,6 +543,14 @@ export function DashboardPage() {
           ))}
         </div>
       </div>
+      {rejectId && (
+        <RejectReasonDialog
+          count={1}
+          busy={reject.isPending}
+          onClose={() => setRejectId("")}
+          onConfirm={(reasons, note) => reject.mutate({ id: rejectId, reasons, note })}
+        />
+      )}
     </div>
   )
 }

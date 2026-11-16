@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.database import get_db
 from app.deps import CurrentUser, require_admin, require_admin_or_auditor, get_current_user
-from app.models import UserRole, VA, WorkLog, WorkLogAttachment, WorkLogStatus
-from app.schemas import WorkLogAttachmentResponse, WorkLogResponse, WorkLogUpdate
+from app.models import UserRole, VA, WorkLog, WorkLogAttachment, WorkLogRejection, WorkLogStatus
+from app.schemas import WorkLogAttachmentResponse, WorkLogRejectRequest, WorkLogResponse, WorkLogUpdate
+from app.services.log_rejection import clean_note, clean_reasons, needs_fixing_text, rejection_response
 from app.services import storage
 from app.services.log_display import log_task_name
 from app.services.calculations import calculate_pay
@@ -61,6 +62,7 @@ def _serialize_log(log: WorkLog, redact_money: bool = False, amounts=None) -> Wo
         notes=log.notes,
         review_reason=getattr(log, "review_reason", None),
         status=log.status,
+        **rejection_response(log),
         invoice_id=log.invoice_id,
         project_id=log.project_id, project_name=log.project.name if getattr(log, "project", None) else None,
         task_id=log.task_id, task_title=log.task.title if getattr(log, "task", None) else None,
@@ -101,7 +103,7 @@ def _query_logs(
         db.query(WorkLog)
         .options(
             joinedload(WorkLog.va).joinedload(VA.user), joinedload(WorkLog.client), joinedload(WorkLog.sub_client),
-            joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments),
+            joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments), joinedload(WorkLog.rejections),
         )
         .order_by(WorkLog.work_date.desc(), WorkLog.created_at.desc())
     )
@@ -152,7 +154,7 @@ def _get_log(db: Session, log_id: UUID) -> WorkLog:
         db.query(WorkLog)
         .options(
             joinedload(WorkLog.va).joinedload(VA.user), joinedload(WorkLog.client), joinedload(WorkLog.sub_client),
-            joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments),
+            joinedload(WorkLog.project), joinedload(WorkLog.task), joinedload(WorkLog.attachments), joinedload(WorkLog.rejections),
         )
         .filter(WorkLog.id == log_id)
         .first()
@@ -218,13 +220,38 @@ def approve_log(
 @router.post("/{log_id}/reject", response_model=WorkLogResponse, response_model_exclude_none=True)
 def reject_log(
     log_id: UUID,
+    body: WorkLogRejectRequest,
     current: Annotated[CurrentUser, Depends(require_admin_or_auditor)],
     db: Annotated[Session, Depends(get_db)],
 ):
+    try:
+        reasons = clean_reasons(body.reasons)
+        note = clean_note(body.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     result = update_work_log(log_id, WorkLogUpdate(status=WorkLogStatus.rejected), current, db)
-    push(db, [va_user_id(db, result.va_id)], "log", "⚠️ Your time log needs changes",
-         f"{result.client_name} · {result.work_date} · {result.hours} hrs was rejected — please review and resubmit.", "/va/time-log")
-    return result
+    name = " ".join(str(getattr(current.user, "display_name", None) or getattr(current.user, "email", None) or "Reviewer").split())
+    db.add(WorkLogRejection(
+        work_log_id=log_id,
+        reasons=reasons,
+        note=note,
+        rejected_by=current.user.id,
+        rejected_by_name=name,
+    ))
+    db.commit()
+    label = needs_fixing_text(reasons, note)
+    push(
+        db,
+        [va_user_id(db, result.va_id)],
+        "log",
+        "Your time log needs changes",
+        f"{result.client_name}, {result.work_date}. {label}",
+        "/va/time-log",
+    )
+    log = _get_log(db, log_id)
+    redact = hide_team_money(current.role)
+    amounts = None if redact else approved_rate_amounts(db, [log.va_id])
+    return _serialize_log(log, redact_money=redact, amounts=amounts)
 
 
 @router.delete("/{log_id}", status_code=status.HTTP_204_NO_CONTENT)

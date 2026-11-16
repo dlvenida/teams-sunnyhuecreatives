@@ -496,6 +496,7 @@ export function VATimeLogPage() {
                       )}
                       {(log.attachment_count ?? 0) > 0 && <span className="ml-1 text-[10px] text-muted-foreground">📎{log.attachment_count}</span>}
                       {log.review_reason && <span className="mt-1 block max-w-[220px] text-[10px] font-medium leading-snug text-amber-900">{log.review_reason}</span>}
+                      {log.status === "rejected" && <span className="mt-1 block max-w-[220px] text-[10px] font-medium leading-snug text-amber-900">{log.needs_fixing || "No reason given"}</span>}
                     </td>
                     <td className="p-2 whitespace-nowrap">
                       {(log.status === "submitted" || log.status === "rejected") ? <>

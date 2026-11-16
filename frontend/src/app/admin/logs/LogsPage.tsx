@@ -12,6 +12,7 @@ import { TimeEntryModeFields, durationError, splitStoredHours, timingBody, type 
 import { Check, X, Pencil, Trash2, Download, Search, Clock3, Hand, Paperclip } from "lucide-react"
 import { useDisplaySettings } from "@/hooks/useDisplaySettings"
 import { LogAttachmentsViewer } from "@/components/logs/LogAttachmentsViewer"
+import { RejectReasonDialog, rejectionLine } from "@/components/logs/RejectReasonDialog"
 import { TimeAreaTabs } from "@/components/nav/AreaTabs"
 
 const STATUS_META: Record<string, { label: string; dot: string; pill: string }> = {
@@ -60,6 +61,7 @@ export function LogsPage() {
   const [editing, setEditing] = useState<WorkLog | null>(null)
   const [editForm, setEditForm] = useState({ description_plain: "", hours: "", va_rate: "", status: "", start_time: "", end_time: "", mode: "range" as EntryMode, durationHours: 1, durationMinutes: 0 })
   const [viewingAtts, setViewingAtts] = useState<string | null>(null)
+  const [rejectIds, setRejectIds] = useState<string[]>([])
 
   const params = new URLSearchParams()
   if (filters.client_id) params.set("client_id", filters.client_id)
@@ -74,16 +76,22 @@ export function LogsPage() {
 
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["work-logs"] }); qc.invalidateQueries({ queryKey: ["dashboard-overview"] }); qc.invalidateQueries({ queryKey: ["report-clients"] }) }
   const approve = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}/approve`, { method: "POST" }), onSuccess: invalidate })
-  const reject = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}/reject`, { method: "POST" }), onSuccess: invalidate })
+  const reject = useMutation({
+    mutationFn: (body: { ids: string[]; reasons: string[]; note: string }) => Promise.all(body.ids.map((id) => apiFetch(`/work-logs/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reasons: body.reasons, note: body.note || null }),
+    }))),
+    onSuccess: () => { invalidate(); setRejectIds([]); setSelected(new Set()) },
+  })
   const remove = useMutation({ mutationFn: (id: string) => apiFetch(`/work-logs/${id}`, { method: "DELETE" }), onSuccess: invalidate })
   const update = useMutation({
     mutationFn: (data: { id: string; body: Record<string, unknown> }) => apiFetch(`/work-logs/${data.id}`, { method: "PATCH", body: JSON.stringify(data.body) }),
     onSuccess: () => { invalidate(); setEditing(null) },
   })
 
-  const bulk = async (action: "approve" | "reject" | "delete") => {
+  const bulk = async (action: "approve" | "delete") => {
     const ids = [...selected]
-    await Promise.all(ids.map(id => action === "delete" ? remove.mutateAsync(id) : action === "approve" ? approve.mutateAsync(id) : reject.mutateAsync(id)))
+    await Promise.all(ids.map(id => action === "delete" ? remove.mutateAsync(id) : approve.mutateAsync(id)))
     setSelected(new Set())
   }
 
@@ -193,7 +201,7 @@ export function LogsPage() {
         <div className="sticky top-16 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
           <span className="font-bold">{selected.size} selected · {selectedHours.toFixed(2)} hrs</span>
           <Button size="sm" variant="success" onClick={() => bulk("approve")}><Check className="h-3 w-3" /> Approve all</Button>
-          <Button size="sm" variant="danger" onClick={() => bulk("reject")}><X className="h-3 w-3" /> Reject all</Button>
+          <Button size="sm" variant="danger" onClick={() => setRejectIds([...selected])}><X className="h-3 w-3" /> Reject all</Button>
           {!isAuditor && <Button size="sm" variant="outline" onClick={() => bulk("delete")}><Trash2 className="h-3 w-3" /> Delete</Button>}
           <button className="ml-auto font-semibold text-muted-foreground hover:text-foreground" onClick={() => setSelected(new Set())}>Clear selection</button>
         </div>
@@ -238,9 +246,10 @@ export function LogsPage() {
                         <span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-bold", STATUS_META[log.status]?.pill)}>{STATUS_META[log.status]?.label ?? log.status}</span>
                       )}
                       {log.review_reason && <span className="mt-1 block max-w-[240px] text-[10px] font-medium leading-snug text-amber-900">{log.review_reason}</span>}
+                      {rejectionLine(log) && <span className="mt-1 block max-w-[240px] text-[10px] font-medium leading-snug text-amber-900">{rejectionLine(log)}</span>}
                     </td>
                     <td className="p-3"><div className="flex justify-end gap-1">
-                      {!readOnly && log.status === "submitted" && <><Button size="sm" variant="success" title="Approve" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" title="Reject" onClick={() => reject.mutate(log.id)}><X className="h-3 w-3" /></Button></>}
+                      {!readOnly && log.status === "submitted" && <><Button size="sm" variant="success" title="Approve" onClick={() => approve.mutate(log.id)}><Check className="h-3 w-3" /></Button><Button size="sm" variant="danger" title="Reject" onClick={() => setRejectIds([log.id])}><X className="h-3 w-3" /></Button></>}
                       {!readOnly && <Button size="sm" variant="ghost" title="Edit" onClick={() => openEdit(log)}><Pencil className="h-3 w-3" /></Button>}
                       {!readOnly && !isAuditor && log.status !== "invoiced" && <Button size="sm" variant="ghost" title="Delete" onClick={() => { if (confirm("Delete this log?")) remove.mutate(log.id) }}><Trash2 className="h-3 w-3" /></Button>}
                       {(log.attachment_count ?? 0) > 0 && (
@@ -312,6 +321,14 @@ export function LogsPage() {
         </div>
       )}
       {viewingAtts && <LogAttachmentsViewer logId={viewingAtts} onClose={() => setViewingAtts(null)} />}
+      {rejectIds.length > 0 && (
+        <RejectReasonDialog
+          count={rejectIds.length}
+          busy={reject.isPending}
+          onClose={() => setRejectIds([])}
+          onConfirm={(reasons, note) => reject.mutate({ ids: rejectIds, reasons, note })}
+        />
+      )}
     </div>
   )
 }
